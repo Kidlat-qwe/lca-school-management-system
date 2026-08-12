@@ -1,13 +1,97 @@
 import { coerceToManilaYmd, formatYmdLocal, parseYmdToLocalNoon, todayYmdManila } from './dateUtils.js';
+import { getEffectiveSettings, SETTINGS_DEFINITIONS } from './settingsService.js';
 
 const PHASE_INSTALLMENT_DUE_DAYS_BEFORE = 1;
 const RECURRING_DUE_DAY = 5;
 const RECURRING_GENERATION_DAY = 25;
-const FIRST_WEEK_LAST_DAY = 7;
-const FIRST_OF_MONTH_SKIP_GAP_DAYS = 7;
+/** Code defaults — overridable via system settings (Settings → Invoice Schedule). */
+export const DEFAULT_FIRST_WEEK_LAST_DAY =
+  SETTINGS_DEFINITIONS.installment_first_week_last_day.defaultValue;
+export const DEFAULT_FIRST_OF_MONTH_SKIP_GAP_DAYS =
+  SETTINGS_DEFINITIONS.installment_first_of_month_skip_gap_days.defaultValue;
+
+const FIRST_WEEK_LAST_DAY = DEFAULT_FIRST_WEEK_LAST_DAY;
+const FIRST_OF_MONTH_SKIP_GAP_DAYS = DEFAULT_FIRST_OF_MONTH_SKIP_GAP_DAYS;
 
 export const BILLING_CADENCE_25_5 = '25_5';
 export const BILLING_CADENCE_1_5 = '1_5';
+
+const clampInt = (value, min, max, fallback) => {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+};
+
+/**
+ * Resolve cadence thresholds from Settings (branch override → global → code default).
+ * Callers may pass explicit overrides (e.g. unit tests / ops scripts).
+ */
+export async function resolveInstallmentCadenceOptions(db, { classId = null, branchId = null, ...overrides } = {}) {
+  const defWeek = SETTINGS_DEFINITIONS.installment_first_week_last_day;
+  const defSkip = SETTINGS_DEFINITIONS.installment_first_of_month_skip_gap_days;
+
+  let firstWeekLastDay =
+    overrides.firstWeekLastDay != null
+      ? clampInt(overrides.firstWeekLastDay, defWeek.min, defWeek.max, defWeek.defaultValue)
+      : defWeek.defaultValue;
+  let firstOfMonthSkipGapDays =
+    overrides.firstOfMonthSkipGapDays != null
+      ? clampInt(
+          overrides.firstOfMonthSkipGapDays,
+          defSkip.min,
+          defSkip.max,
+          defSkip.defaultValue
+        )
+      : defSkip.defaultValue;
+
+  const needSettings =
+    overrides.firstWeekLastDay == null || overrides.firstOfMonthSkipGapDays == null;
+
+  if (needSettings && db?.query) {
+    let resolvedBranchId = branchId;
+    if (
+      (resolvedBranchId === null || resolvedBranchId === undefined) &&
+      classId != null
+    ) {
+      const r = await db.query(
+        `SELECT branch_id FROM classestbl WHERE class_id = $1`,
+        [classId]
+      );
+      resolvedBranchId = r.rows[0]?.branch_id ?? null;
+    }
+
+    try {
+      const effective = await getEffectiveSettings(
+        db,
+        [
+          'installment_first_week_last_day',
+          'installment_first_of_month_skip_gap_days',
+        ],
+        resolvedBranchId
+      );
+      if (overrides.firstWeekLastDay == null) {
+        firstWeekLastDay = clampInt(
+          effective.installment_first_week_last_day?.value,
+          defWeek.min,
+          defWeek.max,
+          defWeek.defaultValue
+        );
+      }
+      if (overrides.firstOfMonthSkipGapDays == null) {
+        firstOfMonthSkipGapDays = clampInt(
+          effective.installment_first_of_month_skip_gap_days?.value,
+          defSkip.min,
+          defSkip.max,
+          defSkip.defaultValue
+        );
+      }
+    } catch {
+      // Keep code defaults if settings lookup fails.
+    }
+  }
+
+  return { firstWeekLastDay, firstOfMonthSkipGapDays };
+}
 
 const normalizeDateInput = (value) => {
   if (!value) return null;
@@ -78,27 +162,43 @@ const diffUtcDays = (fromDate, toDate) => {
 };
 
 /**
- * Class start day 1–7 keeps current 25th / next-month 5th.
+ * Class start day 1–N (default N=7) keeps current 25th / next-month 5th.
  * Later start days use 1st / same-month 5th.
+ * @param {string|Date} classStartYmd
+ * @param {{ firstWeekLastDay?: number }} [options]
  */
-export const resolveClassBillingCadence = (classStartYmd) => {
+export const resolveClassBillingCadence = (classStartYmd, options = {}) => {
   const start = normalizeDateInput(classStartYmd);
   if (!start) return BILLING_CADENCE_25_5;
+  const firstWeekLastDay = clampInt(
+    options.firstWeekLastDay,
+    1,
+    28,
+    FIRST_WEEK_LAST_DAY
+  );
   const day = start.getDate();
-  if (day >= 1 && day <= FIRST_WEEK_LAST_DAY) return BILLING_CADENCE_25_5;
+  if (day >= 1 && day <= firstWeekLastDay) return BILLING_CADENCE_25_5;
   return BILLING_CADENCE_1_5;
 };
 
 /**
- * Next month's 1st after class start. If that 1st is within 7 days, skip to the following 1st.
- * Example: July 20 → Aug 1; June 24 → Aug 1 (skip July 1).
+ * Next month's 1st after class start. If that 1st is within skip-gap days, skip to the following 1st.
+ * Example (gap=7): July 20 → Aug 1; June 24 → Aug 1 (skip July 1).
+ * @param {string|Date} classStartYmd
+ * @param {{ firstOfMonthSkipGapDays?: number }} [options]
  */
-export const resolveFirstOfMonthRecurringIssueYmd = (classStartYmd) => {
+export const resolveFirstOfMonthRecurringIssueYmd = (classStartYmd, options = {}) => {
   const start = normalizeDateInput(classStartYmd);
   if (!start) return null;
+  const skipGapDays = clampInt(
+    options.firstOfMonthSkipGapDays,
+    0,
+    62,
+    FIRST_OF_MONTH_SKIP_GAP_DAYS
+  );
   let nextFirst = startOfMonth(addMonths(start, 1));
   const gap = diffUtcDays(start, nextFirst);
-  if (gap != null && gap <= FIRST_OF_MONTH_SKIP_GAP_DAYS) {
+  if (gap != null && gap <= skipGapDays) {
     nextFirst = startOfMonth(addMonths(nextFirst, 1));
   }
   return formatYmdLocal(nextFirst);
@@ -120,13 +220,14 @@ export const resolveProfileBillingCadence = ({
   profile = {},
   generatedCount = 0,
   ignoreStoredQueueAnchor = false,
+  firstWeekLastDay = FIRST_WEEK_LAST_DAY,
 } = {}) => {
   if (!ignoreStoredQueueAnchor) {
     const inferred = inferBillingCadenceFromAnchorYmd(profile.next_generation_date);
     if (inferred) return inferred;
     if (Number(generatedCount) >= 1) return BILLING_CADENCE_25_5;
   }
-  return resolveClassBillingCadence(classStartYmd);
+  return resolveClassBillingCadence(classStartYmd, { firstWeekLastDay });
 };
 
 /**
@@ -226,15 +327,21 @@ export const resolveFirstRecurringCycleAfterIssue = (issueYmd, options = {}) => 
     minDaysAfterIssue = 7,
     classStartYmd = null,
     cadence = null,
+    firstWeekLastDay = FIRST_WEEK_LAST_DAY,
+    firstOfMonthSkipGapDays = FIRST_OF_MONTH_SKIP_GAP_DAYS,
   } = options;
 
   const resolvedCadence =
     cadence ||
-    (classStartYmd ? resolveClassBillingCadence(classStartYmd) : BILLING_CADENCE_25_5);
+    (classStartYmd
+      ? resolveClassBillingCadence(classStartYmd, { firstWeekLastDay })
+      : BILLING_CADENCE_25_5);
 
   if (resolvedCadence === BILLING_CADENCE_1_5) {
     const seedStart = classStartYmd || firstPhaseStartYmd || issueYmd;
-    let firstIssueYmd = resolveFirstOfMonthRecurringIssueYmd(seedStart);
+    let firstIssueYmd = resolveFirstOfMonthRecurringIssueYmd(seedStart, {
+      firstOfMonthSkipGapDays,
+    });
     if (!firstIssueYmd) return null;
 
     const issue = parseYmdToLocalNoon(issueYmd);
@@ -424,6 +531,8 @@ async function resolveRecurringBillingAnchorYmd(
     resolvePhaseStartDate = null,
     classStartYmd = null,
     cadence = BILLING_CADENCE_25_5,
+    firstWeekLastDay = FIRST_WEEK_LAST_DAY,
+    firstOfMonthSkipGapDays = FIRST_OF_MONTH_SKIP_GAP_DAYS,
   } = {}
 ) {
   const profileCount = parseInt(profile.generated_count ?? generatedCount, 10);
@@ -450,6 +559,8 @@ async function resolveRecurringBillingAnchorYmd(
     firstPhaseStartYmd: firstPhaseStart ? formatYmdLocal(firstPhaseStart) : null,
     classStartYmd,
     cadence,
+    firstWeekLastDay,
+    firstOfMonthSkipGapDays,
   });
   if (!firstRecurring?.generationAnchorYmd) return null;
 
@@ -525,7 +636,7 @@ export const getPhaseDueDateYmd = async (db, classId, phaseNumber, dueDaysBefore
  * Hybrid installment schedule:
  * - First phase (generated_count 0): due = day before phase start; issue = payment/enrollment day.
  * - Recurring: first-week class start → 25th / next-month 5th.
- *   Otherwise → 1st / same-month 5th (skip next 1st when gap ≤ 7 days).
+ *   Otherwise → 1st / same-month 5th (skip next 1st when gap ≤ configured skip days).
  */
 export const buildPhaseInstallmentSchedule = async ({
   db,
@@ -537,6 +648,8 @@ export const buildPhaseInstallmentSchedule = async ({
   phaseStartDateMapOverride = null,
   ignoreStoredQueueAnchor = false,
   classStartYmdOverride = null,
+  firstWeekLastDay: firstWeekLastDayOverride = null,
+  firstOfMonthSkipGapDays: firstOfMonthSkipGapDaysOverride = null,
 }) => {
   if (!isPhaseInstallmentProfile(profile)) {
     return null;
@@ -559,6 +672,14 @@ export const buildPhaseInstallmentSchedule = async ({
   const isRecurringPhaseBilling = generatedCount >= 1;
   const classStartYmd =
     coerceScheduleYmd(classStartYmdOverride) || (await loadClassStartYmd(db, profile.class_id));
+
+  const cadenceOptions = await resolveInstallmentCadenceOptions(db, {
+    classId: profile.class_id,
+    firstWeekLastDay: firstWeekLastDayOverride,
+    firstOfMonthSkipGapDays: firstOfMonthSkipGapDaysOverride,
+  });
+  const { firstWeekLastDay, firstOfMonthSkipGapDays } = cadenceOptions;
+
   const billingCadence = resolveProfileBillingCadence({
     classStartYmd,
     profile: {
@@ -567,6 +688,7 @@ export const buildPhaseInstallmentSchedule = async ({
     },
     generatedCount,
     ignoreStoredQueueAnchor,
+    firstWeekLastDay,
   });
 
   const currentPhaseNumber = getCurrentInstallmentPhaseNumber(profileWithPhaseStart, generatedCountOverride);
@@ -614,6 +736,8 @@ export const buildPhaseInstallmentSchedule = async ({
       resolvePhaseStartDate: phaseStartDateMapOverride ? resolvePhaseStartDate : null,
       classStartYmd,
       cadence: billingCadence,
+      firstWeekLastDay,
+      firstOfMonthSkipGapDays,
     });
 
     const cycle = buildRecurringCycleDates(anchorYmd, frequencyMonths, billingCadence);
@@ -662,6 +786,8 @@ export const buildPhaseInstallmentSchedule = async ({
           firstPhaseStartYmd,
           classStartYmd,
           cadence: billingCadence,
+          firstWeekLastDay,
+          firstOfMonthSkipGapDays,
         }
       );
       if (firstRecurring) {

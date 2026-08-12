@@ -34,6 +34,22 @@ function testFirstOfMonthSkip() {
   assert.equal(resolveFirstOfMonthRecurringIssueYmd('2026-07-24'), '2026-08-01');
   assert.equal(resolveFirstOfMonthRecurringIssueYmd('2026-07-25'), '2026-09-01');
   assert.equal(resolveFirstOfMonthRecurringIssueYmd('2026-08-28'), '2026-10-01');
+
+  // Configurable skip gap (default remains 7)
+  assert.equal(
+    resolveFirstOfMonthRecurringIssueYmd('2026-06-24', { firstOfMonthSkipGapDays: 0 }),
+    '2026-07-01'
+  );
+  assert.equal(
+    resolveFirstOfMonthRecurringIssueYmd('2026-06-24', { firstOfMonthSkipGapDays: 7 }),
+    '2026-08-01'
+  );
+}
+
+function testConfigurableFirstWeekLastDay() {
+  assert.equal(resolveClassBillingCadence('2026-07-10', { firstWeekLastDay: 15 }), BILLING_CADENCE_25_5);
+  assert.equal(resolveClassBillingCadence('2026-07-16', { firstWeekLastDay: 15 }), BILLING_CADENCE_1_5);
+  assert.equal(resolveClassBillingCadence('2026-07-07', { firstWeekLastDay: 5 }), BILLING_CADENCE_1_5);
 }
 
 function testInferAndGrandfatherCadence() {
@@ -251,6 +267,7 @@ async function testScheduleRebuildUsesClassStart() {
 const tests = [
   testClassBillingCadence,
   testFirstOfMonthSkip,
+  testConfigurableFirstWeekLastDay,
   testInferAndGrandfatherCadence,
   testCycleDates,
   testAdvanceQueueByCadence,

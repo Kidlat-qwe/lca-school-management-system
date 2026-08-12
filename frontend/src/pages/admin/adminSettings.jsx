@@ -67,6 +67,8 @@ const AdminSettings = () => {
   const [billingMonth, setBillingMonth] = useState('');
   const [invoiceDueDate, setInvoiceDueDate] = useState('');
   const [invoiceGenerationDate, setInvoiceGenerationDate] = useState('');
+  const [firstWeekLastDay, setFirstWeekLastDay] = useState('7');
+  const [firstOfMonthSkipGapDays, setFirstOfMonthSkipGapDays] = useState('7');
 
   // ── Templates tab ─────────────────────────────────────────────────────────
   const [templateLoading, setTemplateLoading] = useState(true);
@@ -127,6 +129,12 @@ const AdminSettings = () => {
 
       const genDate = settings?.installment_invoice_generation_date?.value;
       setInvoiceGenerationDate(genDate || generationDateDefault());
+
+      const weekDay = Number(settings?.installment_first_week_last_day?.value);
+      setFirstWeekLastDay(Number.isFinite(weekDay) && weekDay >= 1 ? String(weekDay) : '7');
+
+      const skipGap = Number(settings?.installment_first_of_month_skip_gap_days?.value);
+      setFirstOfMonthSkipGapDays(Number.isFinite(skipGap) && skipGap >= 0 ? String(skipGap) : '7');
     } catch (e) {
       setScheduleError(e?.message || 'Failed to load schedule settings');
     } finally {
@@ -299,6 +307,14 @@ const AdminSettings = () => {
       if (!invoiceDueDate) throw new Error('Invoice Due Date is required');
       if (!invoiceGenerationDate) throw new Error('Invoice Generation Date is required');
 
+      const weekDay = Number.parseInt(firstWeekLastDay, 10);
+      if (!Number.isFinite(weekDay) || weekDay < 1 || weekDay > 28)
+        throw new Error('First-week last day must be between 1 and 28');
+
+      const skipGap = Number.parseInt(firstOfMonthSkipGapDays, 10);
+      if (!Number.isFinite(skipGap) || skipGap < 0 || skipGap > 62)
+        throw new Error('First-of-month skip gap must be between 0 and 62 days');
+
       await apiRequest('/settings/batch', {
         method: 'PUT',
         body: {
@@ -309,6 +325,8 @@ const AdminSettings = () => {
             installment_invoice_due_date: invoiceDueDate,
             installment_invoice_generation_date: invoiceGenerationDate,
             installment_frequency_months: 1,
+            installment_first_week_last_day: weekDay,
+            installment_first_of_month_skip_gap_days: skipGap,
           },
         },
       });
@@ -572,6 +590,61 @@ const AdminSettings = () => {
                     <span className="font-semibold">1&nbsp;Month(s)</span>. Frequency is fixed
                     system-wide.
                   </p>
+                </div>
+
+                <div className="mt-6 border-t border-gray-100 pt-4">
+                  <h3 className="text-sm font-semibold text-gray-900">Mid-month billing cadence</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Controls when recurring installments use the 25th/5th cadence versus the 1st/5th
+                    cadence, and how close a class start can be to the next 1st before skipping a month.
+                    Applies to new schedule calculations only — existing queues are unchanged.
+                  </p>
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">
+                        First-week last day <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={28}
+                        value={firstWeekLastDay}
+                        onChange={(e) => setFirstWeekLastDay(e.target.value)}
+                        disabled={scheduleLoading || scheduleSaving}
+                        className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        Class start day 1–N stays on 25th / next-month 5th. Later starts use 1st / 5th.
+                      </p>
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                        Source:{' '}
+                        <ScopeTag scopeVal={scheduleScopeMeta.installment_first_week_last_day} />
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">
+                        First-of-month skip gap (days) <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={62}
+                        value={firstOfMonthSkipGapDays}
+                        onChange={(e) => setFirstOfMonthSkipGapDays(e.target.value)}
+                        disabled={scheduleLoading || scheduleSaving}
+                        className="mt-1.5 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30 disabled:cursor-not-allowed disabled:bg-gray-100"
+                      />
+                      <p className="mt-1 text-xs text-gray-500">
+                        If the next 1st is within this many days after class start, skip to the following 1st.
+                      </p>
+                      <p className="mt-1 flex items-center gap-1.5 text-xs text-gray-500">
+                        Source:{' '}
+                        <ScopeTag
+                          scopeVal={scheduleScopeMeta.installment_first_of_month_skip_gap_days}
+                        />
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

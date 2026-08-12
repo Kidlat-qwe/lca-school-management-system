@@ -64,6 +64,8 @@ import {
   getPayableInvoiceTarget,
   invoicePayActionLabel,
 } from '../../utils/invoicePaymentTarget';
+import FiuuPayOnlinePanel from '../../components/payments/FiuuPayOnlinePanel';
+import { fetchFiuuConfig } from '../../utils/fiuuPayment';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -184,6 +186,8 @@ const Invoice = () => {
   const [paymentAttachmentUploading, setPaymentAttachmentUploading] = useState(false);
   const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
   const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
+  const [fiuuEnabled, setFiuuEnabled] = useState(false);
+  const [paymentEntryMode, setPaymentEntryMode] = useState('manual');
   const [currentPage, setCurrentPage] = useState(1);
   const [listPagination, setListPagination] = useState({
     page: 1,
@@ -933,6 +937,7 @@ const Invoice = () => {
   const handleClosePaymentModal = () => {
     setShowPaymentModal(false);
     setSelectedInvoiceForPayment(null);
+    setPaymentEntryMode('manual');
     setPaymentFormData({
       student_id: '',
       payment_method: '',
@@ -946,6 +951,48 @@ const Invoice = () => {
       attachment_url: '',
     });
     setPaymentFormErrors({});
+  };
+
+  useEffect(() => {
+    if (!showPaymentModal) return;
+    let cancelled = false;
+    fetchFiuuConfig()
+      .then((cfg) => {
+        if (!cancelled) setFiuuEnabled(Boolean(cfg?.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setFiuuEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showPaymentModal]);
+
+  const handleFiuuPaymentSuccess = async ({ amount }) => {
+    const paidInvoiceId = selectedInvoiceForPayment?.invoice_id;
+    const studentId = parseInt(paymentFormData.student_id, 10);
+    if (!paidInvoiceId || !studentId) return;
+
+    handleClosePaymentModal();
+    await fetchInvoices(currentPage);
+
+    try {
+      const invRes = await apiRequest(`/invoices/${paidInvoiceId}`);
+      setPaymentRecordedSummary({
+        invoice: invRes.data,
+        paymentSnapshot: {
+          student_id: studentId,
+          payable_amount: parseFloat(amount) || parseFloat(invRes.data?.amount) || 0,
+          discount_amount: 0,
+          tip_amount: 0,
+          issue_date: todayManilaYMD(),
+          reference_number: '',
+        },
+      });
+    } catch (fetchErr) {
+      console.error('Error loading invoice after FIUU payment:', fetchErr);
+      appAlert('Payment received via FIUU. Refresh the page if the summary does not appear.');
+    }
   };
 
   const closePaymentRecordedInvoiceSummary = () => {
@@ -3401,6 +3448,62 @@ const Invoice = () => {
               </button>
             </div>
 
+            {fiuuEnabled ? (
+              <div className="px-6 pt-4 flex flex-wrap gap-2 border-b border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setPaymentEntryMode('manual')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                    paymentEntryMode === 'manual'
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Manual payment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentEntryMode('fiuu')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                    paymentEntryMode === 'fiuu'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                  }`}
+                >
+                  Pay via FIUU
+                </button>
+              </div>
+            ) : null}
+
+            {fiuuEnabled && paymentEntryMode === 'fiuu' ? (
+              <div className="p-6">
+                <div className="mb-4">
+                  <label className="label-field text-xs">
+                    Student <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    name="student_id"
+                    value={paymentFormData.student_id}
+                    onChange={handlePaymentInputChange}
+                    className={`input-field text-sm ${paymentFormErrors.student_id ? 'border-red-500' : ''}`}
+                    required
+                  >
+                    <option value="">Select Student</option>
+                    {selectedInvoiceForPayment.students?.map((student) => (
+                      <option key={student.student_id} value={student.student_id}>
+                        {student.full_name} {student.email ? `(${student.email})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <FiuuPayOnlinePanel
+                  invoice={selectedInvoiceForPayment}
+                  studentId={paymentFormData.student_id}
+                  onPaid={handleFiuuPaymentSuccess}
+                  onCancel={() => setPaymentEntryMode('manual')}
+                />
+              </div>
+            ) : (
             <form onSubmit={handleSubmitPayment} className="p-6 space-y-6">
               {/* Payment Form */}
               <div className="space-y-4">
@@ -3751,6 +3854,7 @@ const Invoice = () => {
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>,
         document.body

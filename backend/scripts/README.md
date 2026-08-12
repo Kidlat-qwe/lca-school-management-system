@@ -4,6 +4,105 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `repairMiguelBoholMoveToSomoJuly11am.js`
+
+**Miguel Sebastian C. Bohol** (`carlosgeline26@gmail.com`, student **78**). UI already moved Phase 1 enrollment to `SOMO_JULY_Pre-Kinder_MWF 11 AM` (**95**), but inactive profile **54** stayed on class **37**, so Student History still showed the old class.
+
+| Step | Detail |
+|------|--------|
+| Profile | **54** `class_id` 37 → 95 (`is_active` stays false) |
+| Retag | invoice remarks `CLASS_ID:37` → `CLASS_ID:95` |
+| Phase 2 | INV-1927 issue/due → **2026-07-25 / 2026-08-05** |
+
+```bash
+node backend/scripts/repairMiguelBoholMoveToSomoJuly11am.js --production
+node backend/scripts/repairMiguelBoholMoveToSomoJuly11am.js --production --apply
+```
+
+### `repairMiguelBoholPhase2Dates.js`
+
+**Miguel Sebastian C. Bohol** (`carlosgeline26@gmail.com`, student **78**, profile **54**, class **37**). Student History showed Phase 2 as Jun 28 / Mar 1 because Phase 1 INV-1850 issue was after Phase 2 (display date-swap).
+
+| Invoice | Role | Target |
+|---------|------|--------|
+| INV-1850 | Phase 1 (Paid advance) | **Feb 25 / Mar 5** (unswap) |
+| INV-1927 | Phase 2 (Unpaid) | **Mar 25 / Apr 5** |
+
+Does not change penalty, dropped enrollment, or plan Inactive.
+
+```bash
+node backend/scripts/repairMiguelBoholPhase2Dates.js --production
+node backend/scripts/repairMiguelBoholPhase2Dates.js --production --apply
+```
+
+### `repairShaoKunShiftPhasePayments.js`
+
+**Shao Kun Calingasin Wang** (`calingasinhelen@gmail.com`, student **115**, profile **81**, class **56**). Shift installment payments forward so Phase 2 is unpaid with **Pay Now** (no penalty).
+
+| Payment | From | To |
+|---------|------|----|
+| PAY-283 | Phase 2 INV-257 | Phase 3 INV-611 |
+| PAY-654 | Phase 3 INV-611 | Phase 4 INV-1091 |
+| PAY-1062 | Phase 4 INV-1091 | Phase 5 INV-1507 |
+| PAY-1507 | Phase 5 INV-1507 | Phase 6 INV-1805 |
+
+Phase 2 enrollment deleted (shows **—**). Phase 6 undropped to **re_enrolled**. After Phase 2 is paid, Pay Now moves to Phase 7.
+
+```bash
+node backend/scripts/repairShaoKunShiftPhasePayments.js --production
+node backend/scripts/repairShaoKunShiftPhasePayments.js --production --apply
+```
+
+### `repairMariannaRomeroPhase6BlankEnrollmentInactive.js`
+
+Follow-up for **Marianna Agatha Romero** after the date repair. Phase 6 INV-1953 is unpaid, so enrollment must be **—** (not re enrolled / not dropped). Plan status **Inactive**.
+
+| Step | Detail |
+|------|--------|
+| Delete | classstudent **2099** (phase 6) |
+| Deactivate | profile **400** `is_active = false` |
+| Keep | Phase 4 **new**, Phase 5 **re_enrolled** (paid) |
+
+```bash
+node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --production
+node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --production --apply
+```
+
+### `repairMariannaRomeroPhase456DatesUngenerate7.js`
+
+**Marianna Agatha Romero** (`amgromero1987@gmail.com`, student **560**, profile **400**, class **55**). Shift Phase 4–6 installment dates and un-generate Phase 7.
+
+| Phase | Invoice | Current | Target |
+|-------|---------|---------|--------|
+| 4 | INV-1354 Paid | Apr 25 / May 5 | **May 25 / Jun 5** |
+| 5 | INV-1948 Paid | May 25 / Jun 5 | **Jun 25 / Jul 5** |
+| 6 | INV-1953 Unpaid | Jun 25 / Jul 5 | **Jul 25 / Aug 5** |
+| 7 | INV-2153 | Generated overdue | **Cancel + detach** (Not Generated) |
+
+Queue → `generated_count` **3**, next gen **2026-08-25**, next month **2026-09-01**. Restores Phase 6 enrollment **dropped → re_enrolled** (due Aug 5 is not 30 days unpaid) and reactivates profile **400**.
+
+```bash
+node backend/scripts/repairMariannaRomeroPhase456DatesUngenerate7.js --production
+node backend/scripts/repairMariannaRomeroPhase456DatesUngenerate7.js --production --apply
+```
+
+### `repairMariannaRomeroMoveToNcNurseryTths.js`
+
+**Marianna Agatha Romero** (`amgromero1987@gmail.com`, student **560**) — move from `NC_Nursery_MWF_11:00-12:00PM` (**56**) → `NC_NURSERY_TThS_11:00-12:00PM` (**55**). UI Move Student would leave inactive profile **400** on class 56.
+
+| Step | Detail |
+|------|--------|
+| Move enrollments | classstudent **1208** (phase 4 new), **1753** (phase 5 re_enrolled), **2099** (phase 6 dropped) → class **55** |
+| Move profile | profile **400** `class_id` 56 → 55 (`is_active` stays false) |
+| Retag invoices | remarks `CLASS_ID:56` → `CLASS_ID:55` |
+
+Does not reactivate the profile or change unpaid phase 6/7 invoices.
+
+```bash
+node backend/scripts/repairMariannaRomeroMoveToNcNurseryTths.js --production
+node backend/scripts/repairMariannaRomeroMoveToNcNurseryTths.js --production --apply
+```
+
 ### `repairOliviaSalesDeactivatePlan1.js`
 
 Sets Olivia Brie Sales **Plan 1** (profile 128 / 9:30AM Nursery) `is_active = false`

@@ -1,0 +1,326 @@
+import { query } from '../../config/database.js';
+import {
+  getFiuuCallbackUrl,
+  getFiuuDefaultChannel,
+  getFiuuCurrency,
+  getFiuuMerchantId,
+  getFiuuNotifyUrl,
+  getFiuuPayBaseUrl,
+  getFiuuReturnUrl,
+  isFiuuConfigured,
+  resolveFiuuChannelPath,
+} from './config.js';
+import {
+  buildInvoiceOrderId,
+  formatFiuuDescription,
+  formatAmount,
+} from './orderId.js';
+import { buildPaymentVcode, formatFiuuAmount, isFiuuPaymentFailed, isFiuuPaymentSuccess, verifyPaymentSkey } from './signature.js';
+import {
+  findGatewayPaymentByOrderId,
+  insertGatewayPayment,
+  updateGatewayPaymentStatus,
+  withGatewayTransaction,
+} from './gatewayPaymentRepository.js';
+import {
+  applyGatewayInvoiceFullPayment,
+  runPostCommitInstallmentJobs,
+} from './applyGatewayInvoicePayment.js';
+import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentEligibility.js';
+import { getClient } from '../../config/database.js';
+import { sendInvoicePaymentConfirmationByInvoiceId } from '../../utils/paymentConfirmationEmailService.js';
+
+export { isFiuuConfigured };
+
+export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
+  const invRes = await query(
+    `SELECT i.*, COALESCE(b.branch_nickname, b.branch_name) AS branch_name
+     FROM invoicestbl i
+     LEFT JOIN branchestbl b ON i.branch_id = b.branch_id
+     WHERE i.invoice_id = $1`,
+    [invoiceId]
+  );
+  if (invRes.rows.length === 0) {
+    throw Object.assign(new Error('Invoice not found'), { statusCode: 404 });
+  }
+  const invoice = invRes.rows[0];
+
+  if (invoice.status === 'Paid') {
+    throw Object.assign(new Error('Invoice is already fully paid'), { statusCode: 400 });
+  }
+  if (invoice.balance_invoice_id) {
+    throw Object.assign(new Error('Pay the balance continuation invoice instead'), {
+      statusCode: 400,
+    });
+  }
+
+  const remaining = parseFloat(invoice.amount) || 0;
+  if (remaining <= 0.009) {
+    throw Object.assign(new Error('No remaining balance on this invoice'), { statusCode: 400 });
+  }
+
+  const studentRes = await query(
+    `SELECT u.user_id, u.full_name, u.email, u.phone_number
+     FROM userstbl u
+     INNER JOIN invoicestudentstbl ist ON ist.student_id = u.user_id AND ist.invoice_id = $1
+     WHERE u.user_id = $2`,
+    [invoiceId, studentId]
+  );
+  if (studentRes.rows.length === 0) {
+    throw Object.assign(new Error('Student is not on this invoice'), { statusCode: 400 });
+  }
+
+  const client = await getClient();
+  try {
+    if (invoice.installmentinvoiceprofiles_id) {
+      const priorBlock = await getPriorPartialBalanceBlockers(client, invoiceId);
+      if (priorBlock.blocked) {
+        throw Object.assign(new Error(priorBlock.message), { statusCode: 400 });
+      }
+    }
+  } finally {
+    client.release();
+  }
+
+  return { invoice, student: studentRes.rows[0], remaining };
+}
+
+/**
+ * Create pending gateway row + FIUU hosted payment payload.
+ */
+export async function createFiuuInvoicePayment({
+  invoice_id,
+  student_id,
+  created_by,
+  initiator_name,
+  channel,
+}) {
+  if (!isFiuuConfigured()) {
+    throw Object.assign(new Error('FIUU is not configured on the server'), { statusCode: 503 });
+  }
+
+  const { invoice, student, remaining } = await loadInvoiceForFiuuCreate(invoice_id, student_id);
+  const orderid = buildInvoiceOrderId(invoice_id);
+  const amount = formatFiuuAmount(remaining);
+  const currency = getFiuuCurrency();
+  const fiuuChannel = channel || getFiuuDefaultChannel();
+  const refLabel = invoice.invoice_description || `INV-${invoice_id}`;
+  const description = formatFiuuDescription({
+    typeLabel: 'Invoice',
+    studentName: student.full_name || 'Student',
+    branchName: invoice.branch_name || 'Branch',
+    refLabel,
+    amountPhp: remaining,
+    initiatorName: initiator_name,
+  });
+
+  const vcode = buildPaymentVcode({ amount, orderid, currency });
+  const merchantId = getFiuuMerchantId();
+  const channelPath = resolveFiuuChannelPath(fiuuChannel);
+  const payUrl = `${getFiuuPayBaseUrl()}${merchantId}/${channelPath}`;
+
+  const formFields = {
+    amount,
+    orderid,
+    bill_name: student.full_name || 'Student',
+    bill_email: student.email || '',
+    bill_mobile: student.phone_number || '',
+    bill_desc: description,
+    currency,
+    vcode,
+    channel: fiuuChannel,
+  };
+
+  const returnUrl = getFiuuReturnUrl();
+  const notifyUrl = getFiuuNotifyUrl();
+  const callbackUrl = getFiuuCallbackUrl();
+  if (returnUrl) formFields.returnurl = returnUrl;
+  if (notifyUrl) formFields.notifyurl = notifyUrl;
+  if (callbackUrl) formFields.callbackurl = callbackUrl;
+
+  await insertGatewayPayment({
+    gateway: 'FIUU',
+    orderid,
+    target_type: 'invoice',
+    target_id: invoice_id,
+    student_id,
+    branch_id: invoice.branch_id,
+    invoice_id,
+    amount: remaining,
+    currency,
+    description_sent: description,
+    metadata: { channel: fiuuChannel, payment_type: 'Full Payment' },
+    raw_request: formFields,
+    created_by,
+  });
+
+  return {
+    orderid,
+    amount,
+    currency,
+    payUrl,
+    formFields,
+    description,
+    channel: fiuuChannel,
+  };
+}
+
+export async function getFiuuPaymentStatus(orderid) {
+  const row = await findGatewayPaymentByOrderId(orderid);
+  if (!row) {
+    throw Object.assign(new Error('Gateway payment not found'), { statusCode: 404 });
+  }
+  return {
+    orderid: row.orderid,
+    status: row.status,
+    payment_id: row.payment_id,
+    invoice_id: row.invoice_id,
+    amount: row.amount,
+    fiuu_tran_id: row.fiuu_tran_id,
+    fiuu_channel: row.fiuu_channel,
+  };
+}
+
+async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
+  if (gatewayRow.status === 'paid' && gatewayRow.payment_id) {
+    return { alreadyProcessed: true, payment_id: gatewayRow.payment_id };
+  }
+
+  const tranID = String(webhookPayload.tranID ?? '').trim();
+  const channel = String(webhookPayload.channel ?? gatewayRow.metadata?.channel ?? '').trim();
+
+  let applyResult;
+  await withGatewayTransaction(async (client) => {
+    const locked = await client.query(
+      'SELECT * FROM gateway_paymentstbl WHERE orderid = $1 FOR UPDATE',
+      [gatewayRow.orderid]
+    );
+    const current = locked.rows[0];
+    if (!current) throw new Error('Gateway payment not found');
+    if (current.status === 'paid' && current.payment_id) {
+      applyResult = { alreadyProcessed: true, payment_id: current.payment_id };
+      return;
+    }
+
+    applyResult = await applyGatewayInvoiceFullPayment(client, {
+      invoice_id: current.invoice_id,
+      student_id: current.student_id,
+      payable_amount: current.amount,
+      reference_number: tranID,
+      payment_method: 'FIUU Online',
+      fiuu_channel: channel || getFiuuDefaultChannel(),
+      created_by: current.created_by,
+      issue_date: new Date(),
+      remarks: current.description_sent,
+    });
+
+    await client.query(
+      `UPDATE gateway_paymentstbl
+       SET status = 'paid', fiuu_tran_id = $1, fiuu_channel = $2, raw_webhook = $3,
+           payment_id = $4, paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE gateway_payment_id = $5`,
+      [
+        tranID || null,
+        channel || null,
+        JSON.stringify(webhookPayload),
+        applyResult.payment_id,
+        current.gateway_payment_id,
+      ]
+    );
+  });
+
+  if (applyResult && !applyResult.alreadyProcessed) {
+    await runPostCommitInstallmentJobs(applyResult);
+    (async () => {
+      try {
+        const emailClient = await getClient();
+        try {
+          await sendInvoicePaymentConfirmationByInvoiceId(emailClient, applyResult.invoice_id);
+        } finally {
+          emailClient.release();
+        }
+      } catch (emailErr) {
+        console.error('FIUU: payment confirmation email failed:', emailErr);
+      }
+    })();
+  }
+
+  return applyResult;
+}
+
+/**
+ * Handle FIUU notify/callback/return POST body.
+ */
+export async function handleFiuuWebhookPayload(payload, { source = 'notify' } = {}) {
+  const orderid = String(payload.orderid ?? '').trim();
+  if (!orderid) {
+    return { ok: false, message: 'Missing orderid', httpStatus: 400 };
+  }
+
+  const gatewayRow = await findGatewayPaymentByOrderId(orderid);
+  if (!gatewayRow) {
+    console.warn(`[fiuu-${source}] Unknown orderid: ${orderid}`);
+    return { ok: false, message: 'Unknown orderid', httpStatus: 404 };
+  }
+
+  const amountOk =
+    Math.abs(parseFloat(payload.amount || 0) - parseFloat(gatewayRow.amount || 0)) < 0.02;
+  const currency = String(payload.currency ?? 'PHP').trim();
+  if (!amountOk) {
+    console.error(`[fiuu-${source}] Amount mismatch for ${orderid}`);
+    await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {
+      status: 'failed',
+      raw_webhook: payload,
+    });
+    return { ok: false, message: 'Amount mismatch', httpStatus: 400 };
+  }
+
+  if (!verifyPaymentSkey(payload)) {
+    console.error(`[fiuu-${source}] Invalid skey for ${orderid}`);
+    return { ok: false, message: 'Invalid signature', httpStatus: 400 };
+  }
+
+  const status = String(payload.status ?? '').trim();
+  if (isFiuuPaymentSuccess(status)) {
+    const result = await processSuccessfulGatewayPayment(gatewayRow, payload);
+    return {
+      ok: true,
+      message: 'Payment applied',
+      orderid,
+      payment_id: result?.payment_id,
+      ipnEcho: formatIpnAckBody(payload),
+    };
+  }
+
+  if (isFiuuPaymentFailed(status)) {
+    await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {
+      status: 'failed',
+      fiuu_tran_id: payload.tranID || null,
+      raw_webhook: payload,
+    });
+    return { ok: true, message: 'Payment failed recorded', orderid, ipnEcho: formatIpnAckBody(payload) };
+  }
+
+  await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {
+    status: 'pending',
+    raw_webhook: payload,
+  });
+  return { ok: true, message: 'Pending status received', orderid, ipnEcho: formatIpnAckBody(payload) };
+}
+
+/** IPN ACK: echo POST fields + treq=1 (FIUU expects plain text key=value lines). */
+export function formatIpnAckBody(payload) {
+  const lines = Object.entries({ ...payload, treq: '1' }).map(
+    ([key, value]) => `${key}=${encodeURIComponent(String(value ?? ''))}`
+  );
+  return lines.join('\n');
+}
+
+export function normalizeFiuuPostBody(body) {
+  if (!body || typeof body !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(body)) {
+    out[k] = v == null ? '' : String(v);
+  }
+  return out;
+}

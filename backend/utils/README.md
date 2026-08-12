@@ -94,12 +94,13 @@ Builds class-linked installment issue / due / queue dates (`buildPhaseInstallmen
 | Rule | Behavior |
 |------|----------|
 | First phase (`generated_count = 0`) | Due = day before that phase’s first session; issue = enrollment / payment day |
-| Class start day 1–7 | Recurring cadence **25th / next-month 5th** |
-| Class start day 8+ | Recurring cadence **1st / same-month 5th** |
-| 7-day skip | If the next 1st is ≤ 7 days after class start, skip to the following 1st (e.g. June 24 → Aug 1) |
+| Class start day 1–N (`installment_first_week_last_day`, default **7**) | Recurring cadence **25th / next-month 5th** |
+| Class start day after N | Recurring cadence **1st / same-month 5th** |
+| Skip gap (`installment_first_of_month_skip_gap_days`, default **7**) | If the next 1st is ≤ N days after class start, skip to the following 1st (e.g. gap=7, June 24 → Aug 1) |
 | Existing queues | Day-25 `next_generation_date` stays on 25/5 (grandfather). Start-date rebuild uses `ignoreStoredQueueAnchor` + new class start |
 | Late joiners | Same class cadence; first invoice stays phase-tied; first recurring 1st is after that invoice (still respects the class skip) |
 | Grace / drop-off | Unchanged — still based on invoice `due_date` (5th) |
+| Settings UI | Superadmin / Admin → **Invoice Schedule** → Mid-month billing cadence |
 
 Used by: enrollment (`routes/classes.js`), daily generation (`installmentInvoiceGenerator.js`), class start-date billing realignment.
 

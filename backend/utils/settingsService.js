@@ -74,6 +74,26 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     min: 1,
     max: 12,
   },
+  installment_first_week_last_day: {
+    key: 'installment_first_week_last_day',
+    type: 'int',
+    category: 'installment_schedule',
+    description:
+      'Class start day-of-month threshold (1–N) that keeps recurring billing on the 25th / next-month 5th cadence. Later start days use 1st / same-month 5th.',
+    defaultValue: 7,
+    min: 1,
+    max: 28,
+  },
+  installment_first_of_month_skip_gap_days: {
+    key: 'installment_first_of_month_skip_gap_days',
+    type: 'int',
+    category: 'installment_schedule',
+    description:
+      'When using 1st/5th cadence: if the next 1st is within this many days after class start, skip to the following 1st (avoids back-to-back billing).',
+    defaultValue: 7,
+    min: 0,
+    max: 62,
+  },
 
   // --- Templates (notification / email / EOD / cash deposit / payment / reminder) ---
   // Stored as JSON with a consistent shape:

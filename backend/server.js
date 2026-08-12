@@ -42,6 +42,7 @@ import dailySummarySalesRoutes from './routes/dailySummarySales.js';
 import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
 import systemLogsRoutes from './routes/systemLogs.js';
 import inventoryWebhooksRoutes from './routes/inventoryWebhooks.js';
+import fiuuPaymentsRoutes, { fiuuWebhookRouter } from './routes/fiuuPayments.js';
 
 // Import middleware
 import { activityLogger } from './middleware/activityLogger.js';
@@ -143,12 +144,15 @@ app.get('/health', (req, res) => {
 
 // RHET Inventory webhook — not Firebase-auth'd (verified by integration key / request match).
 app.use('/api/webhooks/inventory', inventoryWebhooksRoutes);
+// FIUU payment gateway webhooks — verified via skey (Secret Key).
+app.use('/api/webhooks/fiuu', fiuuWebhookRouter);
 
 // API routes
 const API_VERSION = '/api/sms';
 
 // Also expose webhook under the API prefix (in case proxies only forward /api/sms/*).
 app.use(`${API_VERSION}/webhooks/inventory`, inventoryWebhooksRoutes);
+app.use(`${API_VERSION}/webhooks/fiuu`, fiuuWebhookRouter);
 
 // Log mutating API requests after response (req.user set by route auth)
 app.use(API_VERSION, activityLogger);
@@ -172,6 +176,7 @@ app.use(`${API_VERSION}/acknowledgement-receipts`, acknowledgementReceiptsRoutes
 app.use(`${API_VERSION}/guardians`, guardiansRoutes);
 app.use(`${API_VERSION}/phasesessions`, phasesessionsRoutes);
 app.use(`${API_VERSION}/payments`, paymentsRoutes);
+app.use(`${API_VERSION}/payments/fiuu`, fiuuPaymentsRoutes);
 app.use(`${API_VERSION}/reservations`, reservationsRoutes);
 app.use(`${API_VERSION}/dashboard`, dashboardRoutes);
 app.use(`${API_VERSION}/calendar`, calendarRoutes);
