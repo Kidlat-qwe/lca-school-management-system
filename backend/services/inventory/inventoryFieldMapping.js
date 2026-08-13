@@ -138,6 +138,40 @@ export function buildBatchReference(headerRequestId) {
   return `${getInventorySystemCode()}-REQ-${id}`;
 }
 
+/** Per-line ref for Branch Admin Return Stock. Distinct from inbound `PSMS-<id>`. */
+export function buildReturnExternalReference(localRequestId) {
+  const id = Number(localRequestId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return `${getInventorySystemCode()}-RET-${id}`;
+}
+
+/**
+ * Shared cart id for one CMS Return Stock submit.
+ * Format: `<SYSTEM_CODE>-RET-<header_local_request_id>` e.g. `PSMS-RET-82`.
+ */
+export function buildReturnBatchReference(headerRequestId) {
+  const id = Number(headerRequestId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return `${getInventorySystemCode()}-RET-${id}`;
+}
+
+export const STOCK_RETURN_REASON_PREFIX = '[STOCK_RETURN]';
+
+export function isStockReturnReason(reason) {
+  return String(reason || '').trim().startsWith(STOCK_RETURN_REASON_PREFIX);
+}
+
+export function wrapStockReturnReason(userReason) {
+  const extra = String(userReason || '').trim();
+  return extra ? `${STOCK_RETURN_REASON_PREFIX} ${extra}` : STOCK_RETURN_REASON_PREFIX;
+}
+
+export function unwrapStockReturnReason(reason) {
+  const text = String(reason || '').trim();
+  if (!text.startsWith(STOCK_RETURN_REASON_PREFIX)) return text;
+  return text.slice(STOCK_RETURN_REASON_PREFIX.length).trim();
+}
+
 /** Parses `<SYSTEM_CODE>-<id>` back to the numeric local request id (current system code only). */
 export function parseLocalRequestIdFromExternalReference(externalReference) {
   if (!externalReference) return null;
@@ -808,6 +842,34 @@ export function buildInventorySubmitPayload({
     payload.webhookUrl = webhook;
   }
 
+  return payload;
+}
+
+/**
+ * POST /stock-returns body. Same item shape as Request Stock, with
+ * `requestType: 'RETURN'`, `PSMS-RET-<id>` line refs, and `PSMS-RET-<header>` batch.
+ */
+export function buildInventoryReturnPayload(opts) {
+  const rows = Array.isArray(opts?.requestRows) && opts.requestRows.length
+    ? opts.requestRows
+    : opts?.requestRow
+      ? [opts.requestRow]
+      : [];
+  const batchReference =
+    String(opts?.batchReference || '').trim() ||
+    buildReturnBatchReference(rows[0]?.request_id);
+  const payload = buildInventorySubmitPayload({
+    ...opts,
+    requestRows: rows,
+    batchReference,
+    reason: unwrapStockReturnReason(opts?.reason) || opts?.reason,
+  });
+  payload.requestType = 'RETURN';
+  payload.items = (payload.items || []).map((item, index) => {
+    const row = rows[index];
+    const retRef = buildReturnExternalReference(row?.request_id);
+    return retRef ? { ...item, externalReference: retRef } : item;
+  });
   return payload;
 }
 

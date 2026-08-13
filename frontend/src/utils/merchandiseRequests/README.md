@@ -12,6 +12,12 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
 | `requestActionMenu.js` | Ellipsis menu items: terminal statuses → View details only; Pending/Shipped → Track + actions. |
 | `requestStatusModules.js` | Count/filter/paginate helpers for My Requests status modules (Pending / Shipped / Delivered / Returned / Rejected). |
+| `uniqueCartCategory.js` | Request / Return carts: one category per row (no double-select). |
+
+**Return Stock** (existing branch qty → RHET warehouse) lives in
+`frontend/src/utils/merchandiseReturns/` and
+`components/merchandise/ReturnStockModal.jsx`. Admin Merchandise submits
+`POST /merchandise-requests/returns/batch`.
 
 ## Catalog is the source of truth for category dropdowns
 

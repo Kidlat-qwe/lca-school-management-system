@@ -1,13 +1,19 @@
 /**
  * RHET requires top-level branchName on POST /stock-requests.
  * Multi-item carts also require a shared top-level batchReference.
+ * Return Stock uses requestType RETURN + PSMS-RET-* refs.
  * Run: node backend/tests/inventoryBranchNamePayload.test.js
  */
 
 import assert from 'node:assert/strict';
 import {
   buildInventorySubmitPayload,
+  buildInventoryReturnPayload,
   buildBatchReference,
+  buildReturnBatchReference,
+  buildReturnExternalReference,
+  wrapStockReturnReason,
+  unwrapStockReturnReason,
   normalizeInventoryBranchName,
 } from '../services/inventory/inventoryFieldMapping.js';
 
@@ -127,9 +133,53 @@ function testMultiItemCartSharesBatchReference() {
   assert.equal('batchReference' in payload.items[0], false);
 }
 
+function testReturnPayloadUsesRetReferences() {
+  assert.equal(buildReturnBatchReference(82), 'PSMS-RET-82');
+  assert.equal(buildReturnExternalReference(82), 'PSMS-RET-82');
+  assert.equal(wrapStockReturnReason('Damaged display units'), '[STOCK_RETURN] Damaged display units');
+  assert.equal(unwrapStockReturnReason('[STOCK_RETURN] Damaged display units'), 'Damaged display units');
+
+  const payload = buildInventoryReturnPayload({
+    requestRows: [
+      {
+        request_id: 82,
+        merchandise_name: 'Shirt',
+        inventory_category_name: 'Shirt',
+        gender: 'Unisex',
+        type: 'Logo 1',
+        size: 'M',
+        requested_quantity: 2,
+      },
+      {
+        request_id: 83,
+        merchandise_name: 'Backpack',
+        inventory_category_name: 'Backpack',
+        inventory_item_name: 'school-backpack',
+        inventory_requested_sku: 'BP-001',
+        requested_quantity: 1,
+      },
+    ],
+    requestedBy: 'Jane Admin',
+    reason: '[STOCK_RETURN] Excess campus stock',
+    webhookUrl: 'https://api-cms.lca-app.com/api/webhooks/inventory',
+    branchName: 'LCA Makati',
+  });
+
+  assert.equal(payload.requestType, 'RETURN');
+  assert.equal(payload.batchReference, 'PSMS-RET-82');
+  assert.equal(payload.reason, 'Excess campus stock');
+  assert.equal(payload.branchName, 'LCA Makati');
+  assert.equal(payload.items.length, 2);
+  assert.equal(payload.items[0].externalReference, 'PSMS-RET-82');
+  assert.equal(payload.items[1].externalReference, 'PSMS-RET-83');
+  assert.equal(payload.items[0].categoryName, 'Shirt');
+  assert.equal(payload.items[1].itemName, 'school-backpack');
+}
+
 testNormalizeBranchName();
 testPayloadIncludesTopLevelBranchName();
 testPayloadRejectsMissingBranchName();
 testNonUniformPayloadKeepsBranchTopLevel();
 testMultiItemCartSharesBatchReference();
+testReturnPayloadUsesRetReferences();
 console.log('inventoryBranchNamePayload.test.js: all passed');

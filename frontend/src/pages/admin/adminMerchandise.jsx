@@ -23,6 +23,7 @@ import LearningKitRequestFields from '../../components/merchandise/LearningKitRe
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
+import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
 import FixedTablePagination, {
   TablePaginationSummary,
 } from '../../components/table/FixedTablePagination';
@@ -64,6 +65,11 @@ import {
   isInventoryIntegrationDisabledError,
   isMerchandiseTypeShellRow,
 } from '../../utils/merchandiseRequests/createTypeCategory';
+import {
+  filterUnselectedCartCategories,
+  hasUnusedCartCategory,
+  isCategoryTakenOnOtherRow,
+} from '../../utils/merchandiseRequests/uniqueCartCategory';
 import { useMerchandiseLiveRefresh } from '../../hooks/useMerchandiseLiveRefresh';
 import {
   isItemNamedStockCategory,
@@ -73,6 +79,10 @@ import {
   getMerchandiseStockItemName,
   getMerchandiseStockSku,
 } from '../../utils/merchandiseStock';
+import {
+  isStockReturnRequest,
+  unwrapStockReturnReason,
+} from '../../utils/merchandiseReturns';
 
 /** Branch Admin "Request Stock" control. Set true to re-enable. */
 const REQUEST_STOCK_ENABLED = true;
@@ -95,6 +105,7 @@ const AdminMerchandise = () => {
   const [viewingStocksFor, setViewingStocksFor] = useState(null); // merchandise_name
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
+  const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [isRequestingSpecificStock, setIsRequestingSpecificStock] = useState(false);
   const [modalStep, setModalStep] = useState('form'); // Removed branch-selection - admin only sees their branch
   // Removed selectedBranch - admin only sees their branch
@@ -526,6 +537,9 @@ const AdminMerchandise = () => {
         const updated = { ...line, [field]: value };
 
         if (field === 'category_name') {
+          if (value && isCategoryTakenOnOtherRow(prev, value, lineId)) {
+            return line;
+          }
           updated.category_kind =
             findCatalogCategoryKind(inventoryCatalog.categories, value) || '';
           updated.gender = '';
@@ -926,6 +940,8 @@ const AdminMerchandise = () => {
         !branchCategoryNames.has(categoryName.toLowerCase())
       ) {
         row.category_name = 'Select a category already added for this branch';
+      } else if (isCategoryTakenOnOtherRow(bulkRequestLines, categoryName, line.id)) {
+        row.category_name = 'This category is already selected on another row';
       }
 
       if (categoryName && isLearningKitMerchandiseName(categoryName)) {
@@ -1265,6 +1281,44 @@ const AdminMerchandise = () => {
     } catch (err) {
       appAlert(err.message || 'Failed to submit stock request');
       console.error('Error submitting request:', err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const closeReturnModal = () => {
+    if (submitting) return;
+    setIsReturnModalOpen(false);
+  };
+
+  const handleReturnSubmit = async (payload) => {
+    setSubmitting(true);
+    try {
+      const response = await apiRequest('/merchandise-requests/returns/batch', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      const inventoryIntegrated = Boolean(response?.inventoryIntegrated);
+      const createdRows = Array.isArray(response?.data) ? response.data : [];
+      const successCount = createdRows.length || payload?.items?.length || 0;
+
+      if (adminBranchId) {
+        await fetchMerchandiseByBranch(adminBranchId, { silent: true });
+      }
+      await fetchMerchandiseRequests();
+      setIsReturnModalOpen(false);
+      setActiveTab('requests');
+      setRequestStatusModule('Returned');
+      appAlert(
+        `${successCount} stock return${successCount === 1 ? '' : 's'} submitted successfully! ${
+          inventoryIntegrated
+            ? 'Sent to RHET Central Inventory. Branch quantities were deducted.'
+            : 'Branch quantities were deducted.'
+        }`
+      );
+    } catch (err) {
+      appAlert(err.message || 'Failed to submit stock return');
+      console.error('Error submitting return:', err);
     } finally {
       setSubmitting(false);
     }
@@ -1930,7 +1984,8 @@ const AdminMerchandise = () => {
                       disabled={
                         catalogLoading ||
                         !!catalogError ||
-                        requestStockCategoryOptions.length === 0
+                        requestStockCategoryOptions.length === 0 ||
+                        !hasUnusedCartCategory(requestStockCategoryOptions, bulkRequestLines)
                       }
                       className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors disabled:opacity-50"
                     >
@@ -2014,8 +2069,11 @@ const AdminMerchandise = () => {
                             (line.sku || line.item_name
                               ? `${line.sku}|${line.item_name}|${line.inventory_id || ''}`
                               : '');
-
-
+                          const categoryOptions = filterUnselectedCartCategories(
+                            requestStockCategoryOptions,
+                            bulkRequestLines,
+                            line.id
+                          );
 
                           return (
                             <tr key={line.id}>
@@ -2032,7 +2090,7 @@ const AdminMerchandise = () => {
                                   disabled={catalogLoading}
                                 >
                                   <option value="">-- Select branch category --</option>
-                                  {requestStockCategoryOptions.map((cat) => (
+                                  {categoryOptions.map((cat) => (
                                     <option
                                       key={cat.categoryId || cat.categoryName}
                                       value={cat.categoryName}
@@ -2299,6 +2357,16 @@ const AdminMerchandise = () => {
         document.body
       )}
 
+      <ReturnStockModal
+        open={isReturnModalOpen}
+        onClose={closeReturnModal}
+        merchandise={merchandise}
+        branchId={adminBranchId}
+        returnedByDisplay={requestedByDisplay}
+        returnDateDisplay={requestDateDisplay}
+        submitting={submitting}
+        onSubmit={handleReturnSubmit}
+      />
 
     </>
   );
@@ -2657,27 +2725,43 @@ const AdminMerchandise = () => {
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Merchandise</h1>
           <p className="text-sm text-gray-500 mt-1">{selectedBranchName}</p>
         </div>
-        {/* Request Stock Button - Upper Right */}
-        <button 
-          type="button"
-          disabled={!REQUEST_STOCK_ENABLED}
-          title={
-            REQUEST_STOCK_ENABLED
-              ? undefined
-              : 'Temporarily disabled — will be re-enabled later'
-          }
-          onClick={() => openRequestModal()}
-          className={`px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-md ${
-            REQUEST_STOCK_ENABLED
-              ? 'hover:bg-blue-700'
-              : 'cursor-not-allowed opacity-50'
-          }`}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          <span>Request Stock</span>
-        </button>
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:justify-end">
+          <button 
+            type="button"
+            disabled={!REQUEST_STOCK_ENABLED}
+            title={
+              REQUEST_STOCK_ENABLED
+                ? undefined
+                : 'Temporarily disabled — will be re-enabled later'
+            }
+            onClick={() => openRequestModal()}
+            className={`px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-md ${
+              REQUEST_STOCK_ENABLED
+                ? 'hover:bg-blue-700'
+                : 'cursor-not-allowed opacity-50'
+            }`}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            <span>Request Stock</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsReturnModalOpen(true)}
+            className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-md"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 10h10a4 4 0 010 8H9m-6-8l3-3m-3 3l3 3"
+              />
+            </svg>
+            <span>Return Stock</span>
+          </button>
+        </div>
       </div>
       {/* Tabs */}
       <div className="border-b border-gray-200">
@@ -2908,8 +2992,16 @@ const AdminMerchandise = () => {
                           <div className="text-sm text-gray-900">{request.requested_quantity}</div>
                         </td>
                         <td className="px-6 py-4">
-                          <div className="text-sm text-gray-900 max-w-xs truncate" title={request.request_reason}>
-                            {request.request_reason}
+                          <div
+                            className="text-sm text-gray-900 max-w-xs truncate"
+                            title={unwrapStockReturnReason(request.request_reason) || request.request_reason}
+                          >
+                            {isStockReturnRequest(request) && (
+                              <span className="inline-flex items-center mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-orange-100 text-orange-800">
+                                Return
+                              </span>
+                            )}
+                            {unwrapStockReturnReason(request.request_reason) || request.request_reason || '—'}
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">

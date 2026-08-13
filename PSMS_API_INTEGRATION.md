@@ -85,6 +85,7 @@ legacy Superadmin-only approval flow and never calls RHET.
 | `GET /api/sms/merchandise-requests/inventory/availability` | Proxy to RHET `/availability` for a stock check |
 | `POST /api/sms/merchandise-requests` | Local save + submit one line to RHET `/stock-requests` |
 | `POST /api/sms/merchandise-requests/batch` | Local save all cart lines + **one** RHET `/stock-requests` with shared `batchReference` |
+| `POST /api/sms/merchandise-requests/returns/batch` | Deduct branch stock + **one** RHET `/stock-returns` with shared `PSMS-RET-*` `batchReference` |
 | `POST /api/webhooks/inventory` | Receive `stock_request.*` events from RHET (no Firebase auth; verified by shared key) |
 
 Implementation: `backend/services/inventory/` (client + field mapping),
@@ -374,6 +375,55 @@ Optional body:
 
 CMS route: `POST /api/sms/merchandise-requests/:id/confirm-delivery` (Admin, own branch; local status must be Shipped).
 
+### 5.6 Submit stock return(s) (CMS → RHET)
+
+Branch Admin **Return Stock** deducts on-hand `merchandisestbl` qty immediately,
+then forwards one cart to RHET.
+
+```http
+POST {INVENTORY_API_URL}/stock-returns
+X-Integration-Key: {INVENTORY_INTEGRATION_KEY}
+Content-Type: application/json
+```
+
+Body mirrors `/stock-requests` plus `requestType: "RETURN"`. Line refs use
+`PSMS-RET-<local_id>` (not `PSMS-<id>`) so inbound `stock_request.*` webhooks
+do not match these rows. Multi-item carts share `batchReference` `PSMS-RET-<first_id>`.
+
+```json
+{
+  "requestDate": "2026-08-13",
+  "requestedBy": "Jane Admin",
+  "branchName": "LCA Makati",
+  "reason": "Excess campus display stock",
+  "requestType": "RETURN",
+  "batchReference": "PSMS-RET-82",
+  "webhookUrl": "https://api-cms.lca-app.com/api/webhooks/inventory",
+  "items": [
+    {
+      "categoryName": "Shirt",
+      "gender": "Unisex",
+      "type": "Logo 1",
+      "size": "M",
+      "quantity": 2,
+      "externalReference": "PSMS-RET-82"
+    },
+    {
+      "categoryName": "Backpack",
+      "itemName": "school-backpack",
+      "sku": "BP-001",
+      "quantity": 1,
+      "externalReference": "PSMS-RET-83"
+    }
+  ]
+}
+```
+
+CMS route: `POST /api/sms/merchandise-requests/returns/batch` (Admin, own branch).
+Local log rows are stored as status **Returned** with `request_reason` prefixed
+`[STOCK_RETURN]` (no extra DB column). If RHET forward fails, CMS restores qty
+and deletes the local log rows.
+
 ---
 
 ## 6. Item matching (no SKU required)
@@ -659,6 +709,7 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
 | Submit request | `POST` | `/stock-requests` |
 | Get request status | `GET` | `/stock-requests/:id` |
 | Confirm delivery (branch received) | `POST` | `/stock-requests/:id/deliver` |
+| Submit return (branch → warehouse) | `POST` | `/stock-returns` |
 
 **Base URL:** `{INVENTORY_API_URL}`  
 **Auth header:** `X-Integration-Key: {INVENTORY_INTEGRATION_KEY}`

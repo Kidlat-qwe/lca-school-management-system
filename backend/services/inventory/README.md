@@ -25,6 +25,10 @@ machine-to-machine API.
 7. Optional: RHET marks **Returned**. If `wasDelivered` (or local was
    Delivered/Approved), CMS reverses the branch credit; otherwise status only.
 8. Branch Admin is notified on shipped / delivered / returned / rejected.
+9. Branch Admin **Return Stock** deducts on-hand branch qty immediately and
+   forwards one RHET `POST /stock-returns` (`requestType: RETURN`,
+   `batchReference` `PSMS-RET-<id>`, per-line `PSMS-RET-<id>`). Local log status
+   is **Returned**. RHET failure rolls back qty + log rows.
 
 On reject: CMS marks the local request `Rejected` and notifies the Admin.
 
@@ -127,10 +131,10 @@ When integration env is missing, CMS falls back to the legacy Superadmin-approva
 
 | File | Purpose |
 |---|---|
-| `inventoryClient.js` | HTTP client to RHET |
-| `inventoryFieldMapping.js` | Label mapping + `externalReference` + `batchReference` + `branchName` |
+| `inventoryClient.js` | HTTP client to RHET (`/stock-requests`, `/stock-returns`, `/deliver`, catalog) |
+| `inventoryFieldMapping.js` | Label mapping + `externalReference` + `batchReference` / `PSMS-RET-*` return refs + `branchName` |
 | `stockRequestLifecycle.js` | PENDING → SHIPPED → DELIVERED / RETURNED / REJECTED helpers |
-| `applyMerchandiseRequestStock.js` | Adds / reverses qty on branch `merchandisestbl` |
+| `applyMerchandiseRequestStock.js` | Adds / reverses / deducts qty on branch `merchandisestbl` |
 | `runMerchRequestSql.js` | Retries merch-request UPDATEs if `updated_at` column is missing |
 
 **Fulfill matching (critical):** CMS type = RHET `categoryName` (`Backpack` /
@@ -211,6 +215,7 @@ Then confirm each against RHET; if RHET is DELIVERED, run sync/repair above.
 - `node backend/tests/runMerchRequestSql.test.js` — strip/retry helper
 - `node backend/tests/merchandiseFulfillTypeMatch.test.js` — category vs itemName
 - `node backend/tests/stockRequestLifecycle.test.js` — shipped/delivered/returned helpers
+- `node backend/tests/inventoryBranchNamePayload.test.js` — `branchName` + `batchReference` + Return Stock `PSMS-RET-*`
 - Grep: no `merchandisestbl` SQL should reference `updated_at`
 - Shipped webhook → 200, Shipped, stock unchanged
 - Delivered webhook → 200, Delivered, stock +qty once; fulfilled alias replay → stock unchanged

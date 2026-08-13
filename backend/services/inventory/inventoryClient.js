@@ -238,6 +238,21 @@ export async function submitStockRequests(payload) {
   );
 }
 
+/**
+ * POST /stock-returns — branch returns existing stock to RHET warehouse.
+ * Payload mirrors /stock-requests plus top-level `requestType: "RETURN"`.
+ */
+export async function submitStockReturns(payload) {
+  return inventoryRequestWithRetry(
+    '/stock-returns',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    { retries: 1 }
+  );
+}
+
 /** GET /stock-requests/:id — poll status by RHET request UUID. */
 export async function getStockRequest(requestId) {
   return inventoryRequest(`/stock-requests/${requestId}`);

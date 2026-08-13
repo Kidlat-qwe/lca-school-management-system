@@ -53,6 +53,16 @@ Built via `buildMerchandiseRequestActionItems`:
 - **Pending / Shipped**: **Track request item** plus Cancel / Confirm / Review as applicable
 
 
+## ReturnStockModal
+
+Branch Admin **Return Stock** dialog (beside Request Stock). Same landscape
+modal pattern: date / returned-by, add-row table, reason.
+
+- Category dropdown = existing branch types with on-hand qty only (one category per row; already-selected categories are hidden)
+- Variant dropdown = concrete stock rows (gender/type/size or item/sku)
+- Return qty per row, capped at available
+- Submit → `POST /merchandise-requests/returns/batch`
+
 ## TrackRequestProgressModal
 
 Landscape modal (md+) for RHET stock-request progress: item/status on the left,

@@ -720,3 +720,76 @@ export async function reverseMerchandiseRequestStock(client, request) {
     qtyRemoved: remove,
   };
 }
+
+/**
+ * Deduct on-hand qty for Branch Admin Return Stock (row locked FOR UPDATE).
+ * Quantity must belong to the admin's branch and be >= requested return qty.
+ */
+export async function deductMerchandiseStockQuantity(client, {
+  merchandiseId,
+  branchId,
+  quantity,
+}) {
+  const qty = Number(quantity) || 0;
+  if (!merchandiseId || qty <= 0) {
+    const err = new Error('Return quantity must be at least 1');
+    err.code = 'INVALID_RETURN_QTY';
+    err.status = 400;
+    throw err;
+  }
+
+  const locked = await client.query(
+    `SELECT merchandise_id, merchandise_name, quantity, gender, type, size,
+            item_name, sku, branch_id, remarks
+     FROM merchandisestbl
+     WHERE merchandise_id = $1
+     FOR UPDATE`,
+    [merchandiseId]
+  );
+  const row = locked.rows[0];
+  if (!row) {
+    const err = new Error('Merchandise stock row not found');
+    err.code = 'MERCHANDISE_NOT_FOUND';
+    err.status = 404;
+    throw err;
+  }
+  if (Number(row.branch_id) !== Number(branchId)) {
+    const err = new Error('Stock row does not belong to this branch');
+    err.code = 'BRANCH_MISMATCH';
+    err.status = 403;
+    throw err;
+  }
+
+  const current = Number(row.quantity) || 0;
+  if (current < qty) {
+    const err = new Error(
+      `Not enough stock to return (${row.merchandise_name}). Available: ${current}, requested: ${qty}`
+    );
+    err.code = 'INSUFFICIENT_STOCK';
+    err.status = 400;
+    throw err;
+  }
+
+  const newQuantity = current - qty;
+  await client.query(
+    'UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2',
+    [newQuantity, merchandiseId]
+  );
+
+  return {
+    ...row,
+    previousQuantity: current,
+    newQuantity,
+    qtyRemoved: qty,
+  };
+}
+
+/** Restore qty after a failed Return Stock forward (add back, do not overwrite). */
+export async function restoreMerchandiseStockQuantity(client, { merchandiseId, quantity }) {
+  const qty = Number(quantity) || 0;
+  if (!merchandiseId || qty <= 0) return;
+  await client.query(
+    'UPDATE merchandisestbl SET quantity = COALESCE(quantity, 0) + $1 WHERE merchandise_id = $2',
+    [qty, merchandiseId]
+  );
+}
