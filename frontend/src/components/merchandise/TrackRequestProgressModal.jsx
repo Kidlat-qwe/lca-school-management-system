@@ -67,7 +67,7 @@ export default function TrackRequestProgressModal({
   return createPortal(
     <div
       className="fixed inset-0 backdrop-blur-sm bg-black/20 flex items-center justify-center z-[10000] p-3 sm:p-4"
-      onClick={onClose}
+      onClick={confirming ? undefined : onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="track-request-title"
@@ -88,7 +88,8 @@ export default function TrackRequestProgressModal({
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-full hover:bg-gray-100 text-gray-500 shrink-0"
+            disabled={confirming}
+            className="p-2 rounded-full hover:bg-gray-100 text-gray-500 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
             aria-label="Close"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -150,9 +151,19 @@ export default function TrackRequestProgressModal({
                     type="button"
                     disabled={confirming}
                     onClick={() => onConfirmDelivery?.()}
-                    className="w-full sm:w-auto px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-lg transition-colors"
+                    className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-lg transition-colors"
                   >
-                    {confirming ? 'Confirming…' : 'Confirm received'}
+                    {confirming ? (
+                      <>
+                        <span
+                          className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin"
+                          aria-hidden="true"
+                        />
+                        Confirming…
+                      </>
+                    ) : (
+                      'Confirm received'
+                    )}
                   </button>
                 </div>
               ) : null}
@@ -237,7 +248,8 @@ export default function TrackRequestProgressModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+            disabled={confirming}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors"
           >
             Close
           </button>

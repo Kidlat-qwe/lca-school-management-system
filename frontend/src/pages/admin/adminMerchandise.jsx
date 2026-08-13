@@ -21,6 +21,7 @@ import MerchandiseReleaseLogsPanel from '../../components/merchandise/Merchandis
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
+import ConfirmDeliveryLoadingOverlay from '../../components/merchandise/ConfirmDeliveryLoadingOverlay';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
@@ -137,6 +138,7 @@ const AdminMerchandise = () => {
   const [formErrors, setFormErrors] = useState({});
   const [requestFormErrors, setRequestFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [confirmingDeliveryId, setConfirmingDeliveryId] = useState(null);
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
   /** Stocks list filters (uniforms): gender, piece type, size */
   const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
@@ -1351,7 +1353,7 @@ const AdminMerchandise = () => {
   };
 
   const handleConfirmDelivery = async (request) => {
-    if (!request?.request_id) return;
+    if (!request?.request_id || confirmingDeliveryId) return;
     if (
       !(await appConfirm({
         title: 'Confirm received',
@@ -1364,6 +1366,7 @@ const AdminMerchandise = () => {
     }
 
     try {
+      setConfirmingDeliveryId(request.request_id);
       setSubmitting(true);
       const response = await apiRequest(
         `/merchandise-requests/${request.request_id}/confirm-delivery`,
@@ -1383,6 +1386,7 @@ const AdminMerchandise = () => {
     } catch (err) {
       appAlert(err.message || 'Failed to confirm delivery. Please try again.');
     } finally {
+      setConfirmingDeliveryId(null);
       setSubmitting(false);
     }
   };
@@ -3038,6 +3042,7 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <RequestActionsMenu
                             requestId={request.request_id}
+                            disabled={Boolean(confirmingDeliveryId)}
                             items={buildMerchandiseRequestActionItems(request, {
                               role: 'admin',
                               onTrack: setTrackingRequest,
@@ -3071,13 +3076,17 @@ const AdminMerchandise = () => {
       <TrackRequestProgressModal
         open={Boolean(trackingRequest)}
         request={trackingRequest}
-        onClose={() => setTrackingRequest(null)}
+        onClose={() => {
+          if (confirmingDeliveryId) return;
+          setTrackingRequest(null);
+        }}
         canConfirmDelivery={
           trackingRequest?.status === 'Shipped' && Boolean(trackingRequest?.inventory_request_id)
         }
-        confirming={submitting}
+        confirming={Boolean(confirmingDeliveryId)}
         onConfirmDelivery={() => handleConfirmDelivery(trackingRequest)}
       />
+      <ConfirmDeliveryLoadingOverlay open={Boolean(confirmingDeliveryId)} />
     </div>
   );
 };

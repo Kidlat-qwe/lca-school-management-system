@@ -52,6 +52,13 @@ Built via `buildMerchandiseRequestActionItems`:
 - **Delivered / Returned / Rejected** (and legacy Approved): **View details** only → track timeline (read-only)
 - **Pending / Shipped**: **Track request item** plus Cancel / Confirm / Review as applicable
 - **Return Stock pending** (awaiting HQ): Track only — no Cancel / Confirm received
+- `disabled` locks the ⋮ button while Confirm received is in progress
+
+## ConfirmDeliveryLoadingOverlay
+
+Full-page spinner overlay on Admin Merchandise while Branch Admin confirms a
+**Shipped** item (`POST /merchandise-requests/:id/confirm-delivery`). Blocks
+double-submit from the row menu or Track modal.
 
 
 ## ReturnStockModal
@@ -73,6 +80,7 @@ timeline on the right. Stacks vertically on small screens.
 
 When status is **Shipped**, Branch Admin can **Confirm received** (calls
 `POST /merchandise-requests/:id/confirm-delivery` → RHET `/stock-requests/:id/deliver`).
+The confirm button shows a spinner; close is disabled until the request finishes.
 
 Uses `utils/merchandiseRequests/trackProgress.js` to map local `status`
 (and legacy `Approved` → Delivered) onto step states.

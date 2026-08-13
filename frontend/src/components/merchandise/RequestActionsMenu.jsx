@@ -8,10 +8,15 @@ import { createPortal } from 'react-dom';
 export default function RequestActionsMenu({
   requestId,
   items = [],
+  disabled = false,
 }) {
   const [open, setOpen] = useState(false);
   const [menuPos, setMenuPos] = useState(null);
   const buttonRef = useRef(null);
+
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -41,6 +46,7 @@ export default function RequestActionsMenu({
 
   const handleToggle = (event) => {
     event.stopPropagation();
+    if (disabled) return;
     if (open) {
       setOpen(false);
       return;
@@ -68,7 +74,8 @@ export default function RequestActionsMenu({
         ref={buttonRef}
         type="button"
         onClick={handleToggle}
-        className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+        disabled={disabled}
+        className="p-2 rounded-full hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="Request actions"
