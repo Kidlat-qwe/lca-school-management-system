@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { appAlert } from '../utils/appAlert';
+import { appAlert } from '../../utils/appAlert';
 import {
   createFiuuInvoicePayment,
   pollFiuuPaymentStatus,
   submitFiuuPaymentForm,
-} from '../utils/fiuuPayment';
+} from '../../utils/fiuuPayment';
 
 const formatCurrency = (value) => {
   const n = Number(value || 0);
