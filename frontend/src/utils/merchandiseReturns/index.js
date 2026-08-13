@@ -3,6 +3,8 @@ export {
   isStockReturnRequest,
   wrapStockReturnReason,
   unwrapStockReturnReason,
+  getReturnReusableFromRequest,
+  getReturnHqInspectionLabel,
   createEmptyReturnLine,
   getReturnableBranchStockRows,
   getReturnStockCategoryNames,

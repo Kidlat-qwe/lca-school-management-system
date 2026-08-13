@@ -378,13 +378,18 @@ CMS route: `POST /api/sms/merchandise-requests/:id/confirm-delivery` (Admin, own
 ### 5.6 Submit stock return(s) (CMS → RHET)
 
 Branch Admin **Return Stock** deducts on-hand `merchandisestbl` qty immediately,
-then forwards one cart to RHET.
+then forwards one cart to RHET for **HQ inspection**. RHET does **not** restock
+warehouse on create.
 
 ```http
 POST {INVENTORY_API_URL}/stock-returns
 X-Integration-Key: {INVENTORY_INTEGRATION_KEY}
 Content-Type: application/json
 ```
+
+HTTP **201** (new) or **200** (idempotent replay) is success. Each line may return
+`status: "PENDING"` and `requestKind: "RETURN"`. CMS must **not** require
+`status === "RETURNED"` and must **not** roll back branch qty on PENDING.
 
 Body mirrors `/stock-requests` plus `requestType: "RETURN"`. Line refs use
 `PSMS-RET-<local_id>` (not `PSMS-<id>`) so inbound `stock_request.*` webhooks
@@ -420,9 +425,21 @@ do not match these rows. Multi-item carts share `batchReference` `PSMS-RET-<firs
 ```
 
 CMS route: `POST /api/sms/merchandise-requests/returns/batch` (Admin, own branch).
-Local log rows are stored as status **Returned** with `request_reason` prefixed
-`[STOCK_RETURN]` (no extra DB column). If RHET forward fails, CMS restores qty
-and deletes the local log rows.
+Local log `status` is **Pending** after submit (My Requests → **Pending**).
+`inventory_status` after create = **PENDING** or **RECEIVED** (awaiting HQ).
+On `stock_return.accepted`, local `status` becomes **Returned** (My Requests → **Returned**).
+`request_reason` is prefixed `[STOCK_RETURN]` for matching (unwrapped in UI).
+
+Rollback branch qty **only** on non-2xx / network / 422 unmatched. Replay 200
+with the same `PSMS-RET-*` is not a second deduct and not a rollback.
+
+| RHET webhook | CMS action |
+|---|---|
+| `stock_return.received` | Keep branch qty deducted. Local status **Pending**. `inventory_status` RECEIVED/PENDING |
+| `stock_return.accepted` | Local status **Returned**. `inventory_status` RETURNED. Store reusable flag. **Never** re-credit branch qty |
+
+`returnReusable: true` = RHET warehouse restocked. `false` = not reusable,
+warehouse unchanged. Neither value adds CMS branch stock back.
 
 ---
 
@@ -545,6 +562,8 @@ Returned example includes `"wasDelivered": true` when reversing a prior delivery
 | `stock_request.fulfilled` | Legacy alias on deliver | Same as delivered (idempotent) |
 | `stock_request.returned` | Returned to warehouse | Reverse stock if `wasDelivered`; status **Returned** |
 | `stock_request.rejected` | Not approved | Local **Rejected** |
+| `stock_return.received` | Return Stock accepted into RHET Pending | CMS local **Pending**; keep branch deduction; `inventory_status` RECEIVED/PENDING |
+| `stock_return.accepted` | HQ inspected reusable / not reusable | CMS local **Returned**; `inventory_status` RETURNED; **no** branch re-credit |
 
 ### 7.4 PSMS webhook handler logic
 

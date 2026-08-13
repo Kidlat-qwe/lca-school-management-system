@@ -2,6 +2,10 @@ import express from 'express';
 import { query as dbQuery, getClient } from '../config/database.js';
 import {
   parseLocalRequestIdFromExternalReference,
+  parseReturnLocalRequestIdFromExternalReference,
+  isReturnExternalReference,
+  isStockReturnLocalRow,
+  buildReturnInspectionNotes,
   pickApproverName,
   resolveUniformFulfillIdentity,
 } from '../services/inventory/inventoryFieldMapping.js';
@@ -23,6 +27,9 @@ import {
   inferInventoryStatusFromPayload,
   normalizeRemoteStatus,
   resolveWasDelivered,
+  isStockReturnWebhookEvent,
+  isStockReturnAcceptedEvent,
+  isStockReturnReceivedEvent,
 } from '../services/inventory/stockRequestLifecycle.js';
 
 const router = express.Router();
@@ -88,7 +95,9 @@ function isMissingInventoryProcessedByColumn(error) {
 
 async function findLocalRequest(payload, client = null) {
   const run = client ? client.query.bind(client) : dbQuery;
-  const localIdFromRef = parseLocalRequestIdFromExternalReference(payload.externalReference);
+  const localIdFromRef =
+    parseLocalRequestIdFromExternalReference(payload.externalReference) ||
+    parseReturnLocalRequestIdFromExternalReference(payload.externalReference);
 
   if (localIdFromRef) {
     const byId = await run('SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1', [
@@ -482,6 +491,177 @@ async function handleDelivered(localRequest, payload, inventoryStatus, rejection
   }
 }
 
+function isReturnStockRow(request, payload = {}) {
+  return (
+    isStockReturnLocalRow(request) ||
+    isReturnExternalReference(payload.externalReference) ||
+    isReturnExternalReference(request?.inventory_external_reference) ||
+    isStockReturnWebhookEvent(payload)
+  );
+}
+
+/**
+ * stock_return.received — HQ has the return (Pending inspection).
+ * Keep branch qty deducted. Local status stays Pending (My Requests → Pending).
+ * inventory_status RECEIVED/PENDING until HQ accepts.
+ */
+async function handleStockReturnReceived(localRequest, payload, inventoryStatus) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query(
+      'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE',
+      [localRequest.request_id]
+    );
+    const request = locked.rows[0];
+    if (!request) {
+      await client.query('ROLLBACK');
+      return { applied: false, reason: 'not_found' };
+    }
+
+    const currentInv = String(request.inventory_status || '').toUpperCase();
+    if (currentInv === 'RETURNED') {
+      await syncInventoryFields(request, payload, 'RETURNED', null, {
+        writeApproverName: false,
+        client,
+      });
+      await client.query('COMMIT');
+      return { applied: false, reason: 'already_accepted', kind: 'stock_return', stockChanged: false };
+    }
+
+    const incoming = String(inventoryStatus || '').toUpperCase();
+    const storeStatus = incoming === 'PENDING' || incoming === 'RECEIVED' ? incoming : 'RECEIVED';
+    const processedBy = await syncInventoryFields(
+      request,
+      payload,
+      storeStatus,
+      payload.rejectionReason || payload.failureReason || null,
+      { writeApproverName: false, client }
+    );
+
+    try {
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             inventory_status = $2,
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $3`,
+        [LOCAL_REQUEST_STATUS.PENDING, storeStatus, request.request_id]
+      );
+    } catch (error) {
+      if (!isMissingInventoryProcessedByColumn(error)) throw error;
+    }
+
+    await client.query('COMMIT');
+    console.log(
+      `[inventory-webhook] stock_return.received local=${request.request_id} inventory_status=${storeStatus} (branch qty unchanged)`
+    );
+    return { applied: true, kind: 'stock_return', phase: 'received', processedBy, stockChanged: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * stock_return.accepted — HQ inspected. inventory_status RETURNED.
+ * Store returnReusable / returnNotes on review_notes. NEVER re-credit branch qty.
+ */
+async function handleStockReturnAccepted(localRequest, payload, inventoryStatus) {
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    const locked = await client.query(
+      'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE',
+      [localRequest.request_id]
+    );
+    const request = locked.rows[0];
+    if (!request) {
+      await client.query('ROLLBACK');
+      return { applied: false, reason: 'not_found' };
+    }
+
+    const processedBy = await syncInventoryFields(
+      request,
+      payload,
+      inventoryStatus || 'RETURNED',
+      payload.rejectionReason || payload.failureReason || null,
+      { writeApproverName: true, client }
+    );
+
+    const inspectionNotes = buildReturnInspectionNotes({
+      returnReusable: payload.returnReusable,
+      returnNotes: payload.returnNotes,
+      processedBy,
+    });
+    const alreadyInspected = String(request.inventory_status || '').toUpperCase() === 'RETURNED';
+
+    try {
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+             review_notes = CASE
+               WHEN $4::boolean THEN COALESCE(review_notes, $2)
+               ELSE $2
+             END,
+             inventory_status = 'RETURNED',
+             inventory_processed_by = COALESCE($3, inventory_processed_by),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $5`,
+        [
+          LOCAL_REQUEST_STATUS.RETURNED,
+          inspectionNotes,
+          processedBy,
+          alreadyInspected,
+          request.request_id,
+        ]
+      );
+    } catch (error) {
+      if (!isMissingInventoryProcessedByColumn(error)) throw error;
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET status = $1,
+             reviewed_at = COALESCE(reviewed_at, CURRENT_TIMESTAMP),
+             review_notes = CASE
+               WHEN $3::boolean THEN COALESCE(review_notes, $2)
+               ELSE $2
+             END,
+             inventory_status = 'RETURNED',
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $4`,
+        [LOCAL_REQUEST_STATUS.RETURNED, inspectionNotes, alreadyInspected, request.request_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log(
+      `[inventory-webhook] stock_return.accepted local=${request.request_id} reusable=${payload.returnReusable} (branch qty unchanged)`
+    );
+    return {
+      applied: !alreadyInspected,
+      kind: 'stock_return',
+      phase: 'accepted',
+      processedBy,
+      stockChanged: false,
+      returnReusable: payload.returnReusable,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * RETURNED: reverse CMS credit only when wasDelivered (or local was Delivered/Approved).
  * From Shipped only → status Returned, no reverse.
@@ -720,7 +900,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
 
 /**
  * POST /api/webhooks/inventory
- * Receives stock_request.created / shipped / delivered / fulfilled / returned / rejected
+ * Receives stock_request.* and stock_return.received / stock_return.accepted
  * from RHET Inventory.
  *
  * Stock is added only on delivered (fulfilled is a legacy alias — credit once).
@@ -762,6 +942,35 @@ router.post('/', async (req, res) => {
         externalReference: payload.externalReference,
       });
       return res.json({ success: true, message: 'No matching local request' });
+    }
+
+    if (isReturnStockRow(localRequest, payload) || isStockReturnWebhookEvent(payload)) {
+      if (isStockReturnAcceptedEvent(payload) || inventoryStatus === 'RETURNED') {
+        const result = await handleStockReturnAccepted(localRequest, payload, inventoryStatus);
+        return res.json({ success: true, ...result });
+      }
+      if (
+        isStockReturnReceivedEvent(payload) ||
+        inventoryStatus === 'PENDING' ||
+        inventoryStatus === 'RECEIVED' ||
+        isStockReturnWebhookEvent(payload)
+      ) {
+        const result = await handleStockReturnReceived(localRequest, payload, inventoryStatus);
+        return res.json({ success: true, ...result });
+      }
+      return res.json({
+        success: true,
+        message: 'Ignored non-return event for Return Stock row',
+        ignored: true,
+      });
+    }
+
+    if (isReturnExternalReference(payload.externalReference) || isStockReturnLocalRow(localRequest)) {
+      return res.json({
+        success: true,
+        message: 'Ignored stock_request event for Return Stock row',
+        ignored: true,
+      });
     }
 
     // Order matters: returned/rejected before delivered; shipped before created fallback.

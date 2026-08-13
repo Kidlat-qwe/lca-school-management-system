@@ -82,6 +82,7 @@ import {
 import {
   isStockReturnRequest,
   unwrapStockReturnReason,
+  getReturnHqInspectionLabel,
 } from '../../utils/merchandiseReturns';
 
 /** Branch Admin "Request Stock" control. Set true to re-enable. */
@@ -1308,12 +1309,12 @@ const AdminMerchandise = () => {
       await fetchMerchandiseRequests();
       setIsReturnModalOpen(false);
       setActiveTab('requests');
-      setRequestStatusModule('Returned');
+      setRequestStatusModule('Pending');
       appAlert(
         `${successCount} stock return${successCount === 1 ? '' : 's'} submitted successfully! ${
           inventoryIntegrated
-            ? 'Sent to RHET Central Inventory. Branch quantities were deducted.'
-            : 'Branch quantities were deducted.'
+            ? 'Sent to RHET. Branch quantities were deducted. It stays in Pending until HQ marks reusable or not reusable.'
+            : 'Branch quantities were deducted. It stays in Pending until reviewed.'
         }`
       );
     } catch (err) {
@@ -3011,7 +3012,20 @@ const AdminMerchandise = () => {
                           <div className="text-sm text-gray-900">{request.type || '-'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          {getStatusBadge(request.status)}
+                          <div className="flex flex-col gap-1">
+                            {getStatusBadge(request.status)}
+                            {isStockReturnRequest(request) && getReturnHqInspectionLabel(request) && (
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium w-fit ${
+                                  String(request.inventory_status || '').toUpperCase() === 'RETURNED'
+                                    ? 'bg-emerald-50 text-emerald-800'
+                                    : 'bg-amber-50 text-amber-900'
+                                }`}
+                              >
+                                {getReturnHqInspectionLabel(request)}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">

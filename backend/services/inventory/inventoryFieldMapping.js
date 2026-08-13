@@ -180,6 +180,83 @@ export function parseLocalRequestIdFromExternalReference(externalReference) {
   return match ? parseInt(match[1], 10) : null;
 }
 
+/** True when ref is a Return Stock line (`PSMS-RET-82`), not inbound `PSMS-82`. */
+export function isReturnExternalReference(externalReference) {
+  const systemCode = getInventorySystemCode().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${systemCode}-RET-\\d+$`, 'i').test(String(externalReference || '').trim());
+}
+
+/** Parses `<SYSTEM_CODE>-RET-<id>` back to the numeric local request id. */
+export function parseReturnLocalRequestIdFromExternalReference(externalReference) {
+  if (!externalReference) return null;
+  const systemCode = getInventorySystemCode().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(externalReference).match(new RegExp(`^${systemCode}-RET-(\\d+)$`, 'i'));
+  return match ? parseInt(match[1], 10) : null;
+}
+
+export function isStockReturnLocalRow(row) {
+  if (!row) return false;
+  if (isStockReturnReason(row.request_reason)) return true;
+  return isReturnExternalReference(row.inventory_external_reference);
+}
+
+/**
+ * RHET /stock-requests and /stock-returns may wrap lines as data[], data.items[],
+ * items[], or a single data/request object.
+ */
+export function extractRemoteInventoryItems(result) {
+  if (!result || typeof result !== 'object') return [];
+  if (Array.isArray(result.data)) return result.data.filter(Boolean);
+  if (Array.isArray(result.items)) return result.items.filter(Boolean);
+  if (result.data && typeof result.data === 'object') {
+    if (Array.isArray(result.data.items)) return result.data.items.filter(Boolean);
+    if (result.data.data && Array.isArray(result.data.data)) {
+      return result.data.data.filter(Boolean);
+    }
+    if (result.data.requestId || result.data.externalReference) return [result.data];
+  }
+  if (result.requestId || result.externalReference) return [result];
+  return [];
+}
+
+/** Create-call inventory_status: PENDING/RECEIVED are success. Never require RETURNED. */
+export function normalizeReturnCreateInventoryStatus(status) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'FAILED' || s === 'REJECTED') return s;
+  if (s === 'RECEIVED') return 'RECEIVED';
+  if (s === 'RETURNED') return 'RETURNED';
+  return 'PENDING';
+}
+
+export const RETURN_REUSABLE_MARKER = '[RETURN_REUSABLE]';
+export const RETURN_NOT_REUSABLE_MARKER = '[RETURN_NOT_REUSABLE]';
+
+export function parseReturnReusableFlag(value) {
+  if (value === true || value === 'true' || value === 1 || value === '1') return true;
+  if (value === false || value === 'false' || value === 0 || value === '0') return false;
+  return null;
+}
+
+/** Persist HQ inspection on review_notes (no extra DB column). */
+export function buildReturnInspectionNotes({ returnReusable, returnNotes, processedBy } = {}) {
+  const reusable = parseReturnReusableFlag(returnReusable);
+  const flag =
+    reusable === true
+      ? RETURN_REUSABLE_MARKER
+      : reusable === false
+        ? RETURN_NOT_REUSABLE_MARKER
+        : '';
+  const who = processedBy ? ` (${processedBy})` : '';
+  const extra = String(returnNotes || '').trim();
+  const verdict =
+    reusable === false
+      ? `HQ inspection: not reusable. Warehouse unchanged${who}.`
+      : reusable === true
+        ? `HQ inspection: reusable. RHET warehouse restocked${who}.`
+        : `HQ inspection completed${who}.`;
+  return [flag, verdict, extra].filter(Boolean).join(' ');
+}
+
 /**
  * Learning Kit category (RHET virtual kit). Request Stock collects components[]
  * from CMS kit recipes; fulfill credits branch type "Learning Kit".

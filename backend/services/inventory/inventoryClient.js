@@ -239,7 +239,8 @@ export async function submitStockRequests(payload) {
 }
 
 /**
- * POST /stock-returns — branch returns existing stock to RHET warehouse.
+ * POST /stock-returns — branch returns existing stock for HQ inspection.
+ * HTTP 201 (new) or 200 (idempotent replay) is success even when status is PENDING.
  * Payload mirrors /stock-requests plus top-level `requestType: "RETURN"`.
  */
 export async function submitStockReturns(payload) {

@@ -23,6 +23,8 @@ import {
   buildReturnBatchReference,
   wrapStockReturnReason,
   unwrapStockReturnReason,
+  extractRemoteInventoryItems,
+  normalizeReturnCreateInventoryStatus,
   normalizeInventoryBranchName,
   pickApproverName,
   looksLikeUuid,
@@ -59,8 +61,8 @@ router.use(verifyFirebaseToken);
  * Persist RHET /stock-requests response rows onto local merchandiserequestlogtbl
  * lines, matching by `externalReference` (`PSMS-<local_request_id>`).
  */
-async function applyInventoryForwardResults(requestRows, result, payload) {
-  const remoteItems = Array.isArray(result?.data) ? result.data : [];
+async function applyInventoryForwardResults(requestRows, result, payload, { isReturn = false } = {}) {
+  const remoteItems = extractRemoteInventoryItems(result);
   const byExternalRef = new Map();
   for (const item of remoteItems) {
     const ref = String(item?.externalReference || '').trim();
@@ -90,7 +92,9 @@ async function applyInventoryForwardResults(requestRows, result, payload) {
       null;
     const inventoryStatus = failureReason
       ? 'FAILED'
-      : inventoryItem.status || 'PENDING';
+      : isReturn
+        ? normalizeReturnCreateInventoryStatus(inventoryItem.status)
+        : inventoryItem.status || 'PENDING';
 
     try {
       await runIgnoringMissingUpdatedAt(dbQuery,
@@ -229,7 +233,8 @@ async function forwardReturnToInventory(requestRows, { requestedBy, reason, bran
   });
 
   const result = await submitStockReturns(payload);
-  const applied = await applyInventoryForwardResults(rows, result, payload);
+  // HTTP 201/200 + PENDING/RECEIVED is success. Do not require status RETURNED.
+  const applied = await applyInventoryForwardResults(rows, result, payload, { isReturn: true });
   return rows.length === 1 ? applied[0] : applied;
 }
 
@@ -1372,7 +1377,7 @@ router.post(
           inventory_item_name: inventoryItemName,
           inventory_requested_sku: inventorySku,
           inventory_components_json: null,
-          status: 'Returned',
+          status: 'Pending',
           executor: (sql, params) => client.query(sql, params),
         });
         createdIds.push(row.request_id);
@@ -1391,15 +1396,6 @@ router.post(
             branchName: branchNameText,
             batchReference,
           });
-          await dbQuery(
-            `UPDATE merchandiserequestlogtbl
-             SET inventory_status = CASE
-               WHEN inventory_status IN ('FAILED', 'REJECTED') THEN inventory_status
-               ELSE 'RETURNED'
-             END
-             WHERE request_id = ANY($1::int[])`,
-            [createdIds]
-          );
         } catch (inventoryError) {
           const keepLocal =
             inventoryError?.code === 'INVENTORY_SCHEMA_MISSING' ||
@@ -1489,8 +1485,8 @@ router.post(
       res.status(201).json({
         success: true,
         message: inventoryOn
-          ? 'Stock return submitted to RHET Central Inventory. Branch quantities were deducted.'
-          : 'Stock return recorded. Branch quantities were deducted.',
+          ? 'Stock return submitted to RHET. Branch quantities were deducted. It stays Pending until HQ marks reusable or not reusable.'
+          : 'Stock return recorded. Branch quantities were deducted. It stays Pending until reviewed.',
         data: refreshed.rows,
         batchReference: inventoryOn ? batchReference : null,
         inventoryIntegrated: inventoryOn,

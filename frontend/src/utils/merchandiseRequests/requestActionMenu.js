@@ -2,7 +2,14 @@
  * Build ellipsis menu items for Merchandise request rows.
  * Delivered / Approved / Returned / Rejected → "View details" only (track modal, read-only).
  * Pending / Shipped → "Track request item" plus status actions.
+ * Return Stock pending (awaiting HQ) → no Cancel / Confirm received.
  */
+
+function isStockReturnRow(request) {
+  const reason = String(request?.request_reason || '');
+  if (reason.trim().startsWith('[STOCK_RETURN]')) return true;
+  return /-[Rr][Ee][Tt]-\d+$/.test(String(request?.inventory_external_reference || '').trim());
+}
 
 function isTerminalRequestStatus(status) {
   const s = String(status || '').trim();
@@ -55,7 +62,11 @@ export function buildMerchandiseRequestActionItems(request, handlers = {}) {
     },
   ];
 
-  if (status === 'Shipped' && typeof onConfirmDelivery === 'function') {
+  if (
+    status === 'Shipped' &&
+    typeof onConfirmDelivery === 'function' &&
+    !isStockReturnRow(request)
+  ) {
     items.push({
       key: 'confirm',
       label: 'Confirm received',
@@ -63,7 +74,12 @@ export function buildMerchandiseRequestActionItems(request, handlers = {}) {
     });
   }
 
-  if (status === 'Pending' && role === 'admin' && typeof onCancel === 'function') {
+  if (
+    status === 'Pending' &&
+    role === 'admin' &&
+    typeof onCancel === 'function' &&
+    !isStockReturnRow(request)
+  ) {
     items.push({
       key: 'cancel',
       label: 'Cancel request',

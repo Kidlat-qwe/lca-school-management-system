@@ -51,6 +51,7 @@ Ellipsis (⋮) menu for Merchandise → **Requests** Actions column.
 Built via `buildMerchandiseRequestActionItems`:
 - **Delivered / Returned / Rejected** (and legacy Approved): **View details** only → track timeline (read-only)
 - **Pending / Shipped**: **Track request item** plus Cancel / Confirm / Review as applicable
+- **Return Stock pending** (awaiting HQ): Track only — no Cancel / Confirm received
 
 
 ## ReturnStockModal
@@ -61,7 +62,7 @@ modal pattern: date / returned-by, add-row table, reason.
 - Category dropdown = existing branch types with on-hand qty only (one category per row; already-selected categories are hidden)
 - Variant dropdown = concrete stock rows (gender/type/size or item/sku)
 - Return qty per row, capped at available
-- Submit → `POST /merchandise-requests/returns/batch`
+- Submit → `POST /merchandise-requests/returns/batch` (HTTP 201/200 PENDING is success). My Requests → **Pending** until HQ accepts, then **Returned**.
 
 ## TrackRequestProgressModal
 

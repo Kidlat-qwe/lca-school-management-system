@@ -108,16 +108,24 @@ export function resolveWasDelivered(payload, localStatus) {
  * Infer inventory_status string to store when event implies status.
  */
 export function inferInventoryStatusFromPayload(payload) {
+  const event = normalizeEventName(payload?.event);
+  if (event.includes('stock_return.accepted') || (event.includes('stock_return') && event.includes('accepted'))) {
+    return 'RETURNED';
+  }
+  if (event.includes('stock_return.received') || (event.includes('stock_return') && event.includes('received'))) {
+    return 'RECEIVED';
+  }
+
   let status = normalizeRemoteStatus(payload?.status);
   if (status) {
     // Normalize legacy fulfill → DELIVERED for storage going forward
     if (status === 'FULFILLED') return 'DELIVERED';
     if (status === 'FAILED') return 'REJECTED';
     if (status === 'APPROVED') return 'DELIVERED';
+    if (status === 'RECEIVED') return 'RECEIVED';
     return status;
   }
 
-  const event = normalizeEventName(payload?.event);
   if (event.includes('delivered') || event.endsWith('.delivered')) return 'DELIVERED';
   if (event.includes('fulfilled') || event.endsWith('.fulfilled')) return 'DELIVERED';
   if (event.includes('shipped') || event.endsWith('.shipped')) return 'SHIPPED';
@@ -126,4 +134,24 @@ export function inferInventoryStatusFromPayload(payload) {
   if (event.includes('failed') || event.endsWith('.failed')) return 'REJECTED';
   if (event.includes('created') || event.endsWith('.created')) return 'PENDING';
   return 'PENDING';
+}
+
+export function isStockReturnWebhookEvent(payload) {
+  const event = normalizeEventName(payload?.event);
+  const kind = String(payload?.requestKind || payload?.request_kind || '').toUpperCase();
+  if (event.includes('stock_return')) return true;
+  if (kind === 'RETURN') return true;
+  return false;
+}
+
+export function isStockReturnAcceptedEvent(payload) {
+  const event = normalizeEventName(payload?.event);
+  if (event.includes('stock_return') && event.includes('accepted')) return true;
+  return isStockReturnWebhookEvent(payload) && normalizeRemoteStatus(payload?.status) === 'RETURNED';
+}
+
+export function isStockReturnReceivedEvent(payload) {
+  const event = normalizeEventName(payload?.event);
+  if (event.includes('stock_return') && event.includes('received')) return true;
+  return isStockReturnWebhookEvent(payload) && !isStockReturnAcceptedEvent(payload);
 }

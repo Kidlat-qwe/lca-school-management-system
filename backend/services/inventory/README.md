@@ -27,8 +27,11 @@ machine-to-machine API.
 8. Branch Admin is notified on shipped / delivered / returned / rejected.
 9. Branch Admin **Return Stock** deducts on-hand branch qty immediately and
    forwards one RHET `POST /stock-returns` (`requestType: RETURN`,
-   `batchReference` `PSMS-RET-<id>`, per-line `PSMS-RET-<id>`). Local log status
-   is **Returned**. RHET failure rolls back qty + log rows.
+   `batchReference` `PSMS-RET-<id>`, per-line `PSMS-RET-<id>`). HTTP 201/200
+   with `status: PENDING` is **success** (HQ inspection, not warehouse restock).
+   Local log `status` is **Pending** (My Requests → Pending) until HQ accepts;
+   then **Returned**. `inventory_status` stays PENDING/RECEIVED until
+   `stock_return.accepted`. Non-2xx rolls back qty + log rows.
 
 On reject: CMS marks the local request `Rejected` and notifies the Admin.
 
@@ -162,6 +165,9 @@ for normal fulfills — that script is one-time legacy cleanup only.
 - `DELIVERED` → local **Delivered** + add branch stock (idempotent)
 - Legacy `FULFILLED` / `stock_request.fulfilled` → same as delivered (credit once)
 - `RETURNED` → local **Returned**; reverse branch qty if `wasDelivered`
+- `stock_return.received` → Return Stock HQ pending; **no** qty change
+- `stock_return.accepted` → `inventory_status` RETURNED + reusable notes; **no** branch re-credit
+- Ignore `stock_request.*` on `PSMS-RET-*` / `[STOCK_RETURN]` rows
 - `REJECTED` / `FAILED` → mark `Rejected` + notify Admin
 - Stores `inventory_processed_by` via `pickApproverName`:
   `processedBy` → `approvedBy` → `processedByName` → `rejectedBy` (skips UUIDs).
@@ -216,6 +222,7 @@ Then confirm each against RHET; if RHET is DELIVERED, run sync/repair above.
 - `node backend/tests/merchandiseFulfillTypeMatch.test.js` — category vs itemName
 - `node backend/tests/stockRequestLifecycle.test.js` — shipped/delivered/returned helpers
 - `node backend/tests/inventoryBranchNamePayload.test.js` — `branchName` + `batchReference` + Return Stock `PSMS-RET-*`
+- `node backend/tests/inventoryReturnLifecycle.test.js` — PENDING create success + stock_return.* vs stock_request.returned
 - Grep: no `merchandisestbl` SQL should reference `updated_at`
 - Shipped webhook → 200, Shipped, stock unchanged
 - Delivered webhook → 200, Delivered, stock +qty once; fulfilled alias replay → stock unchanged

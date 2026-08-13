@@ -31,6 +31,34 @@ export function unwrapStockReturnReason(reason) {
   return text.slice(STOCK_RETURN_REASON_PREFIX.length).trim();
 }
 
+export const RETURN_REUSABLE_MARKER = '[RETURN_REUSABLE]';
+export const RETURN_NOT_REUSABLE_MARKER = '[RETURN_NOT_REUSABLE]';
+
+/** true / false / null from HQ inspection notes or inventory_status. */
+export function getReturnReusableFromRequest(request) {
+  const notes = String(request?.review_notes || '');
+  if (notes.includes(RETURN_REUSABLE_MARKER)) return true;
+  if (notes.includes(RETURN_NOT_REUSABLE_MARKER)) return false;
+  return null;
+}
+
+/**
+ * My Requests subtitle for Return Stock rows.
+ * Awaiting HQ inspection until inventory_status is RETURNED; then Reusable / Not reusable.
+ */
+export function getReturnHqInspectionLabel(request) {
+  if (!isStockReturnRequest(request)) return null;
+  const inv = String(request?.inventory_status || '').toUpperCase();
+  if (inv === 'RETURNED') {
+    const reusable = getReturnReusableFromRequest(request);
+    if (reusable === true) return 'Reusable';
+    if (reusable === false) return 'Not reusable';
+    return 'HQ inspected';
+  }
+  if (inv === 'FAILED' || inv === 'REJECTED') return null;
+  return 'Awaiting HQ inspection';
+}
+
 export function createEmptyReturnLine() {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,

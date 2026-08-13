@@ -11,6 +11,7 @@ Helpers for Branch Admin **Return Stock** (send existing branch inventory back t
 | `createEmptyReturnLine` / `buildReturnStockSubmitPayload` | Return Stock modal cart → `POST /merchandise-requests/returns/batch` |
 | `getAvailableReturnQty` / `constrainReturnQuantity` / `isReturnQtyInputAllowed` / `nextReturnQtyAfterKey` | Return Qty cannot be typed above on-hand stock |
 | `isStockReturnRequest` / `wrapStockReturnReason` / `unwrapStockReturnReason` | Local log marker `[STOCK_RETURN]` (no extra DB column) |
+| `getReturnHqInspectionLabel` / `getReturnReusableFromRequest` | My Requests: Awaiting HQ inspection / Reusable / Not reusable |
 
 ## Rules
 
@@ -21,6 +22,8 @@ Helpers for Branch Admin **Return Stock** (send existing branch inventory back t
 3b. One category per row (same as Request Stock) — already-selected categories are
    hidden on other rows.
 4. Submit goes to CMS `POST /merchandise-requests/returns/batch`. CMS deducts branch stock and forwards one RHET `POST /stock-returns` with shared `batchReference` (`PSMS-RET-<id>`).
+   HTTP 201/200 + `PENDING` is success (HQ inspection). Branch qty stays deducted.
+   My Requests: **Pending** until HQ accepts, then **Returned** (Reusable / Not reusable).
 
 ```js
 import {
