@@ -15,6 +15,8 @@ import {
 } from '../services/inventory/inventoryClient.js';
 import {
   buildInventorySubmitPayload,
+  buildExternalReference,
+  buildBatchReference,
   normalizeInventoryBranchName,
   pickApproverName,
   looksLikeUuid,
@@ -42,26 +44,110 @@ function isInventoryApiError(error) {
 router.use(verifyFirebaseToken);
 
 /**
- * Forwards a freshly-created local request row to RHET Inventory and stores
- * the returned requestId/status on the local row. Throws InventoryApiError on
- * failure so the caller can decide whether to roll back the local record.
- *
- * @param {object} requestRow - Local merchandiserequestlogtbl row
- * @param {{ requestedBy: string, reason?: string, branchName: string }} options
- *   `branchName` must be the campus display name (e.g. "LCA Makati"), not an id.
+ * Persist RHET /stock-requests response rows onto local merchandiserequestlogtbl
+ * lines, matching by `externalReference` (`PSMS-<local_request_id>`).
  */
-async function forwardRequestToInventory(requestRow, { requestedBy, reason, branchName }) {
+async function applyInventoryForwardResults(requestRows, result, payload) {
+  const remoteItems = Array.isArray(result?.data) ? result.data : [];
+  const byExternalRef = new Map();
+  for (const item of remoteItems) {
+    const ref = String(item?.externalReference || '').trim();
+    if (ref) byExternalRef.set(ref, item);
+  }
+
+  const applied = [];
+  for (let i = 0; i < requestRows.length; i += 1) {
+    const requestRow = requestRows[i];
+    const extRef = buildExternalReference(requestRow.request_id);
+    const inventoryItem =
+      byExternalRef.get(extRef) ||
+      (requestRows.length === 1 ? remoteItems[0] : null) ||
+      payload.items?.[i] && remoteItems[i];
+
+    if (!inventoryItem?.requestId) {
+      throw new InventoryApiError(
+        `RHET Inventory did not return a request ID for ${extRef}`
+      );
+    }
+
+    const failureReason =
+      inventoryItem.failureReason ||
+      inventoryItem.rejectionReason ||
+      null;
+    const inventoryStatus = failureReason
+      ? 'FAILED'
+      : inventoryItem.status || 'PENDING';
+
+    try {
+      await runIgnoringMissingUpdatedAt(dbQuery,
+        `UPDATE merchandiserequestlogtbl
+         SET inventory_request_id = $1,
+             inventory_status = $2,
+             inventory_external_reference = $3,
+             inventory_matched_sku = COALESCE($4, inventory_matched_sku),
+             inventory_rejection_reason = COALESCE($5, inventory_rejection_reason),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $6`,
+        [
+          inventoryItem.requestId,
+          inventoryStatus,
+          inventoryItem.externalReference || extRef,
+          inventoryItem.matchedSku || null,
+          failureReason,
+          requestRow.request_id,
+        ]
+      );
+    } catch (dbError) {
+      const missingColumn =
+        dbError?.code === '42703' ||
+        String(dbError?.message || '').includes('inventory_request_id');
+      if (missingColumn) {
+        throw new InventoryApiError(
+          'RHET Inventory accepted the request, but CMS is missing inventory tracking columns. ' +
+            'Run migration 124_add_inventory_integration_fields_to_merchandiserequestlogtbl.sql on the production database, then redeploy/retry.',
+          { code: 'INVENTORY_SCHEMA_MISSING', status: 500 }
+        );
+      }
+      throw dbError;
+    }
+
+    applied.push(inventoryItem);
+  }
+
+  return applied;
+}
+
+/**
+ * Forwards freshly-created local request row(s) to RHET Inventory in **one**
+ * POST /stock-requests, with a shared top-level `batchReference` so RHET
+ * groups the cart. Throws InventoryApiError on failure so the caller can
+ * roll back local records.
+ *
+ * @param {object|object[]} requestRows
+ * @param {{ requestedBy: string, reason?: string, branchName: string, batchReference?: string }} options
+ */
+async function forwardRequestToInventory(requestRows, { requestedBy, reason, branchName, batchReference }) {
   if (!isInventoryIntegrationEnabled()) {
     return null;
+  }
+
+  const rows = Array.isArray(requestRows) ? requestRows : [requestRows];
+  if (!rows.length) {
+    throw new InventoryApiError('At least one stock request line is required', {
+      code: 'EMPTY_STOCK_REQUEST',
+      status: 400,
+    });
   }
 
   let payload;
   try {
     payload = buildInventorySubmitPayload({
-      requestRow,
+      requestRows: rows,
       requestedBy,
       reason,
       branchName,
+      batchReference,
       webhookUrl: getInventoryWebhookUrl(),
     });
   } catch (buildError) {
@@ -72,69 +158,177 @@ async function forwardRequestToInventory(requestRow, { requestedBy, reason, bran
   }
 
   console.log('[merchandise-requests] Forwarding to RHET /stock-requests:', {
-    localRequestId: requestRow.request_id,
+    localRequestIds: rows.map((row) => row.request_id),
+    batchReference: payload.batchReference || null,
+    itemCount: payload.items?.length || 0,
     branchName: payload.branchName,
-    categoryName: payload.items?.[0]?.categoryName,
-    itemName: payload.items?.[0]?.itemName,
-    sku: payload.items?.[0]?.sku,
-    quantity: payload.items?.[0]?.quantity,
-    componentCount: Array.isArray(payload.items?.[0]?.components)
-      ? payload.items[0].components.length
-      : 0,
-    externalReference: payload.items?.[0]?.externalReference,
+    categoryNames: (payload.items || []).map((item) => item.categoryName),
+    externalReferences: (payload.items || []).map((item) => item.externalReference),
   });
 
   const result = await submitStockRequests(payload);
-  const inventoryItem = Array.isArray(result.data) ? result.data[0] : null;
+  const applied = await applyInventoryForwardResults(rows, result, payload);
+  return rows.length === 1 ? applied[0] : applied;
+}
 
-  if (!inventoryItem?.requestId) {
-    throw new InventoryApiError('RHET Inventory did not return a request ID');
-  }
-
-  const failureReason =
-    inventoryItem.failureReason ||
-    inventoryItem.rejectionReason ||
-    result.data?.failureReason ||
-    null;
-  const inventoryStatus = failureReason
-    ? 'FAILED'
-    : inventoryItem.status || 'PENDING';
-
+async function insertLocalMerchandiseRequestRow({
+  userId,
+  branchId,
+  linkedMerchandiseId,
+  merchandise_name,
+  size,
+  requested_quantity,
+  request_reason,
+  gender,
+  type,
+  inventory_category_name,
+  inventory_item_name,
+  inventory_requested_sku,
+  inventory_components_json,
+}) {
+  let result;
   try {
-    await runIgnoringMissingUpdatedAt(dbQuery, 
-      `UPDATE merchandiserequestlogtbl
-       SET inventory_request_id = $1,
-           inventory_status = $2,
-           inventory_external_reference = $3,
-           inventory_matched_sku = COALESCE($4, inventory_matched_sku),
-           inventory_rejection_reason = COALESCE($5, inventory_rejection_reason),
-           inventory_synced_at = CURRENT_TIMESTAMP,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE request_id = $6`,
+    result = await dbQuery(
+      `INSERT INTO merchandiserequestlogtbl 
+      (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type,
+       inventory_category_name, inventory_item_name, inventory_requested_sku, inventory_components_json, status)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'Pending')
+      RETURNING *`,
       [
-        inventoryItem.requestId,
-        inventoryStatus,
-        inventoryItem.externalReference || payload.items[0].externalReference,
-        inventoryItem.matchedSku || null,
-        failureReason,
-        requestRow.request_id,
+        linkedMerchandiseId,
+        userId,
+        branchId,
+        merchandise_name,
+        size || null,
+        requested_quantity,
+        request_reason || null,
+        gender || null,
+        type || null,
+        inventory_category_name,
+        inventory_item_name,
+        inventory_requested_sku,
+        inventory_components_json ? JSON.stringify(inventory_components_json) : null,
       ]
     );
-  } catch (dbError) {
-    const missingColumn =
-      dbError?.code === '42703' ||
-      String(dbError?.message || '').includes('inventory_request_id');
-    if (missingColumn) {
-      throw new InventoryApiError(
-        'RHET Inventory accepted the request, but CMS is missing inventory tracking columns. ' +
-          'Run migration 124_add_inventory_integration_fields_to_merchandiserequestlogtbl.sql on the production database, then redeploy/retry.',
-        { code: 'INVENTORY_SCHEMA_MISSING', status: 500 }
+  } catch (insertError) {
+    const missingRhetCols =
+      insertError?.code === '42703' ||
+      String(insertError?.message || '').includes('inventory_category_name') ||
+      String(insertError?.message || '').includes('inventory_components_json');
+    if (!missingRhetCols) throw insertError;
+
+    try {
+      result = await dbQuery(
+        `INSERT INTO merchandiserequestlogtbl 
+        (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type,
+         inventory_category_name, inventory_item_name, inventory_requested_sku, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'Pending')
+        RETURNING *`,
+        [
+          linkedMerchandiseId,
+          userId,
+          branchId,
+          merchandise_name,
+          size || null,
+          requested_quantity,
+          request_reason || null,
+          gender || null,
+          type || null,
+          inventory_category_name,
+          inventory_item_name,
+          inventory_requested_sku,
+        ]
+      );
+    } catch (insertError2) {
+      const missingIdentity =
+        insertError2?.code === '42703' ||
+        String(insertError2?.message || '').includes('inventory_category_name');
+      if (!missingIdentity) throw insertError2;
+
+      result = await dbQuery(
+        `INSERT INTO merchandiserequestlogtbl 
+        (merchandise_id, requested_by, requested_branch_id, merchandise_name, size, requested_quantity, request_reason, gender, type, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Pending')
+        RETURNING *`,
+        [
+          linkedMerchandiseId,
+          userId,
+          branchId,
+          merchandise_name,
+          size || null,
+          requested_quantity,
+          request_reason || null,
+          gender || null,
+          type || null,
+        ]
       );
     }
-    throw dbError;
+    result.rows[0].inventory_category_name = inventory_category_name;
+    result.rows[0].inventory_item_name = inventory_item_name;
+    result.rows[0].inventory_requested_sku = inventory_requested_sku;
+    result.rows[0].inventory_components_json = inventory_components_json;
   }
 
-  return inventoryItem;
+  return result.rows[0];
+}
+
+function normalizeIncomingRequestLine(body, { inventoryOn, requested_quantity }) {
+  if (inventoryOn) {
+    const normalized = normalizeMerchandiseRequestInput({
+      ...body,
+      requested_quantity,
+    });
+    if (normalized.error) {
+      return {
+        error: {
+          status: 400,
+          message: normalized.error,
+          code: normalized.code || 'INVALID_STOCK_REQUEST',
+        },
+      };
+    }
+    return {
+      merchandise_name: normalized.merchandise_name,
+      size: normalized.size,
+      gender: normalized.gender,
+      type: normalized.type,
+      inventory_category_name: normalized.inventory_category_name || null,
+      inventory_item_name: normalized.inventory_item_name || null,
+      inventory_requested_sku: normalized.inventory_requested_sku || null,
+      inventory_components_json: normalized.inventory_components_json || null,
+    };
+  }
+
+  const merchandise_name = String(body.merchandise_name || body.category_name || '').trim();
+  if (!merchandise_name) {
+    return {
+      error: {
+        status: 400,
+        message: 'Merchandise name is required',
+        code: 'MERCHANDISE_NAME_REQUIRED',
+      },
+    };
+  }
+  if (isLearningKitCategory(merchandise_name)) {
+    return {
+      error: {
+        status: 400,
+        message:
+          'Learning Kit requests require RHET Inventory integration (components[]). Configure INVENTORY_API_URL and the integration key.',
+        code: 'KIT_REQUIRES_INVENTORY_INTEGRATION',
+      },
+    };
+  }
+  return {
+    merchandise_name,
+    size: body.size ? String(body.size).trim() : null,
+    gender: body.gender ? String(body.gender).trim() : null,
+    type: body.type ? String(body.type).trim() : null,
+    inventory_category_name: null,
+    inventory_item_name: null,
+    inventory_requested_sku: null,
+    inventory_components_json: null,
+  };
 }
 
 /**
@@ -744,6 +938,249 @@ router.post(
         inventoryIntegrated: isInventoryIntegrationEnabled(),
       });
     } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/v1/merchandise-requests/batch
+ * Create multiple local request lines from one Request Stock cart, then forward
+ * them to RHET in a **single** POST /stock-requests with a shared
+ * `batchReference` (`PSMS-REQ-<first_local_id>`).
+ * Access: Admin only
+ */
+router.post(
+  '/batch',
+  [
+    body('request_reason').optional().trim(),
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('items.*.requested_quantity').isInt({ min: 1 }).withMessage('Requested quantity must be at least 1'),
+    body('items.*.category_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.merchandise_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.item_name').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.sku').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.size').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.gender')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['Men', 'Women', 'Unisex', 'Male', 'Female', 'Boys', 'Girls', null, ''])
+      .withMessage('Gender must be Male/Female/Unisex (or Men/Women)'),
+    body('items.*.type').optional({ nullable: true, checkFalsy: true }).trim(),
+    body('items.*.category_kind').optional({ nullable: true, checkFalsy: true }).trim(),
+    handleValidationErrors,
+  ],
+  requireRole('Admin'),
+  async (req, res, next) => {
+    const createdIds = [];
+    try {
+      const inventoryOn = isInventoryIntegrationEnabled();
+      const sharedReason = String(req.body.request_reason || '').trim() || null;
+      const incomingItems = Array.isArray(req.body.items) ? req.body.items : [];
+
+      if (!incomingItems.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'At least one item is required',
+          error: { code: 'EMPTY_STOCK_REQUEST' },
+        });
+      }
+
+      const branchLookup = await dbQuery(
+        'SELECT branch_name FROM branchestbl WHERE branch_id = $1',
+        [req.user.branchId]
+      );
+      const branchNameText = normalizeInventoryBranchName(branchLookup.rows[0]?.branch_name);
+      if (inventoryOn && !branchNameText) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Your branch does not have a valid display name (at least 2 characters). ' +
+            'Update the branch name in CMS before requesting stock from RHET Inventory.',
+          error: { code: 'BRANCH_NAME_REQUIRED' },
+        });
+      }
+
+      const preparedLines = [];
+      for (let i = 0; i < incomingItems.length; i += 1) {
+        const itemBody = incomingItems[i] || {};
+        const requested_quantity = parseInt(itemBody.requested_quantity, 10);
+        const line = normalizeIncomingRequestLine(
+          { ...itemBody, request_reason: itemBody.request_reason || sharedReason },
+          { inventoryOn, requested_quantity }
+        );
+        if (line.error) {
+          return res.status(line.error.status || 400).json({
+            success: false,
+            message: `Row ${i + 1}: ${line.error.message}`,
+            error: { code: line.error.code },
+          });
+        }
+
+        let linkedMerchandiseId = itemBody.merchandise_id || null;
+        if (linkedMerchandiseId) {
+          const merchandiseCheck = await dbQuery(
+            'SELECT merchandise_id FROM merchandisestbl WHERE merchandise_id = $1',
+            [linkedMerchandiseId]
+          );
+          if (merchandiseCheck.rows.length === 0) {
+            return res.status(404).json({
+              success: false,
+              message: `Row ${i + 1}: Merchandise not found`,
+            });
+          }
+        } else {
+          try {
+            const existing = await findExistingMerchandiseStockRow(dbQuery, {
+              requested_branch_id: req.user.branchId,
+              merchandise_id: null,
+              merchandise_name: line.merchandise_name,
+              inventory_category_name: line.inventory_category_name,
+              inventory_item_name: line.inventory_item_name,
+              inventory_requested_sku: line.inventory_requested_sku,
+              size: line.size || null,
+              gender: line.gender || null,
+              type: line.type || null,
+            });
+            if (existing?.merchandise_id) {
+              linkedMerchandiseId = existing.merchandise_id;
+            }
+          } catch (linkErr) {
+            console.warn('[merchandise-requests] Could not auto-link merchandise_id:', linkErr.message);
+          }
+        }
+
+        preparedLines.push({
+          ...line,
+          requested_quantity,
+          request_reason: sharedReason || itemBody.request_reason || null,
+          linkedMerchandiseId,
+        });
+      }
+
+      const requestRows = [];
+      for (const line of preparedLines) {
+        const row = await insertLocalMerchandiseRequestRow({
+          userId: req.user.userId,
+          branchId: req.user.branchId,
+          linkedMerchandiseId: line.linkedMerchandiseId,
+          merchandise_name: line.merchandise_name,
+          size: line.size,
+          requested_quantity: line.requested_quantity,
+          request_reason: line.request_reason,
+          gender: line.gender,
+          type: line.type,
+          inventory_category_name: line.inventory_category_name,
+          inventory_item_name: line.inventory_item_name,
+          inventory_requested_sku: line.inventory_requested_sku,
+          inventory_components_json: line.inventory_components_json,
+        });
+        createdIds.push(row.request_id);
+        requestRows.push(row);
+      }
+
+      const batchReference = buildBatchReference(requestRows[0].request_id);
+
+      if (inventoryOn) {
+        try {
+          await forwardRequestToInventory(requestRows, {
+            requestedBy: req.user.fullName || req.user.email || 'PSMS Admin',
+            reason: sharedReason,
+            branchName: branchNameText,
+            batchReference,
+          });
+        } catch (inventoryError) {
+          const keepLocal =
+            inventoryError?.code === 'INVENTORY_SCHEMA_MISSING' ||
+            String(inventoryError?.message || '').includes('missing inventory tracking columns');
+
+          if (!keepLocal && createdIds.length) {
+            await dbQuery(
+              `DELETE FROM merchandiserequestlogtbl WHERE request_id = ANY($1::int[])`,
+              [createdIds]
+            );
+          } else if (keepLocal) {
+            console.error(
+              '[merchandise-requests] RHET accepted batch but CMS schema is incomplete. Local rows kept:',
+              createdIds
+            );
+          }
+
+          console.error('[merchandise-requests] RHET Inventory batch forward failed:', {
+            message: inventoryError.message,
+            code: inventoryError.code,
+            status: inventoryError.status,
+            details: inventoryError.details,
+            localRequestIds: createdIds,
+            localRequestKept: keepLocal,
+            batchReference,
+          });
+          const statusCode =
+            inventoryError instanceof InventoryApiError ||
+            inventoryError?.name === 'InventoryApiError'
+              ? inventoryError.status || 502
+              : 500;
+          return res.status(statusCode).json({
+            success: false,
+            message:
+              inventoryError.message ||
+              'Failed to submit stock request to RHET Inventory. Please try again or contact support.',
+            error: {
+              code: inventoryError.code || 'INVENTORY_FORWARD_FAILED',
+              details: inventoryError.details || null,
+            },
+            data: keepLocal ? requestRows : undefined,
+          });
+        }
+      } else {
+        const legacyBranchLabel = branchNameText || 'Unknown Branch';
+        const summary = requestRows
+          .map((row) => `${row.requested_quantity} × ${row.merchandise_name}`)
+          .join(', ');
+        await dbQuery(
+          `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, created_by, navigation_key, navigation_query)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            'New Merchandise Stock Request',
+            `${req.user.fullName || req.user.email} from ${legacyBranchLabel} requested: ${summary}${
+              sharedReason ? `. Reason: ${sharedReason}` : ''
+            }`,
+            ['Superadmin'],
+            'Active',
+            'High',
+            req.user.userId,
+            'merchandise',
+            'notificationTab=requests',
+          ]
+        );
+      }
+
+      const refreshed = await dbQuery(
+        `SELECT * FROM merchandiserequestlogtbl
+         WHERE request_id = ANY($1::int[])
+         ORDER BY request_id`,
+        [createdIds]
+      );
+
+      res.status(201).json({
+        success: true,
+        message: inventoryOn
+          ? 'Stock request submitted to RHET Central Inventory. Stock will be added to your branch when inventory marks it delivered.'
+          : 'Merchandise request created successfully',
+        data: refreshed.rows,
+        batchReference: inventoryOn ? batchReference : null,
+        inventoryIntegrated: inventoryOn,
+      });
+    } catch (error) {
+      if (createdIds.length) {
+        try {
+          await dbQuery(
+            `DELETE FROM merchandiserequestlogtbl WHERE request_id = ANY($1::int[])`,
+            [createdIds]
+          );
+        } catch (cleanupErr) {
+          console.error('[merchandise-requests] Batch local cleanup failed:', cleanupErr.message);
+        }
+      }
       next(error);
     }
   }

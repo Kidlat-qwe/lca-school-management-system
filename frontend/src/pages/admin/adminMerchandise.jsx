@@ -1241,48 +1241,27 @@ const AdminMerchandise = () => {
         }
       }
 
-      let successCount = 0;
-      let inventoryIntegrated = false;
-      const failures = [];
-      for (let i = 0; i < payloads.length; i += 1) {
-        const payload = payloads[i];
-        const label = isUniformLikeCategory(
-          payload.category_name,
-          payload.category_kind
-        )
-          ? `${payload.category_name} ${payload.gender || ''} ${payload.type || ''} ${payload.size || ''}`.trim()
-          : `${payload.category_name} / ${payload.item_name || payload.sku || 'item'}`;
-        try {
-          const response = await apiRequest('/merchandise-requests', {
-            method: 'POST',
-            body: JSON.stringify(payload),
-          });
-          inventoryIntegrated = Boolean(response?.inventoryIntegrated);
-          successCount += 1;
-        } catch (lineErr) {
-          failures.push(`Row ${i + 1} (${label}): ${lineErr.message || 'Failed'}`);
-        }
-      }
+      const response = await apiRequest('/merchandise-requests/batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          request_reason: sharedReason,
+          items: payloads,
+        }),
+      });
+      const inventoryIntegrated = Boolean(response?.inventoryIntegrated);
+      const createdRows = Array.isArray(response?.data) ? response.data : [];
+      const successCount = createdRows.length || payloads.length;
 
       await fetchMerchandiseRequests();
 
-      if (failures.length === 0) {
-        closeRequestModal();
-        appAlert(
-          `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! ${
-            inventoryIntegrated
-              ? 'Sent to RHET Central Inventory. Stock will be added to your branch when inventory admin approves.'
-              : 'Superadmin will be notified.'
-          }`
-        );
-      } else if (successCount === 0) {
-        appAlert(`Failed to submit stock request:\n${failures.join('\n')}`);
-      } else {
-        closeRequestModal();
-        appAlert(
-          `${successCount} of ${payloads.length} submitted. The rest failed:\n${failures.join('\n')}`
-        );
-      }
+      closeRequestModal();
+      appAlert(
+        `${successCount} stock request${successCount === 1 ? '' : 's'} submitted successfully! ${
+          inventoryIntegrated
+            ? 'Sent to RHET Central Inventory as one request group. Stock will be added to your branch when inventory marks it delivered.'
+            : 'Superadmin will be notified.'
+        }`
+      );
     } catch (err) {
       appAlert(err.message || 'Failed to submit stock request');
       console.error('Error submitting request:', err);

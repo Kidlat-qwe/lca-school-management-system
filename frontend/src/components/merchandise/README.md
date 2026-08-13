@@ -55,7 +55,8 @@ Built via `buildMerchandiseRequestActionItems`:
 
 ## TrackRequestProgressModal
 
-Modal timeline for RHET stock-request progress:
+Landscape modal (md+) for RHET stock-request progress: item/status on the left,
+timeline on the right. Stacks vertically on small screens.
 
 `Pending` → `Shipped` → `Delivered` (with terminal `Returned` / `Rejected`).
 

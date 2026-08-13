@@ -127,6 +127,17 @@ export function buildExternalReference(localRequestId) {
   return `${getInventorySystemCode()}-${localRequestId}`;
 }
 
+/**
+ * Shared cart id for one CMS Request Stock submit (multi-item or single).
+ * RHET groups Manage / invoicing by this top-level field.
+ * Format: `<SYSTEM_CODE>-REQ-<header_local_request_id>` e.g. `PSMS-REQ-82`.
+ */
+export function buildBatchReference(headerRequestId) {
+  const id = Number(headerRequestId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return `${getInventorySystemCode()}-REQ-${id}`;
+}
+
 /** Parses `<SYSTEM_CODE>-<id>` back to the numeric local request id (current system code only). */
 export function parseLocalRequestIdFromExternalReference(externalReference) {
   if (!externalReference) return null;
@@ -716,24 +727,51 @@ export function normalizeInventoryBranchName(branchName) {
 }
 
 /**
- * Build the full POST /stock-requests body for one local request row.
+ * Build the full POST /stock-requests body for one or more local request rows.
  * Omits empty optional fields so RHET does not reject null/undefined values.
  * RHET requires top-level `branchName` (campus display name, min 2 chars).
+ * Multi-item carts MUST share one top-level `batchReference` so RHET groups them.
+ *
+ * @param {{
+ *   requestRow?: object,
+ *   requestRows?: object[],
+ *   requestedBy: string,
+ *   reason?: string,
+ *   webhookUrl?: string,
+ *   branchName: string,
+ *   batchReference?: string,
+ * }} opts
  */
 export function buildInventorySubmitPayload({
   requestRow,
+  requestRows,
   requestedBy,
   reason,
   webhookUrl,
   branchName,
+  batchReference,
 }) {
-  const item = buildInventoryStockRequestItem(requestRow);
-  const matchError = assertInventoryItemHasMatchKey(item);
-  if (matchError) {
-    const err = new Error(matchError);
-    err.code = 'INVALID_INVENTORY_ITEM';
+  const rows = Array.isArray(requestRows) && requestRows.length
+    ? requestRows
+    : requestRow
+      ? [requestRow]
+      : [];
+  if (!rows.length) {
+    const err = new Error('At least one stock request line is required');
+    err.code = 'EMPTY_STOCK_REQUEST';
     throw err;
   }
+
+  const items = rows.map((row) => {
+    const item = buildInventoryStockRequestItem(row);
+    const matchError = assertInventoryItemHasMatchKey(item);
+    if (matchError) {
+      const err = new Error(matchError);
+      err.code = 'INVALID_INVENTORY_ITEM';
+      throw err;
+    }
+    return item;
+  });
 
   const normalizedBranchName = normalizeInventoryBranchName(branchName);
   if (!normalizedBranchName) {
@@ -745,13 +783,25 @@ export function buildInventorySubmitPayload({
     throw err;
   }
 
+  const headerReason = normalizeInventoryReason(
+    reason,
+    rows.map((row) => row.request_reason).find((value) => String(value || '').trim()) || ''
+  );
+  const resolvedBatch =
+    String(batchReference || '').trim() ||
+    buildBatchReference(rows[0]?.request_id);
+
   const payload = {
     requestDate: new Date().toISOString().slice(0, 10),
     requestedBy: String(requestedBy || 'PSMS Admin').trim() || 'PSMS Admin',
     branchName: normalizedBranchName,
-    reason: normalizeInventoryReason(reason, requestRow.request_reason),
-    items: [item],
+    reason: headerReason,
+    items,
   };
+
+  if (resolvedBatch) {
+    payload.batchReference = resolvedBatch;
+  }
 
   const webhook = String(webhookUrl || '').trim();
   if (webhook) {

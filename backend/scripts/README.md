@@ -4,6 +4,23 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `repairJayllaTenederoPhase678Enrollment.js`
+
+**Jaylla Immaculata Tenedero** (`mikaella@apprenticesync.com`, student **607**, class **57** `NC_Playgroup_TTh_9:30-10:30PM`, profile **424**). Phase 5 was a wrong enrollment. Hide it and keep only Phase 6–8.
+
+| Step | Detail |
+|------|--------|
+| Payment | Move completed payment(s) INV-**1394** → INV-**1398** (keep payment date) |
+| Phase 6 | Clear penalty → **Paid** AR **261060**; CS **1405** → **new** |
+| Phase 5 | Cancel + detach INV-**1394**; delete CS **1237** (not displayed) |
+| Phase 7–8 | CS **1872** → **re_enrolled**; CS **2247** stays **re_enrolled** |
+| Profile | `phase_start` **5 → 6**, `generated_count` **4 → 3**; downpayment PHASE_START/END **6 / 11** |
+
+```bash
+node backend/scripts/repairJayllaTenederoPhase678Enrollment.js --production
+node backend/scripts/repairJayllaTenederoPhase678Enrollment.js --production --apply
+```
+
 ### `repairMiguelBoholMoveToSomoJuly11am.js`
 
 **Miguel Sebastian C. Bohol** (`carlosgeline26@gmail.com`, student **78**). UI already moved Phase 1 enrollment to `SOMO_JULY_Pre-Kinder_MWF 11 AM` (**95**), but inactive profile **54** stayed on class **37**, so Student History still showed the old class.

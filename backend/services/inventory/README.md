@@ -6,10 +6,13 @@ machine-to-machine API.
 ## Business flow (current)
 
 1. Branch Admin submits **Request Merchandise Stock** in CMS.
-2. CMS saves the request and forwards it to RHET `POST /stock-requests`
+2. CMS saves the request line(s) and forwards them to RHET `POST /stock-requests`
    with top-level `branchName` = campus display name from `branchestbl`
    (e.g. `"LCA Makati"`). RHET requires this field (min 2 chars) for the
    Stock Requests **Branch** column; CMS blocks submit locally if missing.
+   Multi-item Request Stock uses **one** RHET POST with shared top-level
+   `batchReference` (`PSMS-REQ-<first_local_id>`) and unique per-line
+   `externalReference` (`PSMS-<local_id>`).
 3. **CMS Superadmin is not notified** and does not approve these requests.
 5. RHET marks **Shipped** (warehouse stock deducted).
    CMS webhook → local status **Shipped**; branch stock **unchanged**.
@@ -125,7 +128,7 @@ When integration env is missing, CMS falls back to the legacy Superadmin-approva
 | File | Purpose |
 |---|---|
 | `inventoryClient.js` | HTTP client to RHET |
-| `inventoryFieldMapping.js` | Label mapping + `externalReference` + `branchName` |
+| `inventoryFieldMapping.js` | Label mapping + `externalReference` + `batchReference` + `branchName` |
 | `stockRequestLifecycle.js` | PENDING → SHIPPED → DELIVERED / RETURNED / REJECTED helpers |
 | `applyMerchandiseRequestStock.js` | Adds / reverses qty on branch `merchandisestbl` |
 | `runMerchRequestSql.js` | Retries merch-request UPDATEs if `updated_at` column is missing |

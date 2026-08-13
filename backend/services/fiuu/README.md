@@ -18,6 +18,10 @@ Backend module connecting PSMS invoice payments to [FIUU](https://portal.fiuu.co
    - Return: `https://<api-host>/api/webhooks/fiuu/return`
 4. Enable **IPN** in FIUU portal.
 
+Sandbox / demo testing (separate `_Dev` account): see `docs/FIUU_SANDBOX_ACCESS_GUIDE.md` (Word: `docs/FIUU_SANDBOX_ACCESS_GUIDE.docx` or open `.html` then Save As `.docx`).
+
+CMS hosts: Coolify `*.lca-app.com` = development; Linode `cms.little-champion.com` = production. FIUU webhook URLs currently in portal are Coolify development, not Linode.
+
 ## Order ID standard
 
 | Type | Pattern |

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <title>FIUU Sandbox Access Guide</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #222; line-height: 1.4; max-width: 900px; margin: 24px; }
+    h1 { font-size: 20pt; color: #1f4e79; }
+    h2 { font-size: 14pt; color: #1f4e79; border-bottom: 1px solid #1f4e79; padding-bottom: 4px; margin-top: 22px; }
+    h3 { font-size: 12pt; color: #2e75b6; margin-top: 16px; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0 16px 0; }
+    th, td { border: 1px solid #8eaadb; padding: 6px 8px; vertical-align: top; text-align: left; }
+    th { background: #1f4e79; color: #fff; }
+    tr:nth-child(even) td { background: #f2f6fb; }
+    pre, code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; }
+    pre { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; white-space: pre-wrap; }
+    ol, ul { margin-top: 6px; }
+    .note { background: #fff8e6; border-left: 4px solid #e6b800; padding: 8px 12px; margin: 12px 0; }
+    .meta { color: #555; font-size: 10pt; }
+  </style>
+</head>
+<body>
+
+<h1>FIUU Sandbox Access Guide</h1>
+<p class="meta">Physical School Management System (PSMS) &mdash; CMS payment integration</p>
+
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td>Document title</td><td>FIUU Sandbox Access Guide</td></tr>
+  <tr><td>System</td><td>Physical School Management System (PSMS / CMS)</td></tr>
+  <tr><td>Audience</td><td>Operations, Admin, Developers</td></tr>
+  <tr><td>Date</td><td>13 August 2026</td></tr>
+  <tr><td>Related merchant</td><td>LITTLE CHAMPIONS ACADEMY INC.</td></tr>
+  <tr><td>Production Merchant ID</td><td>littlechampion1</td></tr>
+  <tr><td>Production portal</td><td>https://portal.fiuu.com</td></tr>
+  <tr><td>Sandbox portal (typical)</td><td>https://sandbox.merchant.razer.com/</td></tr>
+</table>
+
+<p><strong>How to save as Microsoft Word</strong></p>
+<ol>
+  <li>Open this HTML file in Microsoft Word (File &gt; Open, or drag the file onto Word).</li>
+  <li>Choose File &gt; Save As.</li>
+  <li>Set Save as type to <strong>Word Document (*.docx)</strong>.</li>
+  <li>Save.</li>
+</ol>
+
+<h2>1. Purpose</h2>
+<p>This guide explains how to get <strong>FIUU sandbox / demo</strong> access so CMS can test <strong>Pay via FIUU (QRPH)</strong> without charging real money.</p>
+<p>Current FIUU portal setup uses the <strong>Coolify development</strong> site, not Linode production. Do <strong>not</strong> remove that portal setup. Sandbox is a <strong>separate</strong> FIUU test account.</p>
+
+<h2>2. CMS environments (important)</h2>
+<table>
+  <tr><th>Environment</th><th>Host</th><th>Deployed from</th><th>Role</th></tr>
+  <tr>
+    <td>Development</td>
+    <td>cms.lca-app.com (frontend), api-cms.lca-app.com (API)</td>
+    <td>Coolify</td>
+    <td>Current FIUU webhook testing</td>
+  </tr>
+  <tr>
+    <td>Production</td>
+    <td>cms.little-champion.com (frontend + API)</td>
+    <td>Linode</td>
+    <td>Live school CMS &mdash; not the URLs currently in FIUU</td>
+  </tr>
+</table>
+<p>Coolify <code>*.lca-app.com</code> is <strong>not</strong> production. Linode <code>cms.little-champion.com</code> is production.</p>
+
+<h3>Development webhook URLs (Coolify) &mdash; currently registered in FIUU portal</h3>
+<ul>
+  <li>Notify: https://api-cms.lca-app.com/api/webhooks/fiuu/notify</li>
+  <li>Callback: https://api-cms.lca-app.com/api/webhooks/fiuu/callback</li>
+  <li>Return: https://api-cms.lca-app.com/api/webhooks/fiuu/return</li>
+  <li>Frontend return: https://cms.lca-app.com</li>
+</ul>
+
+<h3>Production webhook URLs (Linode) &mdash; register later before go-live</h3>
+<p>Prefer <code>/api/sms/webhooks/fiuu/</code> on Linode (nginx typically proxies <code>/api/sms</code> to the Node API):</p>
+<ul>
+  <li>Notify: https://cms.little-champion.com/api/sms/webhooks/fiuu/notify</li>
+  <li>Callback: https://cms.little-champion.com/api/sms/webhooks/fiuu/callback</li>
+  <li>Return: https://cms.little-champion.com/api/sms/webhooks/fiuu/return</li>
+  <li>Frontend return: https://cms.little-champion.com</li>
+</ul>
+<p>Also register domain <code>cms.little-champion.com</code> in FIUU portal before live payments.</p>
+
+<h2>3. Do not remove current FIUU portal setup</h2>
+<p>Keep everything already configured on https://portal.fiuu.com :</p>
+<ul>
+  <li>Domain registration for <code>api-cms.lca-app.com</code> (Return, Notify, Callback, Cancel)</li>
+  <li>Return URL, Notification URL, Callback URL (Coolify development)</li>
+  <li>Instant Payment Notification (IPN) enabled on Notify and Callback</li>
+  <li>Enable Verify Payment = ON</li>
+  <li>Use extended format for Verify Payment = OFF</li>
+  <li>Production Verify Key and Secret Key</li>
+</ul>
+<p>Those settings support <strong>Coolify development</strong> testing now. Later, add Linode production URLs and domain. Do not delete the Coolify entries until Linode FIUU URLs are verified.</p>
+
+<h2>4. FIUU sandbox versus live keys</h2>
+<table>
+  <tr><th>Item</th><th>FIUU live merchant (portal.fiuu.com)</th><th>FIUU sandbox / demo</th></tr>
+  <tr><td>Portal</td><td>https://portal.fiuu.com</td><td>https://sandbox.merchant.razer.com/ (or URL FIUU emails)</td></tr>
+  <tr><td>Merchant ID</td><td>littlechampion1</td><td>Separate sandbox or _Dev Merchant ID</td></tr>
+  <tr><td>Keys</td><td>Production Verify Key and Secret Key</td><td>Sandbox Verify Key and Secret Key</td></tr>
+  <tr><td>Payment page</td><td>https://pay.fiuu.com</td><td>https://sandbox-payment.fiuu.com</td></tr>
+  <tr><td>CMS setting</td><td>FIUU_SANDBOX=false</td><td>FIUU_SANDBOX=true</td></tr>
+  <tr><td>Money</td><td>Real charge</td><td>Demo / dummy (no live GCash charge)</td></tr>
+  <tr><td>Extra requirement</td><td>Domain + IPN</td><td>IP whitelist in sandbox portal</td></tr>
+</table>
+<div class="note">
+  <strong>Important.</strong> <code>FIUU_SANDBOX=true</code> only changes the payment URL. It does not turn Merchant ID <code>littlechampion1</code> into demo. Opening https://sandbox-payment.fiuu.com in a browser shows no login UI.
+</div>
+
+<h2>5. What &ldquo;sandbox access&rdquo; means</h2>
+<p>FIUU must issue a <strong>sandbox / developer account</strong>. Typical details:</p>
+<ul>
+  <li>Sandbox merchant portal login (often https://sandbox.merchant.razer.com/ )</li>
+  <li>Sandbox Merchant ID (often ends with <code>_Dev</code>)</li>
+  <li>Login email and password</li>
+  <li>Sandbox Verify Key and Secret Key</li>
+  <li>Demo bank or test channels (QRPH if available)</li>
+  <li>Ability to whitelist office or server IP for demo bank</li>
+</ul>
+<p>You cannot self-register production <code>littlechampion1</code> on the sandbox portal.</p>
+<p>Reference: FIUU cheatsheet Tips #10 &mdash; https://github.com/FiuuPayment/Cheatsheet-BestPractices-Fiuu_API/blob/main/README.md</p>
+
+<h2>6. Step-by-step process</h2>
+
+<h3>Step 1 &mdash; Email FIUU Support</h3>
+<p>Send email to: <strong>support@fiuu.com</strong></p>
+<p>Subject: Sandbox / developer account request &ndash; Merchant ID littlechampion1</p>
+<p>Copy the message body below. It correctly labels Coolify as development, not production.</p>
+<pre>Hello FIUU Support,
+
+Merchant ID: littlechampion1
+Company: LITTLE CHAMPIONS ACADEMY INC.
+Contact: Carla Gabriel (carla@rhet-corp.com)
+
+We need a sandbox / developer (_Dev) account to test Hosted Payment Page + QRPH without live charges.
+
+Please note our CMS hosts:
+
+1) Development (Coolify) — currently configured in FIUU portal for webhook testing:
+- https://api-cms.lca-app.com/api/webhooks/fiuu/notify
+- https://api-cms.lca-app.com/api/webhooks/fiuu/callback
+- https://api-cms.lca-app.com/api/webhooks/fiuu/return
+Frontend: https://cms.lca-app.com
+
+2) Production (Linode) — live school CMS, not yet used for FIUU webhooks:
+- https://cms.little-champion.com/api/sms/webhooks/fiuu/notify
+- https://cms.little-champion.com/api/sms/webhooks/fiuu/callback
+- https://cms.little-champion.com/api/sms/webhooks/fiuu/return
+Frontend: https://cms.little-champion.com
+
+We have completed portal setup (domain, Return/Notify/Callback URLs, IPN) for the Coolify DEVELOPMENT API host api-cms.lca-app.com. That is not our Linode production site.
+
+Please provide:
+1. Sandbox merchant portal login URL (for example https://sandbox.merchant.razer.com/)
+2. Sandbox Merchant ID
+3. Sandbox login email and password (or reset instructions)
+4. Sandbox Verify Key and Secret Key
+5. QRPH (or demo channels) enabled on sandbox
+6. IP whitelist instructions for demo bank testing
+
+Thank you.</pre>
+
+<h3>Step 2 &mdash; Wait for FIUU reply</h3>
+<ul>
+  <li>Sandbox portal URL</li>
+  <li>Sandbox or <code>_Dev</code> Merchant ID</li>
+  <li>Login credentials</li>
+  <li>Or instructions to view keys after login</li>
+</ul>
+
+<h3>Step 3 &mdash; Log in to the sandbox portal</h3>
+<ol>
+  <li>Open the URL FIUU provided, or try https://sandbox.merchant.razer.com/</li>
+  <li>Sign in with sandbox Merchant ID, email, and password.</li>
+  <li>Confirm this is <strong>not</strong> https://portal.fiuu.com .</li>
+</ol>
+
+<h3>Step 4 &mdash; Configure sandbox portal only (Coolify development URLs)</h3>
+<p>Do this in the <strong>sandbox</strong> portal. Do not remove Coolify URLs from https://portal.fiuu.com .</p>
+<p><strong>A. Merchant Profile &gt; Profile Settings</strong></p>
+<ol>
+  <li>Register domain <code>api-cms.lca-app.com</code> if sandbox requires it.</li>
+  <li>Whitelist your public IP (office PC, and optionally the Coolify/server IP).</li>
+</ol>
+<p>To find your public IP, open https://api.ipify.org from the same computer that will open the payment page.</p>
+<p><strong>B. Transactions &gt; Settings &gt; Integration</strong></p>
+<ul>
+  <li>Return: https://api-cms.lca-app.com/api/webhooks/fiuu/return</li>
+  <li>Notification: https://api-cms.lca-app.com/api/webhooks/fiuu/notify</li>
+  <li>Callback: https://api-cms.lca-app.com/api/webhooks/fiuu/callback</li>
+</ul>
+<ol>
+  <li>Turn IPN ON for Notification URL.</li>
+  <li>Turn IPN ON for Callback URL.</li>
+  <li>Leave Return IPN OFF (optional for CMS).</li>
+  <li>Click Check on each URL. Expected result: Status 200.</li>
+</ol>
+
+<h3>Step 5 &mdash; Point Coolify CMS backend to sandbox keys</h3>
+<p>Update Coolify <strong>backend</strong> environment variables, then redeploy.</p>
+<pre>FIUU_SANDBOX=true
+FIUU_MERCHANT_ID=&lt;sandbox or xxx_Dev&gt;
+FIUU_VERIFY_KEY=&lt;sandbox verify key&gt;
+FIUU_SECRET_KEY=&lt;sandbox secret key&gt;
+FIUU_CURRENCY=PHP
+FIUU_DEFAULT_CHANNEL=QRPH
+FIUU_NOTIFY_URL=https://api-cms.lca-app.com/api/webhooks/fiuu/notify
+FIUU_CALLBACK_URL=https://api-cms.lca-app.com/api/webhooks/fiuu/callback
+FIUU_RETURN_URL=https://api-cms.lca-app.com/api/webhooks/fiuu/return
+FIUU_FRONTEND_RETURN_URL=https://cms.lca-app.com</pre>
+
+<h3>Step 6 &mdash; Test from Coolify CMS</h3>
+<ol>
+  <li>Log in to https://cms.lca-app.com as Admin or Superadmin.</li>
+  <li>Open an unpaid invoice.</li>
+  <li>Record Payment &gt; Pay via FIUU &gt; Open FIUU QR payment.</li>
+  <li>Complete demo / sandbox payment.</li>
+  <li>Confirm sandbox portal Transactions and CMS invoice Paid / Approved.</li>
+</ol>
+
+<h3>Step 7 &mdash; After demo passes (Linode production later)</h3>
+<p>Coolify stays development. For live school payments, configure <strong>Linode</strong>:</p>
+<ol>
+  <li>Register domain <code>cms.little-champion.com</code> in FIUU portal.</li>
+  <li>Set Linode backend <code>.env</code> with <code>FIUU_SANDBOX=false</code> and Linode webhook URLs under <code>/api/sms/webhooks/fiuu/</code>.</li>
+  <li>Confirm nginx forwards <code>/api/sms</code> to the Node API.</li>
+  <li>Restart Linode backend and Check URLs in FIUU portal.</li>
+  <li>Run a small live test from https://cms.little-champion.com .</li>
+</ol>
+<pre>FIUU_SANDBOX=false
+FIUU_MERCHANT_ID=littlechampion1
+FIUU_VERIFY_KEY=&lt;production verify key&gt;
+FIUU_SECRET_KEY=&lt;production secret key&gt;
+FIUU_NOTIFY_URL=https://cms.little-champion.com/api/sms/webhooks/fiuu/notify
+FIUU_CALLBACK_URL=https://cms.little-champion.com/api/sms/webhooks/fiuu/callback
+FIUU_RETURN_URL=https://cms.little-champion.com/api/sms/webhooks/fiuu/return
+FIUU_FRONTEND_RETURN_URL=https://cms.little-champion.com</pre>
+
+<h2>7. Until sandbox access arrives</h2>
+<table>
+  <tr><th>Option</th><th>Description</th><th>Real money?</th></tr>
+  <tr><td>Wait for FIUU sandbox</td><td>True demo testing on Coolify</td><td>No</td></tr>
+  <tr><td>Temporary live test on Coolify</td><td>FIUU_SANDBOX=false, production keys, small invoice on cms.lca-app.com</td><td>Yes (test invoice only)</td></tr>
+</table>
+
+<h2>8. Troubleshooting</h2>
+<table>
+  <tr><th>Symptom</th><th>Likely cause</th><th>What to do</th></tr>
+  <tr><td>HTTP 401 on sandbox-payment.fiuu.com</td><td>Production keys used with sandbox URL</td><td>Use sandbox / _Dev keys, or FIUU_SANDBOX=false for live</td></tr>
+  <tr><td>Blank page or Not Found on sandbox-payment.fiuu.com</td><td>Opened payment API URL in browser</td><td>Use CMS Pay via FIUU button, or sandbox portal login</td></tr>
+  <tr><td>FIUU Check failed / Route not found</td><td>Backend not deployed</td><td>Redeploy Coolify backend</td></tr>
+  <tr><td>Check dummy order DEMO516</td><td>FIUU URL Check ping</td><td>Normal; does not create a CMS payment</td></tr>
+  <tr><td>Linode pay works but webhook never hits CMS</td><td>nginx only proxies /api/sms</td><td>Use /api/sms/webhooks/fiuu/... URLs on Linode</td></tr>
+</table>
+
+<h2>9. Webhook URL quick reference</h2>
+<p><strong>Development (Coolify)</strong></p>
+<ul>
+  <li>Notify: https://api-cms.lca-app.com/api/webhooks/fiuu/notify</li>
+  <li>Callback: https://api-cms.lca-app.com/api/webhooks/fiuu/callback</li>
+  <li>Return: https://api-cms.lca-app.com/api/webhooks/fiuu/return</li>
+</ul>
+<p><strong>Production (Linode)</strong></p>
+<ul>
+  <li>Notify: https://cms.little-champion.com/api/sms/webhooks/fiuu/notify</li>
+  <li>Callback: https://cms.little-champion.com/api/sms/webhooks/fiuu/callback</li>
+  <li>Return: https://cms.little-champion.com/api/sms/webhooks/fiuu/return</li>
+</ul>
+
+<h2>10. References</h2>
+<ul>
+  <li>FIUU production portal: https://portal.fiuu.com</li>
+  <li>FIUU sandbox portal (typical): https://sandbox.merchant.razer.com/</li>
+  <li>FIUU cheatsheet: https://github.com/FiuuPayment/Cheatsheet-BestPractices-Fiuu_API/blob/main/README.md</li>
+  <li>PSMS FIUU module: backend/services/fiuu/README.md</li>
+  <li>Coolify deploy: docs/deployment/COOLIFY_DEPLOYMENT.md</li>
+</ul>
+
+<h2>11. Document control</h2>
+<table>
+  <tr><th>Version</th><th>Date</th><th>Notes</th></tr>
+  <tr><td>1.0</td><td>13 August 2026</td><td>Initial sandbox access process for PSMS CMS</td></tr>
+  <tr><td>1.1</td><td>13 August 2026</td><td>Coolify = development; Linode cms.little-champion.com = production</td></tr>
+</table>
+
+</body>
+</html>

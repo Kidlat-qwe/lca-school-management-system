@@ -25,7 +25,11 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
    - `LEARNING_KIT` → kit item + `components[]`
    Name heuristics are fallback only when kind is missing (`Shirt` is still uniform).
 4. Uniform options MUST come from catalog items for that category (no inventing Logo/gender/size).
-5. Submit to `POST /merchandise-requests` with `category_name` + optional `category_kind` + attrs / `item_name`/`sku` (+ `components` for kits).
+5. Submit the whole cart to `POST /merchandise-requests/batch` with shared
+   `request_reason` + `items[]` (`category_name` + optional `category_kind` +
+   attrs / `item_name`/`sku` + kit `components`). CMS forwards one RHET
+   `/stock-requests` with top-level `batchReference` and unique per-line
+   `externalReference`.
 6. Promo free-merchandise optgroups use `getMerchandiseTypeNamesFromStock(merchandise)`
    (unique `merchandise_name` from branch stock — not a frozen CMS array).
 7. If inventory env is missing (`INTEGRATION_DISABLED`), Create Merchandise Type falls back to

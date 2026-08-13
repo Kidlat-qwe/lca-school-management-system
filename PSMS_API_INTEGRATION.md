@@ -83,7 +83,8 @@ legacy Superadmin-only approval flow and never calls RHET.
 |---|---|
 | `GET /api/sms/merchandise-requests/inventory/catalog` | Proxy to RHET `/catalog` for dropdowns |
 | `GET /api/sms/merchandise-requests/inventory/availability` | Proxy to RHET `/availability` for a stock check |
-| `POST /api/sms/merchandise-requests` | Local save + submit to RHET `/stock-requests` |
+| `POST /api/sms/merchandise-requests` | Local save + submit one line to RHET `/stock-requests` |
+| `POST /api/sms/merchandise-requests/batch` | Local save all cart lines + **one** RHET `/stock-requests` with shared `batchReference` |
 | `POST /api/webhooks/inventory` | Receive `stock_request.*` events from RHET (no Firebase auth; verified by shared key) |
 
 Implementation: `backend/services/inventory/` (client + field mapping),
@@ -270,9 +271,10 @@ Content-Type: application/json
 
 - `branchName` is the branch/campus **display name** from `branchestbl.branch_name` (e.g. `"LCA Makati"`). Do **not** send a numeric id or UUID. RHET rejects missing/short values with `400`.
 - Each table row = one object in `items[]`.
-- Each row becomes a **separate pending request** in inventory.
 - `reason` applies to all rows in the same submission.
-- `externalReference` should be unique per row: PSMS uses `<INVENTORY_SYSTEM_CODE>-<local_request_id>`.
+- `batchReference` is **required for multi-item carts** (top-level, not inside `items[]`). PSMS uses `<INVENTORY_SYSTEM_CODE>-REQ-<first_local_request_id>` (e.g. `PSMS-REQ-82`) so RHET groups Manage + invoicing as one cart.
+- `externalReference` must stay unique per line: PSMS uses `<INVENTORY_SYSTEM_CODE>-<local_request_id>` (e.g. `PSMS-82`, `PSMS-83`).
+- Webhooks and confirm-delivery remain **per line** (`requestId`), not per batch.
 - `webhookUrl` is sent on every request from `INVENTORY_WEBHOOK_URL`; omit it only if RHET has a default webhook configured for this system.
 
 **Success response (201)**
@@ -531,13 +533,18 @@ pattern works for other systems connecting to RHET).
 
 ### 8.3 Submit route (implemented)
 
-`POST /api/sms/merchandise-requests` in `backend/routes/merchandiserequests.js`:
+`POST /api/sms/merchandise-requests` (single line) and
+`POST /api/sms/merchandise-requests/batch` (Request Stock cart) in
+`backend/routes/merchandiserequests.js`:
 
-1. Validates and inserts the request into `merchandiserequestlogtbl`.
-2. If the integration is enabled, forwards it to RHET `POST /stock-requests`
-   with `externalReference = <INVENTORY_SYSTEM_CODE>-<request_id>`.
-3. On success, stores `inventory_request_id`/`inventory_status` on the local row.
-4. On failure, **deletes** the local row (rollback) and returns a `502`/`500`
+1. Validates and inserts local row(s) into `merchandiserequestlogtbl`.
+2. If the integration is enabled, forwards to RHET `POST /stock-requests`
+   with per-line `externalReference = <INVENTORY_SYSTEM_CODE>-<request_id>`
+   and top-level `batchReference = <INVENTORY_SYSTEM_CODE>-REQ-<first_request_id>`.
+   Admin Request Stock uses `/batch` so Shirt + Backpack in one submit is **one**
+   RHET POST / one Manage group.
+3. On success, stores `inventory_request_id`/`inventory_status` on each local row.
+4. On failure, **deletes** the local row(s) (rollback) and returns a `502`/`500`
    error — it never reports success while RHET rejected the call.
 
 ### 8.4 Webhook route (implemented)
@@ -566,7 +573,8 @@ matching PSMS's own `INVENTORY_INTEGRATION_KEY`):
    to check stock before submit.
 3. User fills request date, requested by, reason, and line items.
 4. User clicks **Submit Request**.
-5. Frontend calls `POST /api/sms/merchandise-requests` (PSMS backend only).
+5. Frontend calls `POST /api/sms/merchandise-requests/batch` (PSMS backend only)
+   with all cart lines in one submit.
 6. Backend forwards to RHET. Superadmin is **not** notified for integrated requests.
 7. RHET inventory admin marks **Shipped** on **Stock Requests**.
 8. Branch Admin confirms receipt in CMS → CMS calls RHET `/stock-requests/:id/deliver`
