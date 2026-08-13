@@ -9,6 +9,7 @@ import {
   formatFiuuDescription,
 } from '../services/fiuu/orderId.js';
 import { buildPaymentVcode, formatFiuuAmount } from '../services/fiuu/signature.js';
+import { formatIpnAckBody } from '../services/fiuu/fiuuPaymentService.js';
 
 process.env.FIUU_MERCHANT_ID = 'TESTMERCH';
 process.env.FIUU_VERIFY_KEY = 'abc123verifykeyabc123verifykey12';
@@ -36,5 +37,9 @@ const desc = formatFiuuDescription({
 });
 assert.ok(desc.includes('PSMS CMS'));
 assert.ok(desc.includes('Juan Dela Cruz'));
+
+const ipnAck = formatIpnAckBody({ orderid: 'DEMO894', status: '00' });
+assert.ok(ipnAck.includes('treq=1'));
+assert.ok(ipnAck.includes('orderid=DEMO894'));
 
 console.log('fiuuIntegration.test.js: all passed');

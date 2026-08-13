@@ -90,10 +90,19 @@ export const fiuuWebhookRouter = express.Router();
 
 fiuuWebhookRouter.use(express.urlencoded({ extended: true }));
 
+/** FIUU portal Check and browsers use GET/HEAD. Payment notifications use POST. */
+function webhookHealth(_req, res) {
+  res.status(200).type('text/plain').send('FIUU webhook endpoint OK');
+}
+
 async function respondWebhook(req, res) {
   try {
     const payload = normalizeFiuuPostBody(req.body);
     const result = await handleFiuuWebhookPayload(payload, { source: req.path });
+    const isCallback = String(req.path || '').includes('callback');
+    if (isCallback && result.ok) {
+      return res.status(200).type('text/plain').send('CBTOKEN:MPSTATOK');
+    }
     if (result.ipnEcho) {
       return res.status(result.ok ? 200 : result.httpStatus || 400).type('text/plain').send(result.ipnEcho);
     }
@@ -104,8 +113,14 @@ async function respondWebhook(req, res) {
   }
 }
 
+fiuuWebhookRouter.get('/notify', webhookHealth);
+fiuuWebhookRouter.head('/notify', webhookHealth);
 fiuuWebhookRouter.post('/notify', respondWebhook);
+fiuuWebhookRouter.get('/callback', webhookHealth);
+fiuuWebhookRouter.head('/callback', webhookHealth);
 fiuuWebhookRouter.post('/callback', respondWebhook);
+fiuuWebhookRouter.get('/return', webhookHealth);
+fiuuWebhookRouter.head('/return', webhookHealth);
 
 fiuuWebhookRouter.post('/return', async (req, res) => {
   try {

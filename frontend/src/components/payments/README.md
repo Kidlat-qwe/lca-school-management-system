@@ -19,3 +19,4 @@ Shared UI for finance payment logs and related flows.
 - `GET /api/sms/payments/finance-unified` — includes unapplied package AR (`Submitted` or `Verified`); approval from `paymentLogArApproval.js`
 - `PUT /api/sms/acknowledgement-receipts/:id/verify` — Finance verify from Payment Logs or AR page
 - `POST /api/sms/payments/fiuu/create` — start FIUU invoice payment (see `backend/services/fiuu/README.md`)
+- `GET|POST /api/webhooks/fiuu/notify|callback|return` — FIUU Check (GET) + payment IPN (POST)

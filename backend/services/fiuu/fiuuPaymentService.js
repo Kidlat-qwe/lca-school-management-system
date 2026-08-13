@@ -248,19 +248,34 @@ async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
   return applyResult;
 }
 
+function isCallbackSource(source) {
+  return String(source || '').toLowerCase().includes('callback');
+}
+
+function pingAck(payload, source, extra = {}) {
+  return {
+    ok: true,
+    ping: true,
+    ...extra,
+    ipnEcho: isCallbackSource(source) ? 'CBTOKEN:MPSTATOK' : formatIpnAckBody(payload),
+  };
+}
+
 /**
  * Handle FIUU notify/callback/return POST body.
  */
 export async function handleFiuuWebhookPayload(payload, { source = 'notify' } = {}) {
   const orderid = String(payload.orderid ?? '').trim();
   if (!orderid) {
-    return { ok: false, message: 'Missing orderid', httpStatus: 400 };
+    // FIUU portal Check may POST an empty body. ACK 200 so URL validation passes.
+    return pingAck(payload, source, { message: 'Webhook endpoint OK' });
   }
 
   const gatewayRow = await findGatewayPaymentByOrderId(orderid);
   if (!gatewayRow) {
-    console.warn(`[fiuu-${source}] Unknown orderid: ${orderid}`);
-    return { ok: false, message: 'Unknown orderid', httpStatus: 404 };
+    // FIUU Check uses dummy orderids (e.g. DEMO894). Do not 404 — ACK only.
+    console.warn(`[fiuu-${source}] Unknown orderid (ping/check): ${orderid}`);
+    return pingAck(payload, source, { message: 'Unknown orderid acknowledged', orderid });
   }
 
   const amountOk =

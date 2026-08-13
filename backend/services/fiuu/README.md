@@ -36,13 +36,18 @@ Description: `PSMS CMS | Invoice | {Student} | {Branch} | {Ref} | PHP {amount}`
 
 ## Webhooks (no Firebase auth)
 
-| Method | Path |
-|---|---|
-| POST | `/api/webhooks/fiuu/notify` |
-| POST | `/api/webhooks/fiuu/callback` |
-| POST | `/api/webhooks/fiuu/return` |
+| Method | Path | Purpose |
+|---|---|---|
+| GET / HEAD | `/api/webhooks/fiuu/notify` | FIUU portal **Check** / health |
+| POST | `/api/webhooks/fiuu/notify` | Payment IPN (ACK + `treq=1`) |
+| GET / HEAD | `/api/webhooks/fiuu/callback` | FIUU portal **Check** / health |
+| POST | `/api/webhooks/fiuu/callback` | Deferred status (ACK `CBTOKEN:MPSTATOK`) |
+| GET / HEAD | `/api/webhooks/fiuu/return` | FIUU portal **Check** / health |
+| POST | `/api/webhooks/fiuu/return` | Browser return → redirect to CMS |
 
-Webhooks verify FIUU `skey` using `FIUU_SECRET_KEY`.
+Webhooks verify FIUU `skey` using `FIUU_SECRET_KEY` for real CMS order IDs (`PSMS-I-…`).
+
+FIUU **Check** may POST dummy orderids (`DEMO894`, etc.) or GET the URL. Those pings return **200** and do not create payments.
 
 ## Files
 
