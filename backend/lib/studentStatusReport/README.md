@@ -11,7 +11,9 @@ Matches **Monthly Operational Dashboard → Total Active Students** for the sele
 - **Rejoin** matrix cells (`rejoin`)
 - **Upsell** matrix cells (`upsell`)
 
-Reserved, dropped, pending enrollment, and other labels are **inactive** for that month.
+Reserved, dropped, pending enrollment, lifecycle **Inactive (X)**, and other labels are **inactive** for that month.
+
+**Partial / unpaid remaining balance:** installment enrollment badges (`new` / `re_enrolled`) are created only after the phase chain is fully Paid. Open partial balances keep Enrollment blank so the Month Re-enrollment lifecycle overlay can show **Inactive**, and this report / Monthly Operational Total Active stay aligned with that month column.
 
 ## Counting
 

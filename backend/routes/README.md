@@ -70,6 +70,10 @@ All routes follow a consistent pattern:
 4. **Error Handling**: Errors are caught and passed to global error handler
 5. **Response Format**: Consistent JSON response format
 
+### invoices.js
+
+- `GET /api/sms/invoices/student/:studentId/full-payment` — Staff Student History full-payment settlements (Superadmin / Admin / Finance). Registered before `GET /:id`.
+
 ## Adding New Routes
 
 1. Create a new file in this directory

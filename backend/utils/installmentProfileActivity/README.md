@@ -2,8 +2,8 @@
 
 Keeps `installmentinvoiceprofilestbl.is_active` aligned with enrollment drops so:
 
-- **Student History → plan Status** shows Inactive when a class was dropped and the student did not rejoin that class
-- **Re-enrollment matrix** paints Inactive lifecycle cells for that track (`profile_is_active = false`)
+- **Student History → plan Status** shows Inactive when a class was dropped and the student did not rejoin that class (`is_active = false`). Overdue / under-grace Inactive (while the plan is still open) is computed separately — see `installmentPlanLifecycleStatus/`.
+- **Re-enrollment matrix** paints Inactive lifecycle cells for that track (`profile_is_active = false`) **and** when the next unpaid invoice is past due
 
 ## Rule
 

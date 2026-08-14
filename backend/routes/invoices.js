@@ -1,6 +1,6 @@
 import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
-import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { verifyFirebaseToken, requireRole, requireBranchAccess, assertCanViewStudentUserProfile } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import pool, { query, getClient } from '../config/database.js';
 import { insertInvoiceWithArNumber } from '../utils/invoiceArNumber.js';
@@ -29,6 +29,7 @@ import {
   formatPaymentDateNetTotalsSummary,
 } from '../lib/paymentDateNetTotals.js';
 import { resolveInvoicePaymentDueStatusLabel } from '../utils/programPaymentStatusService.js';
+import { loadStudentFullPaymentSettlements } from '../lib/studentFullPaymentInvoices/index.js';
 
 const router = express.Router();
 
@@ -420,6 +421,41 @@ async function computeInvoiceFilterSummary({
 // All routes require authentication
 router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
+
+/**
+ * GET /api/sms/invoices/student/:studentId/full-payment
+ * Staff Student History — native full-payment and installment→full-payment conversion invoices.
+ * Registered before GET /:id so "student" is not parsed as an invoice id.
+ */
+router.get(
+  '/student/:studentId/full-payment',
+  [
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance'),
+  async (req, res, next) => {
+    try {
+      const studentId = parseInt(req.params.studentId, 10);
+      const access = await assertCanViewStudentUserProfile(req, studentId);
+      if (!access.allowed) {
+        return res.status(403).json({
+          success: false,
+          message: access.message || 'Access denied.',
+        });
+      }
+
+      const settlements = await loadStudentFullPaymentSettlements(query, studentId);
+      res.json({
+        success: true,
+        data: settlements,
+        count: settlements.length,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 /**
  * GET /api/sms/invoices

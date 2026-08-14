@@ -4,6 +4,57 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `repairBriaToledanoFullPaymentThroughJuly.js`
+
+**Bria Renesmee M. Toledano** (`jennyrosewin@gmail.com`, student **356**, class **68** `VMP_Playgroup_SS_9:30AM`). Full payment INV-**350** auto-enrolled all **10** class phases, so Month Re-enrollment showed **October completed** and August still re-enrolled. Package ends **Phase 7 / July**.
+
+| Step | Detail |
+|------|--------|
+| Keep | INV-350 Paid; payment **275** date **2025-09-10** / ₱50,000 |
+| Remarks | `PHASE_START:1` `PHASE_END:7` |
+| Phases 1–7 | 1 **new**, 2–6 **re_enrolled**, 7 **completed** |
+| Phases 8–10 | **Delete** CS 336–338 |
+| Matrix | Jan new → Feb–Jun re-enrolled → **Jul completed** → **Aug Inactive** |
+
+```bash
+node backend/scripts/repairBriaToledanoFullPaymentThroughJuly.js --production
+node backend/scripts/repairBriaToledanoFullPaymentThroughJuly.js --production --apply
+```
+
+### `repairZeinNapilisanEnrollmentStatuses.js`
+
+**Zein Austin Napilisan** (`napilisanedmar@gmail.com`, student **589**, profile **398**, class **162** `VMP_Pre-Kindergarten_MWF 11AM`). After Phase 1 drop + Phase 2 not enrolled, comeback labels were wrong (Phase 3 `new`, Phase 4–5 both `rejoin` → consecutive rejoins on the month matrix).
+
+| Phase | CS | From | To |
+|-------|----|------|----|
+| 3 | **1204** | new | **rejoin** |
+| 4 | **1715** | rejoin | **re_enrolled** |
+| 5 | **2206** | rejoin | **re_enrolled** |
+
+Does not change invoices, payments, or Phase 1 dropped / Phase 2 blank.
+
+```bash
+node backend/scripts/repairZeinNapilisanEnrollmentStatuses.js --production
+node backend/scripts/repairZeinNapilisanEnrollmentStatuses.js --production --apply
+```
+
+### `repairEzraCanetePhase3to5Shift.js`
+
+**Ezra Gabrielle M. Cañete** (`jericacanete01@gmail.com`, student **599**, profile **410**, class **162** `VMP_Pre-Kindergarten_MWF 11AM`). Wrong start at Phase 4–6; shift to Phase 3–5 so Phase 6 is not enrolled yet.
+
+| Invoice | From | To | Issue / Due |
+|---------|------|----|-------------|
+| INV-1331 | Phase 4 | **Phase 3** new | **May 31 / Jun 5** |
+| INV-1884 | Phase 5 | **Phase 4** re_enrolled | **Jun 25 / Jul 5** |
+| INV-2421 | Phase 6 | **Phase 5** re_enrolled | **Jul 25 / Aug 5** |
+
+Also: `phase_start` **4 → 3**, queue **next_gen 2026-08-25** / **next_month 2026-09-01** / scheduled **2026-09-05**, downpayment PHASE_START/END **3 / 9**, detach cancelled INV-1330.
+
+```bash
+node backend/scripts/repairEzraCanetePhase3to5Shift.js --production
+node backend/scripts/repairEzraCanetePhase3to5Shift.js --production --apply
+```
+
 ### `repairJayllaTenederoPhase678Enrollment.js`
 
 **Jaylla Immaculata Tenedero** (`mikaella@apprenticesync.com`, student **607**, class **57** `NC_Playgroup_TTh_9:30-10:30PM`, profile **424**). Phase 5 was a wrong enrollment. Hide it and keep only Phase 6–8.
@@ -83,6 +134,35 @@ Follow-up for **Marianna Agatha Romero** after the date repair. Phase 6 INV-1953
 ```bash
 node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --production
 node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --production --apply
+```
+
+### `repairLucretiusManuelPhase5DueUngenerate6.js`
+
+**Lucretius Theodore B Manuel** (`krisstinamanuel729@gmail.com`). Phase 5 advance partial due **Nov 5 → Aug 5**; cancel early Phase 6 INV-2261; blank Phase 5 enrollment until Paid; queue **Aug 25 / Sep 1** so Month Re-enrollment / Total Active / Student Status show August **Inactive** (not Active via premature re-enrolled).
+
+```bash
+node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production
+node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production --apply
+```
+
+### `repairVitoFernandoPhaseDatesDrop6.js`
+
+**Vito Javier Fernando** (`kret_26@yahoo.com`, student **527**, profile **310**, class **67** `VMP_Playgroup_TTh_11:00AM`). Phase 5 class start is **May 26**; invoices were billed a month late so August showed **Active / re-enrolled**. Realign issue/due (keep payment dates), drop Phase 6, stop further generation.
+
+| Phase | Invoice | Issue / Due | Enrollment |
+|-------|---------|-------------|------------|
+| 2 | INV-771 Paid | **Apr 9 / Mar 3** | **new** |
+| 3 | INV-1000 Paid | **Mar 25 / Apr 5** | **re_enrolled** |
+| 4 | INV-1293 Paid | **Apr 25 / May 5** | **re_enrolled** |
+| 5 | INV-1762 Paid | **May 25 / Jun 5** | **re_enrolled** |
+| 6 | INV-2314 Unpaid | unchanged | **dropped** |
+| 7 | INV-2339 Unpaid | — | **Cancel + detach** |
+
+Profile `is_active = false`; queue `next_generation_date` cleared. Matrix target: Mar new → Apr–Jun re-enrolled → Jul dropped → **Aug Inactive**.
+
+```bash
+node backend/scripts/repairVitoFernandoPhaseDatesDrop6.js --production
+node backend/scripts/repairVitoFernandoPhaseDatesDrop6.js --production --apply
 ```
 
 ### `repairMariannaRomeroPhase456DatesUngenerate7.js`
@@ -1045,6 +1125,17 @@ If Student History shows invoices shifted one slot early (phase 1 has INV-311, p
 ```bash
 node scripts/repairKirstenMahinayRestoreTargetPhases.js --dry-run
 node scripts/repairKirstenMahinayRestoreTargetPhases.js --apply
+```
+
+### `repairKirstenMahinayRemovePhase1AugustInactive.js`
+
+**Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`, student **109**, profile **123**, class **47**). Student History is **Inactive** (Phase 6 overdue Aug 5) but Report → Student Status August was **active / re-enrolled**. Leftover Phase 1 CS **251** shifted paid Phase 5 onto August; lifecycle Inactive landed on September. The Inactive-exclusion report rule was already correct — August was a real re-enrolled cell.
+
+Deletes Phase 1 only (invoices, payments, `phase_start`, `generated_count` unchanged). Target matrix: Apr P2 new → Jul P5 re-enrolled → **Aug Inactive**.
+
+```bash
+node backend/scripts/repairKirstenMahinayRemovePhase1AugustInactive.js --production
+node backend/scripts/repairKirstenMahinayRemovePhase1AugustInactive.js --production --apply
 ```
 
 ### `diagnoseKirstenMahinayInstallmentProgress.js`

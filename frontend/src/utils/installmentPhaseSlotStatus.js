@@ -280,6 +280,46 @@ export const computeInstallmentPlanDisplayProgress = ({
   };
 };
 
+const toPhaseDueYmd = (value) => {
+  if (value == null || value === '') return null;
+  const match = String(value).trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : null;
+};
+
+/**
+ * Student History Status aligned with the month-matrix overlay:
+ * unpaid current installment past due (including under grace) → Inactive.
+ * Prefers API `profile.lifecycle_is_active` when present.
+ */
+export const resolveInstallmentPlanLifecycleActive = ({
+  profile = null,
+  phases = [],
+  todayYmd,
+} = {}) => {
+  if (profile && typeof profile.lifecycle_is_active === 'boolean') {
+    return profile.lifecycle_is_active;
+  }
+  if (profile?.upgraded_to_full_payment) return false;
+  if (profile?.is_active === false) return false;
+
+  const today = toPhaseDueYmd(todayYmd);
+  if (!today) return profile?.is_active !== false;
+
+  for (const phase of Array.isArray(phases) ? phases : []) {
+    if (!phase?.is_generated) continue;
+    if (isDroppedEnrollmentPhase(phase)) continue;
+    if (isLateStartGapPhase(phase) || phase?.billing_kind === 'skipped_gap') continue;
+    const status = String(phase.status || phase.invoice_status || '').trim().toLowerCase();
+    if (status === 'cancelled' || status === 'canceled') continue;
+    const dueYmd = toPhaseDueYmd(phase.due_date);
+    if (!dueYmd || dueYmd >= today) continue;
+    if (getInstallmentPhaseOutstanding(phase) > PHASE_OUTSTANDING_EPSILON) {
+      return false;
+    }
+  }
+  return true;
+};
+
 /** Billing column label for installment plan phase rows (Student History). */
 export const getInstallmentPhaseBillingLabel = (phase) => {
   if (isLateStartGapPhase(phase)) return '\u2014';

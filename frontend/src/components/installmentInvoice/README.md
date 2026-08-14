@@ -16,7 +16,7 @@
 
   Renders a single installment plan inline. Used both inside
   `InstallmentInvoicePhasesModal` (modal context) and inside
-  `components/student/StudentHistoryModal.jsx` › Invoices tab
+  `components/student/StudentHistoryModal.jsx` › **Installment** tab
   (rendered once per plan, with the plan's program label as a
   section header).
 
@@ -36,7 +36,10 @@
   1. Plan header — student name, program/package, frequency,
      **phase progress** (paid count / total · generated count / total
      plus a payment progress bar that turns green when the plan is
-     complete), branch, and active flag.
+     complete), branch, and **Status** (Active / Inactive). Status
+     matches the month re-enrollment overlay: stored `is_active` plus
+     unpaid current installment past due (including under grace) via
+     `profile.lifecycle_is_active`.
   2. Downpayment card — AR number, amount, paid amount, **payment
      date**, and current status (when the profile has a downpayment
      invoice).

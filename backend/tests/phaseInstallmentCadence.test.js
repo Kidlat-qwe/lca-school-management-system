@@ -241,6 +241,40 @@ async function testScheduleGrandfather25Queue() {
   assert.equal(schedule.next_generation_date, '2026-09-25');
 }
 
+/**
+ * Advance pay early (Jul 9) for Phase 5 must keep due on the queue cadence (Aug 5),
+ * not seed from payment day and step generatedCount-1 → Nov 5.
+ */
+async function testAdvancePayKeepsQueueDueDate() {
+  const schedule = await buildPhaseInstallmentSchedule({
+    db: makeDb({
+      classStartYmd: '2026-03-03',
+      phaseStarts: {
+        1: '2026-03-03',
+        2: '2026-04-01',
+        3: '2026-05-01',
+        4: '2026-06-01',
+        5: '2026-07-01',
+        6: '2026-08-01',
+      },
+    }),
+    profile: {
+      class_id: 201,
+      phase_start: 1,
+      total_phases: 10,
+      generated_count: 4,
+      next_generation_date: '2026-07-25',
+      next_invoice_month: '2026-08-01',
+    },
+    generatedCountOverride: 4,
+    issueDateOverride: '2026-07-09',
+  });
+
+  assert.equal(schedule.billing_cadence, BILLING_CADENCE_25_5);
+  assert.equal(schedule.current_issue_date, '2026-07-09');
+  assert.equal(schedule.current_due_date, '2026-08-05');
+}
+
 async function testScheduleRebuildUsesClassStart() {
   const schedule = await buildPhaseInstallmentSchedule({
     db: makeDb({
@@ -276,6 +310,7 @@ const tests = [
   testScheduleJuly1Enrollment,
   testScheduleJune24Skip,
   testScheduleGrandfather25Queue,
+  testAdvancePayKeepsQueueDueDate,
   testScheduleRebuildUsesClassStart,
 ];
 

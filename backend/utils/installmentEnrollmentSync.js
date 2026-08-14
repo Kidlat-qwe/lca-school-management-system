@@ -135,10 +135,13 @@ async function ensureIntermediatePhaseEnrollments({
 }
 
 /**
- * After an installment phase invoice is paid or partially paid, promote pending_enrollment
+ * After an installment phase invoice is **fully settled**, promote pending_enrollment
  * or insert the active phase row (mirrors payments.js post-payment enrollment sync).
- * Partial payment enrolls the student for that phase; completion status updates only
- * when the phase chain is fully settled.
+ *
+ * Partial / open balance chains do **not** create `new` / `re_enrolled` rows. That
+ * keeps Month Re-enrollment, Monthly Operational Total Active, and Student Status
+ * aligned: unpaid remaining balance stays blank / lifecycle Inactive instead of
+ * counting as Active via a premature re-enrolled cell.
  */
 export async function syncInstallmentEnrollmentForPaidInvoice({
   client,
@@ -153,6 +156,13 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   }
 
   const hasInvoiceContext = Boolean(invoice?.invoice_id);
+  if (hasInvoiceContext) {
+    const fullySettled = await isPhaseChainFullySettled(client, invoice);
+    if (!fullySettled) {
+      return;
+    }
+  }
+
   const chainHasPayment = hasInvoiceContext
     ? await phaseChainHasPayment(client, invoice)
     : false;

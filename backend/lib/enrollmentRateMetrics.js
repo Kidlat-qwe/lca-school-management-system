@@ -3048,6 +3048,7 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
     installmentCompleteByTrack,
     installmentProfileActiveByTrack,
   });
+  applyFullPaymentCompletedNextPeriodInactive(students, phases, 'phases');
 
   flagSinglePhaseCompletedCells(students, 'phases');
 
@@ -3146,6 +3147,42 @@ const trackHasOnlyCompletedEnrollmentStatus = (cellBucket) => {
     if (status === 'completed') completedCount += 1;
   }
   return enrolledCount === 1 && completedCount === 1;
+};
+
+/**
+ * Full-payment multi-phase tracks: after the terminal completed month/phase,
+ * paint the immediate next empty period Inactive (same as finished installment).
+ * Example: July completed → August Inactive. Does not run for single-status
+ * short courses (completed alone is enough).
+ */
+export const applyFullPaymentCompletedNextPeriodInactive = (
+  students,
+  periods,
+  periodKey = 'months'
+) => {
+  if (!periods?.length) return;
+
+  for (const student of students || []) {
+    if (!trackIsFullPaymentEnrollment(student)) continue;
+    if (isSinglePhaseEnrollmentTrack(student)) continue;
+
+    const cellBucket = periodKey === 'months' ? student.months : student.phases;
+    if (!cellBucket) continue;
+    if (trackHasOnlyCompletedEnrollmentStatus(cellBucket)) continue;
+
+    const latestIdx = findLatestInstallmentLifecycleAnchorIndex(cellBucket, periods);
+    if (latestIdx < 0 || latestIdx >= periods.length - 1) continue;
+
+    const anchorCell = cellBucket[periods[latestIdx].key];
+    if (String(anchorCell?.status || '').toLowerCase() !== 'completed') continue;
+
+    const nextPeriod = periods[latestIdx + 1];
+    if (cellBlocksPaymentLifecycleOverlay(cellBucket[nextPeriod.key])) continue;
+
+    const inferredPhase =
+      anchorCell?.phase_number != null ? Number(anchorCell.phase_number) + 1 : null;
+    cellBucket[nextPeriod.key] = buildPaymentLifecycleCell(false, inferredPhase, null);
+  }
 };
 
 /** Map student_id → installment track keys (student_id:class_id) in matrix scope. */
@@ -5790,6 +5827,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
     installmentCompleteByTrack,
     installmentProfileActiveByTrack,
   });
+  applyFullPaymentCompletedNextPeriodInactive(students, months, 'months');
 
   flagSinglePhaseCompletedCells(students, 'months');
 
@@ -6130,6 +6168,9 @@ export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student, mo
   if (!cell?.label) return false;
   if (monthKey && isMatrixCellRemovedOnOrBeforeBillingMonth(cell, monthKey)) return false;
   if (cell.cleared_after_removal) return false;
+  // Lifecycle Inactive (X) never counts toward Total Active / Student Status —
+  // same month column as Month Re-enrollment overlay.
+  if (isVisibleInactiveLifecycleCell(cell)) return false;
   const label = String(cell.label).trim().toLowerCase();
   if (label === 'new' || label === 'rejoin' || label === 'upsell') return true;
   if (label === 're-enrolled' || label === 're_enrolled') return true;

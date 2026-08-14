@@ -3,8 +3,9 @@
  *
  * Rule: if a student dropped on a class and did not rejoin that same class
  * (no later active enrollment after the highest dropped phase), the installment
- * profile for that class must be Inactive. Student History Status and the
- * re-enrollment matrix (Active/Inactive lifecycle cells) both follow `is_active`.
+ * profile for that class must be Inactive. The re-enrollment matrix also
+ * follows `is_active`. Student History Status additionally overlays unpaid
+ * past-due / under-grace as Inactive via `installmentPlanLifecycleStatus`.
  *
  * @module utils/installmentProfileActivity
  */

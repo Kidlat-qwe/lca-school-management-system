@@ -2925,7 +2925,9 @@ router.post(
                 req._pendingInvoiceGeneration = invoiceGenData;
               }
             } else if (!isPendingDownpayment) {
-              // Regular installment phase payment (full or partial — partial enrolls for this phase)
+              // Regular installment phase payment. Enrollment sync enrolls only when
+              // the phase chain is fully settled (partial remaining stays blank /
+              // Inactive on Month Re-enrollment + Total Active / Student Status).
               
               // Only proceed if we have class_id and student_id matches
               if (profile.class_id && profile.student_id === student_id) {
@@ -3817,7 +3819,8 @@ router.put(
                     req._pendingInvoiceGeneration = invoiceGenData;
                   }
                 } else if (!isPendingDownpayment) {
-                  // Regular installment phase payment (full or partial — partial enrolls for this phase)
+                  // Regular installment phase payment. Enrollment sync requires a fully
+                  // settled phase chain (partial remaining stays blank / Inactive).
                   
                   // Only proceed if we have class_id and student_id matches
                   if (profile.class_id && profile.student_id === payment.student_id) {

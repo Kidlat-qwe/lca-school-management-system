@@ -50,12 +50,20 @@ Enrolls a student in the class phase after an installment phase invoice receives
 
 Used by: `routes/payments.js`, `routes/acknowledgementreceipts.js`, `routes/installmentinvoices.js` (partial advance-pay).
 
+## `installmentPlanLifecycleStatus/`
+
+Student History plan Status vs month-matrix Active/Inactive. See [installmentPlanLifecycleStatus/README.md](./installmentPlanLifecycleStatus/README.md).
+
+- Stored `is_active` is unchanged (generation / unrejoined drop)
+- Display Inactive when a **current** unpaid installment is past due, including under grace
+- `GET .../profiles/:id/phases` returns `profile.lifecycle_is_active`
+
 ## `installmentProfileActivity/`
 
 Keeps installment `is_active` aligned with **unrejoined drops** (dropped on a class with no later active phase on that class). See [installmentProfileActivity/README.md](./installmentProfileActivity/README.md).
 
-- Student History plan Status → Inactive
-- Re-enrollment matrix → Inactive lifecycle cells for that track
+- Student History plan Status → Inactive for unrejoined drops (`is_active = false`); overdue/grace overlay is `installmentPlanLifecycleStatus`
+- Re-enrollment matrix → Inactive lifecycle cells for that track (`profile_is_active = false`)
 - Wired into `billingNotificationEligibility.js` (reactivate / class-status sync)
 
 ## `installmentDelinquencyDrop.js`

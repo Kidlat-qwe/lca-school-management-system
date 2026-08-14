@@ -4,7 +4,7 @@ Backend module connecting PSMS invoice payments to [FIUU](https://portal.fiuu.co
 
 ## Scope (v1)
 
-- **Admin / Superadmin** invoice **full balance** payments via FIUU **QRPH** (GCash-compatible scan).
+- **Admin / Superadmin** invoice **full balance** payments via FIUU **QRPH** (GCash-compatible scan). Frontend tab is hidden until `FIUU_PAYMENT_UI_ENABLED` is true in `frontend/src/utils/fiuuPayment.js`.
 - Auto-creates `paymenttbl` row as **Approved** when FIUU webhook confirms success.
 - Manual Cash / E-wallet recording unchanged.
 

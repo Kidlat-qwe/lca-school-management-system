@@ -7,12 +7,12 @@ Shared UI for finance payment logs and related flows.
 | File | Purpose |
 |------|---------|
 | `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. **Pending** rows are clickable for Finance/Superfinance (opens reference modal → verifies AR). **Approved** shows verifier name when Finance verified. |
-| `FiuuPayOnlinePanel.jsx` | Staff-assisted **Pay via FIUU (QRPH)** on invoice Record Payment modal (Admin/Superadmin). Opens FIUU in a new tab and polls CMS until webhook marks the invoice paid. |
+| `FiuuPayOnlinePanel.jsx` | Staff-assisted **Pay via FIUU (QRPH)** on invoice Record Payment modal (Admin/Superadmin). Hidden in UI until `FIUU_PAYMENT_UI_ENABLED` is true in `frontend/src/utils/fiuuPayment.js`. |
 
 ## Related utils
 
 - `frontend/src/utils/unappliedArPaymentLog.js` — parse `AR-{id}` rows and call `PUT /acknowledgement-receipts/:id/verify`
-- `frontend/src/utils/fiuuPayment.js` — FIUU create/status/poll helpers
+- `frontend/src/utils/fiuuPayment.js` — FIUU create/status/poll helpers. `FIUU_PAYMENT_UI_ENABLED = false` hides the payment-modal tab.
 
 ## Related backend
 

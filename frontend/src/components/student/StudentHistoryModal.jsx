@@ -7,6 +7,7 @@ import { fetchAllInstallmentInvoicePages } from '../../utils/fetchAllInstallment
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import InstallmentPlanDetails from '../installmentInvoice/InstallmentPlanDetails';
 import StudentAttendancePanel from './StudentAttendancePanel';
+import StudentFullPaymentPanel from './StudentFullPaymentPanel';
 
 const TABS = [
   {
@@ -35,14 +36,20 @@ const TABS = [
   },
   {
     id: 'invoices',
-    label: 'Invoices',
+    label: 'Installment',
     iconPath:
       'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z',
+  },
+  {
+    id: 'full-payment',
+    label: 'Full payment',
+    iconPath:
+      'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z',
   },
 ];
 
 /** Finance / Superfinance: enrollment-dashboard student history — read-only operational tabs only. */
-const FINANCE_LIMITED_TAB_IDS = new Set(['classes', 'attendance', 'invoices']);
+const FINANCE_LIMITED_TAB_IDS = new Set(['classes', 'attendance', 'invoices', 'full-payment']);
 const FINANCE_DEFAULT_TAB = 'classes';
 
 const LEVEL_TAG_OPTIONS = [
@@ -432,7 +439,7 @@ const isFormDirty = (form, user) => {
 
 /**
  * Superadmin / Admin: full student snapshot with sidebar tabs.
- * Finance / Superfinance (e.g. re-enrollment dashboards): enrolled class, attendance, invoices only.
+ * Finance / Superfinance (e.g. re-enrollment dashboards): enrolled class, attendance, installment, full payment.
  *
  * Props:
  *   - isOpen, student (must include user_id), onClose
@@ -868,7 +875,7 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
             {/* Tab content */}
             <div
               className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden ${
-                activeTab === 'invoices'
+                activeTab === 'invoices' || activeTab === 'full-payment'
                   ? 'px-2 sm:px-3 py-3 sm:py-4'
                   : 'px-4 py-4 sm:px-6 sm:py-5'
               }`}
@@ -1179,11 +1186,19 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
                 <StudentAttendancePanel studentId={studentId} classRows={classRows} />
               )}
 
+              {!loading && !error && activeTab === 'full-payment' && (
+                <StudentFullPaymentPanel
+                  studentId={studentId}
+                  focusClassId={focusClassId}
+                  focusClassName={focusClassName}
+                />
+              )}
+
               {!loading && !error && activeTab === 'invoices' && (
                 <div className="space-y-6">
                   {installmentRows.length === 0 ? (
                     <p className="text-sm text-gray-500">
-                      No installment invoice records for this student.
+                      No installment plans for this student. Full payment settlements are listed on the Full payment tab.
                     </p>
                   ) : (
                     installmentRows.map((inv, idx) => {

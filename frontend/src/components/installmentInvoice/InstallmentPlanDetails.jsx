@@ -20,6 +20,7 @@ import {
   isPastUnenrolledGapPhase,
   isPhaseLockedByPriorPartialBalance,
   shouldOfferInstallmentPlanRejoin,
+  resolveInstallmentPlanLifecycleActive,
 } from '../../utils/installmentPhaseSlotStatus';
 import {
   buildRejoinPhaseOptions,
@@ -698,6 +699,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     (Number.isFinite(phaseStartRaw) ? phaseStartRaw : 1) - 1
   );
 
+  const lifecycleIsActive = useMemo(
+    () =>
+      resolveInstallmentPlanLifecycleActive({
+        profile,
+        phases,
+        todayYmd: todayManilaYMD(),
+      }),
+    [profile, phases]
+  );
+
   const phaseProgress = useMemo(() => {
     const display = computeInstallmentPlanDisplayProgress({
       phases,
@@ -1049,7 +1060,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   Status
                 </p>
                 <p className="text-sm font-medium text-gray-800">
-                  {profile.is_active
+                  {lifecycleIsActive
                     ? 'Active'
                     : profile.upgraded_to_full_payment
                       ? `Inactive · ${profile.upgrade_note || 'Upgraded to Full Payment'}`
