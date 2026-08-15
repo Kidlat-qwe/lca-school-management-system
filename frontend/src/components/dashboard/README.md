@@ -4,17 +4,21 @@ Shared UI for operational, enrollment, and financial dashboards.
 
 ## Leadershipboard
 
-Cross-branch ranking:
+Cross-branch ranking (Superadmin and Admin only — not shown on Finance / Superfinance):
 
 | Role | UI |
 |------|-----|
-| Superadmin / Superfinance | Full peer metrics — `LeadershipboardView.jsx` |
-| Superadmin / Superfinance + branch filter | Side-by-side compare — `BranchFocusStandingView.jsx` |
+| Superadmin | Full peer metrics — `LeadershipboardView.jsx` |
+| Superadmin + branch filter | Side-by-side compare — `BranchFocusStandingView.jsx` |
 | Admin | Competitive standing — `AdminStandingView.jsx` (place + name-only network race + own snapshot) |
 
 Hero banner shell (navy→indigo gradient + animated bubbles): `LeadershipboardHeroShell.jsx`.
 
 **Overall scoring and Admin privacy:** see [docs/LEADERSHIPBOARD.md](../../../docs/LEADERSHIPBOARD.md).
+
+## Financial Dashboard — Paid invoice penalties
+
+All financial dashboards (Superadmin, Admin, Superfinance, Finance) show a **Penalties** KPI card (penalty ₱ on Paid invoices in the selected month/date range by payment date). On Superadmin/Admin it replaces **Active Classes**. Backend: `lib/financialDashboardPaidInvoicePenalties/`.
 
 ## Operational attendance shortcuts
 

@@ -63,9 +63,13 @@ function buildInvoiceListWhereClause({
   paymentDateTo,
   issueDateFrom,
   issueDateTo,
+  hasPenalty = false,
 }) {
   const usePaymentRange = Boolean(paymentDateFrom || paymentDateTo);
   const useIssueRange = Boolean(issueDateFrom || issueDateTo);
+  // Financial Dashboard Penalties KPI drill-down: Paid + penalty lines + payment date
+  // (excludes Returned/Rejected). Skip the broader payment-date OR unpaid/rejected unions.
+  const usePenaltyPaymentScope = Boolean(hasPenalty && usePaymentRange);
 
   let whereSql = ' WHERE 1=1';
   const params = [];
@@ -98,7 +102,7 @@ function buildInvoiceListWhereClause({
         `rp.status = 'Completed'`,
         `COALESCE(rp.approval_status, 'Pending') = 'Rejected'`,
       ];
-      if (usePaymentRange) {
+      if (usePaymentRange && !usePenaltyPaymentScope) {
         if (paymentDateFrom) {
           paramCount += 1;
           rejectedStatusClauses.push(`rp.issue_date >= $${paramCount}::date`);
@@ -118,7 +122,37 @@ function buildInvoiceListWhereClause({
     }
   }
 
-  if (usePaymentRange) {
+  if (hasPenalty) {
+    whereSql += ` AND EXISTS (
+      SELECT 1
+      FROM invoiceitemstbl ii
+      WHERE ii.invoice_id = i.invoice_id
+        AND COALESCE(ii.penalty_amount, 0) > 0
+    )`;
+  }
+
+  if (usePenaltyPaymentScope) {
+    const paymentDateClauses = [
+      `p.invoice_id = i.invoice_id`,
+      `p.status = 'Completed'`,
+      `COALESCE(p.approval_status, 'Pending') NOT IN ('Returned', 'Rejected')`,
+    ];
+    if (paymentDateFrom) {
+      paramCount += 1;
+      paymentDateClauses.push(`p.issue_date >= $${paramCount}::date`);
+      params.push(paymentDateFrom);
+    }
+    if (paymentDateTo) {
+      paramCount += 1;
+      paymentDateClauses.push(`p.issue_date <= $${paramCount}::date`);
+      params.push(paymentDateTo);
+    }
+    whereSql += ` AND EXISTS (
+      SELECT 1
+      FROM paymenttbl p
+      WHERE ${paymentDateClauses.join(' AND ')}
+    )`;
+  } else if (usePaymentRange) {
     const paymentDateClauses = [
       `p.invoice_id = i.invoice_id`,
       `p.status = 'Completed'`,
@@ -287,7 +321,24 @@ function applyInvoiceListTextSearch(clause, { search = '', studentSearch = '' } 
  * Payment-date scope: sum completed payment lines in range for invoices in scope.
  * Default (all statuses): excludes Returned/Rejected approval — same as Payment Logs main tab.
  * Issue-date scope: per-invoice billed + tips (excludes Returned/Rejected approval payments).
+ * Always includes `penaltiesAmount` (sum of invoiceitemstbl.penalty_amount) for filtered invoices.
  */
+async function sumInvoiceListPenaltiesAmount(listWhereFiltered) {
+  const result = await query(
+    `SELECT COALESCE(SUM(COALESCE(ii.penalty_amount, 0)), 0)::numeric AS penalties_amount
+     FROM invoiceitemstbl ii
+     WHERE COALESCE(ii.penalty_amount, 0) > 0
+       AND EXISTS (
+         SELECT 1
+         ${INVOICE_LIST_FROM_SQL}
+         ${listWhereFiltered.whereSql}
+         AND i.invoice_id = ii.invoice_id
+       )`,
+    listWhereFiltered.params
+  );
+  return parseFloat(result.rows[0]?.penalties_amount ?? 0) || 0;
+}
+
 async function computeInvoiceFilterSummary({
   listWhereFiltered,
   paymentDateFrom,
@@ -298,6 +349,7 @@ async function computeInvoiceFilterSummary({
   const allStatuses = statusesList.length === 0;
   const onlyRejected = statusesList.length === 1 && statusesList[0] === 'Rejected';
   const baseStatuses = statusesList.filter((status) => status !== 'Rejected');
+  const penaltiesAmount = await sumInvoiceListPenaltiesAmount(listWhereFiltered);
 
   if (usePaymentRange) {
     const params = [...listWhereFiltered.params];
@@ -359,6 +411,7 @@ async function computeInvoiceFilterSummary({
         returnedDeductionCount: 0,
         rejectedDeductionAmount: 0,
         rejectedDeductionCount: 0,
+        penaltiesAmount,
       };
     }
 
@@ -386,6 +439,7 @@ async function computeInvoiceFilterSummary({
       returnedDeductionCount: summary.returnedDeductionCount,
       rejectedDeductionAmount: summary.rejectedDeductionAmount,
       rejectedDeductionCount: summary.rejectedDeductionCount,
+      penaltiesAmount,
     };
   }
 
@@ -415,6 +469,7 @@ async function computeInvoiceFilterSummary({
   return {
     totalAmount: parseFloat(issueSumResult.rows[0]?.invoice_total ?? 0) || 0,
     paymentLineCount: null,
+    penaltiesAmount,
   };
 }
 
@@ -566,6 +621,8 @@ router.get(
       const paymentDateTo = parseYmdQuery(req.query.payment_date_to);
       const issueDateFrom = parseYmdQuery(req.query.issue_date_from);
       const issueDateTo = parseYmdQuery(req.query.issue_date_to);
+      const hasPenaltyRaw = String(req.query.has_penalty ?? '').trim().toLowerCase();
+      const hasPenalty = hasPenaltyRaw === '1' || hasPenaltyRaw === 'true' || hasPenaltyRaw === 'yes';
 
       if (paymentDateFrom && paymentDateTo && paymentDateFrom > paymentDateTo) {
         return res.status(400).json({
@@ -604,6 +661,7 @@ router.get(
         paymentDateTo,
         issueDateFrom,
         issueDateTo,
+        hasPenalty,
       });
 
       const listWhereFiltered = applyInvoiceListTextSearch(
@@ -615,6 +673,7 @@ router.get(
           paymentDateTo,
           issueDateFrom,
           issueDateTo,
+          hasPenalty,
         }),
         {
           search: searchRaw != null ? String(searchRaw) : '',

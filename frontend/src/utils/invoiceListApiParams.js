@@ -16,6 +16,7 @@ export function buildInvoiceListRequestParams({
   issueTo = '',
   search = '',
   studentSearch = '',
+  hasPenalty = false,
 } = {}) {
   const params = new URLSearchParams({
     page: String(page),
@@ -25,6 +26,7 @@ export function buildInvoiceListRequestParams({
   if (Array.isArray(statuses) && statuses.length > 0) {
     params.set('statuses', statuses.join(','));
   }
+  if (hasPenalty) params.set('has_penalty', '1');
   const trimmedSearch = String(search || '').trim();
   const trimmedStudentSearch = String(studentSearch || '').trim();
   if (trimmedSearch) params.set('search', trimmedSearch);

@@ -161,7 +161,7 @@ Branch **Admin** users get a **competitive standing** layout (not a blanked copy
 
 Privacy remains API-enforced (`privacy_mode`, null peer metrics, `weight_breakdown` only on own row).
 
-### Superadmin / Superfinance branch filter (focus mode)
+### Superadmin branch filter (focus mode)
 
 When the global branch filter selects a branch, the API keeps **all** branches (full numbers) and sets `focus_mode` / `is_focus_branch`. The UI switches to a **stacked landscape** compare:
 

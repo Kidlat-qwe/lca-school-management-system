@@ -87,7 +87,7 @@ import {
 } from '../../utils/merchandiseReturns';
 
 /** Branch Admin "Request Stock" control. Set true to re-enable. */
-const REQUEST_STOCK_ENABLED = true;
+const REQUEST_STOCK_ENABLED = false;
 
 const createEmptyBulkLine = createEmptyCatalogRequestLine;
 

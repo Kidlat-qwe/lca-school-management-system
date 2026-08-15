@@ -8,6 +8,7 @@ import { DashboardStatIcon } from '../../components/dashboard/DashboardStatIcons
 import { FINANCE_ROLE_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
 import { fetchArVerificationBucketTotals } from '../../utils/fetchArVerificationBucketTotals';
+import { buildPaidInvoicePenaltiesInvoiceListSearchParams } from '../../utils/invoiceListDeepLink';
 
 const FinanceFinancialDashboard = () => {
   const navigate = useNavigate();
@@ -18,6 +19,8 @@ const FinanceFinancialDashboard = () => {
     verifiedPaymentsAmount: 0,
     unverifiedPaymentsCount: 0,
     unverifiedPaymentsAmount: 0,
+    paidInvoicePenaltiesCount: 0,
+    paidInvoicePenaltiesAmount: 0,
     arSalesCount: 0,
     arSalesAmount: 0,
     arVerifiedCount: 0,
@@ -81,6 +84,8 @@ const FinanceFinancialDashboard = () => {
         verifiedPaymentsAmount: pm.verifiedPaymentsAmount ?? 0,
         unverifiedPaymentsCount: pm.unverifiedPaymentsCount ?? 0,
         unverifiedPaymentsAmount: pm.unverifiedPaymentsAmount ?? 0,
+        paidInvoicePenaltiesCount: pm.paidInvoicePenaltiesCount ?? 0,
+        paidInvoicePenaltiesAmount: pm.paidInvoicePenaltiesAmount ?? 0,
         arSalesCount: arBuckets.all.count,
         arSalesAmount: arBuckets.all.amount,
         arVerifiedCount: arBuckets.verified.count,
@@ -172,6 +177,13 @@ const FinanceFinancialDashboard = () => {
     if (issueDateTo.trim()) params.set('payment_date_to', issueDateTo.trim());
     navigate(`/finance/payment-logs?${params.toString()}`);
   };
+  const openPaidInvoicePenalties = () => {
+    const params = buildPaidInvoicePenaltiesInvoiceListSearchParams({
+      paymentDateFrom: issueDateFrom.trim(),
+      paymentDateTo: issueDateTo.trim(),
+    });
+    navigate(`/finance/invoice?${params.toString()}`);
+  };
 
   if (loading) {
     return (
@@ -219,7 +231,7 @@ const FinanceFinancialDashboard = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -260,6 +272,25 @@ const FinanceFinancialDashboard = () => {
             </div>
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={openPaidInvoicePenalties}
+          className="bg-white rounded-lg shadow p-6 text-left hover:shadow-md transition-shadow focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:ring-offset-2"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-600">Penalties</p>
+              <p className="mt-2 text-2xl font-bold text-rose-700">
+                {formatCurrency(metrics.paidInvoicePenaltiesAmount)}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">{FINANCE_ROLE_DASHBOARD.paidInvoicePenalties}</p>
+            </div>
+            <div className="h-12 w-12 shrink-0 rounded-full bg-rose-100 flex items-center justify-center">
+              <DashboardStatIcon name="exclamationTriangle" className="h-6 w-6 text-rose-600" />
+            </div>
+          </div>
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

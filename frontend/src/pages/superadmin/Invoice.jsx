@@ -58,6 +58,7 @@ import {
   getInitialInvoiceSearchFromParams,
   hasInvoiceCrossLinkParam,
 } from '../../utils/billingListCrossLink';
+import { parseInvoiceListDeepLinkFromSearchParams } from '../../utils/invoiceListDeepLink';
 import { getInstallmentPaymentBlockAlert } from '../../utils/installmentPaymentBlock';
 import {
   canShowInvoicePayAction,
@@ -79,6 +80,7 @@ const Invoice = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const invoiceListDeepLink = parseInvoiceListDeepLinkFromSearchParams(searchParams);
   const billingUserType = 'Superadmin';
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [invoices, setInvoices] = useState([]);
@@ -91,15 +93,26 @@ const Invoice = () => {
   const debouncedNameSearch = useDebouncedValue(nameSearchTerm, 300);
   const debouncedStudentNameSearch = useDebouncedValue(studentNameSearch, 300);
   const [filterBranch, setFilterBranch] = useState('');
-  const [filterStatuses, setFilterStatuses] = useState([]);
+  const [filterStatuses, setFilterStatuses] = useState(() => invoiceListDeepLink.statuses);
+  const [filterHasPenalty, setFilterHasPenalty] = useState(() => invoiceListDeepLink.hasPenalty);
   // Date filter: Month | Payment date | Issue Date.
-  // Default mode = MONTH, default month = current Manila month.
-  const [dateFilterMode, setDateFilterMode] = useState(invoiceDateFilterUtil.DEFAULT_MODE);
-  const [filterIssueMonth, setFilterIssueMonth] = useState(DEFAULT_INVOICE_FILTER_MONTH);
-  const [filterPaymentDateFrom, setFilterPaymentDateFrom] = useState('');
-  const [filterPaymentDateTo, setFilterPaymentDateTo] = useState('');
-  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState('');
-  const [filterIssueDateTo, setFilterIssueDateTo] = useState('');
+  // Default mode = MONTH, default month = current Manila month (or deep-link override).
+  const [dateFilterMode, setDateFilterMode] = useState(() => invoiceListDeepLink.dateFilterMode);
+  const [filterIssueMonth, setFilterIssueMonth] = useState(
+    () => invoiceListDeepLink.filterIssueMonth || DEFAULT_INVOICE_FILTER_MONTH
+  );
+  const [filterPaymentDateFrom, setFilterPaymentDateFrom] = useState(
+    () => invoiceListDeepLink.filterPaymentDateFrom
+  );
+  const [filterPaymentDateTo, setFilterPaymentDateTo] = useState(
+    () => invoiceListDeepLink.filterPaymentDateTo
+  );
+  const [filterIssueDateFrom, setFilterIssueDateFrom] = useState(
+    () => invoiceListDeepLink.filterIssueDateFrom
+  );
+  const [filterIssueDateTo, setFilterIssueDateTo] = useState(
+    () => invoiceListDeepLink.filterIssueDateTo
+  );
 
   const handleInvoiceListDateFilterModeChange = (nextMode) => {
     if (nextMode === dateFilterMode) return;
@@ -364,6 +377,7 @@ const Invoice = () => {
           limit: ITEMS_PER_PAGE,
           branchId: filterBranch,
           statuses: filterStatuses,
+          hasPenalty: filterHasPenalty,
           dateFilterMode: options.skipDateFilters ? invoiceDateFilterUtil.DEFAULT_MODE : dateFilterMode,
           month: options.skipDateFilters ? '' : filterIssueMonth,
           paymentFrom: options.skipDateFilters ? '' : filterPaymentDateFrom,
@@ -413,6 +427,7 @@ const Invoice = () => {
     [
       filterBranch,
       filterStatuses,
+      filterHasPenalty,
       dateFilterMode,
       filterIssueMonth,
       filterPaymentDateFrom,
@@ -745,6 +760,7 @@ const Invoice = () => {
     filterIssueDateFrom,
     filterIssueDateTo,
     filterStatuses,
+    filterHasPenalty,
     debouncedNameSearch,
     debouncedStudentNameSearch,
   ]);
@@ -1567,6 +1583,10 @@ const Invoice = () => {
   const summaryAmountDisplay =
     listFilterSummary != null ? listFilterSummary.totalAmount : summaryInvoiceTotal;
   const summaryPaymentLineCount = listFilterSummary?.paymentLineCount ?? null;
+  const summaryPenaltiesAmount =
+    listFilterSummary != null && listFilterSummary.penaltiesAmount != null
+      ? Number(listFilterSummary.penaltiesAmount) || 0
+      : null;
   const invoiceReturnedDeductionAmount = Number(listFilterSummary?.returnedDeductionAmount) || 0;
   const invoiceReturnedDeductionCount = Number(listFilterSummary?.returnedDeductionCount) || 0;
   const invoiceRejectedDeductionAmount = Number(listFilterSummary?.rejectedDeductionAmount) || 0;
@@ -1928,6 +1948,18 @@ const Invoice = () => {
               </sup>
             </button>
           )}
+          {filterHasPenalty && (
+            <button
+              type="button"
+              onClick={() => setFilterHasPenalty(false)}
+              aria-pressed={true}
+              title="Clear late-penalty filter (Financial Dashboard Penalties)"
+              className="inline-flex items-center gap-1 rounded-full border border-rose-300 bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-800 transition-colors hover:bg-rose-200"
+            >
+              Has penalty
+              <span aria-hidden="true">×</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1956,6 +1988,20 @@ const Invoice = () => {
               ₱{summaryAmountDisplay.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </span>
+          {(filterHasPenalty || (summaryPenaltiesAmount != null && summaryPenaltiesAmount > 0)) && (
+            <>
+              <span className="text-gray-300">·</span>
+              <span>
+                <span className="font-semibold text-gray-900">Penalties amount:</span>{' '}
+                <span className="font-semibold text-rose-700">
+                  ₱{(summaryPenaltiesAmount ?? 0).toLocaleString('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              </span>
+            </>
+          )}
         </div>
         {isPaymentDateScope ? (
           hasInvoicePaymentDeductions ? (
@@ -2068,7 +2114,7 @@ const Invoice = () => {
                   <tr>
                     <td colSpan={13} className="px-6 py-12 text-center">
                       <p className="text-gray-500">
-                        {nameSearchTerm || studentNameSearch || filterBranch || filterStatuses.length > 0
+                        {nameSearchTerm || studentNameSearch || filterBranch || filterStatuses.length > 0 || filterHasPenalty
                           ? 'No matching invoices. Try adjusting your search or filters.'
                           : 'No invoices yet. Add your first invoice to get started.'}
                       </p>

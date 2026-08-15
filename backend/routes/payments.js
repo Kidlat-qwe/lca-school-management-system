@@ -24,6 +24,7 @@ import {
   computePaymentDateNetTotals,
   formatPaymentDateNetTotalsSummary,
 } from '../lib/paymentDateNetTotals.js';
+import { loadFinancialDashboardPaidInvoicePenalties } from '../lib/financialDashboardPaidInvoicePenalties/index.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
@@ -826,10 +827,20 @@ router.get(
 
       const paramsCopy = () => [...params];
 
-      const [statsRes, byBranchRes, recentRes] = await Promise.all([
+      const penaltyBranchId =
+        req.user.userType !== 'Superadmin' && req.user.branchId
+          ? req.user.branchId
+          : branchIdParam;
+
+      const [statsRes, byBranchRes, recentRes, paidPenalties] = await Promise.all([
         query(statsSql, paramsCopy()),
         query(byBranchSql, paramsCopy()),
         query(recentSql, paramsCopy()),
+        loadFinancialDashboardPaidInvoicePenalties(query, {
+          branchId: penaltyBranchId,
+          dateFrom: payFrom || null,
+          dateTo: payTo || null,
+        }),
       ]);
 
       const row = statsRes.rows[0] || {};
@@ -843,6 +854,8 @@ router.get(
           verifiedPaymentsAmount: parseFloat(row.verified_amount) || 0,
           unverifiedPaymentsCount: parseInt(row.unverified_count, 10) || 0,
           unverifiedPaymentsAmount: parseFloat(row.unverified_amount) || 0,
+          paidInvoicePenaltiesCount: paidPenalties.invoice_count || 0,
+          paidInvoicePenaltiesAmount: paidPenalties.penalty_amount || 0,
           revenueByBranch: (byBranchRes.rows || []).map((r) => ({
             branch_id: r.branch_id,
             branch_name: r.branch_name || (r.branch_id != null ? `Branch ${r.branch_id}` : ''),

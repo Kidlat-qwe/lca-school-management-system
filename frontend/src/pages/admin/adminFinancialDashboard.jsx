@@ -22,6 +22,7 @@ import CombinedStatsCard from '../../components/dashboard/CombinedStatsCard';
 import { buildPaymentLogDateParams, PAYMENT_LOG_DATE_MODES } from '../../utils/paymentLogDateFilters';
 import { FINANCIAL_DASHBOARD } from '../../constants/dashboardDescriptions';
 import { appendFinancialDashboardArMonthParams } from '../../utils/financialDashboardMonthRange';
+import { buildPaidInvoicePenaltiesInvoiceListSearchParams } from '../../utils/invoiceListDeepLink';
 import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
@@ -175,6 +176,15 @@ const AdminFinancialDashboard = () => {
     [metrics]
   );
 
+  const paidInvoicePenalties = useMemo(
+    () =>
+      metrics?.paid_invoice_penalties || {
+        invoice_count: 0,
+        penalty_amount: 0,
+      },
+    [metrics]
+  );
+
   const totalPaymentsCount = useMemo(() => {
     const v = Number(metrics?.payment_verification?.verified_count) || 0;
     const u = Number(metrics?.payment_verification?.unverified_count) || 0;
@@ -261,10 +271,17 @@ const AdminFinancialDashboard = () => {
             onClick={() => navigate('/admin/payment-logs')}
           />
           <StatsCard
-            title="Active Classes"
-            value={(totals.active_classes || 0).toLocaleString()}
-            accent="bg-gradient-to-br from-orange-400 to-orange-500"
-            iconName="bookOpen"
+            title="Penalties"
+            value={formatCurrency(paidInvoicePenalties.penalty_amount)}
+            subtitle={FINANCIAL_DASHBOARD.paidInvoicePenalties}
+            accent="bg-gradient-to-br from-rose-500 to-red-600"
+            iconName="exclamationTriangle"
+            onClick={() => {
+              const params = buildPaidInvoicePenaltiesInvoiceListSearchParams({
+                monthYm: selectedMonth,
+              });
+              navigate(`/admin/invoice?${params.toString()}`);
+            }}
           />
         </div>
 

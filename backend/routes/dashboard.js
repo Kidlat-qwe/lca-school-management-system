@@ -1,6 +1,6 @@
 import express from 'express';
 import { query as queryValidator } from 'express-validator';
-import { verifyFirebaseToken, requireRole, requireBranchAccess, isSuperfinanceOperator } from '../middleware/auth.js';
+import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import { loadMonthlyOperationalDashboardPayload } from '../lib/monthlyOperationalDashboardData.js';
@@ -26,6 +26,7 @@ import {
   loadFinancialDashboardPaymentVerification,
   parseManilaMonthInclusiveRange,
 } from '../lib/financialDashboardVerificationMetrics.js';
+import { loadFinancialDashboardPaidInvoicePenalties } from '../lib/financialDashboardPaidInvoicePenalties/index.js';
 import { resolveArSalesLineAggregateFragments } from '../lib/arSalesAggregate.js';
 import {
   loadMerchandiseReleasedDetails,
@@ -324,9 +325,10 @@ router.get(
         dateFrom: verificationDateRange?.from || null,
         dateTo: verificationDateRange?.to || null,
       };
-      const [paymentVerification, arVerification] = await Promise.all([
+      const [paymentVerification, arVerification, paidInvoicePenalties] = await Promise.all([
         loadFinancialDashboardPaymentVerification(query, verificationScope),
         loadFinancialDashboardArVerification(query, verificationScope),
+        loadFinancialDashboardPaidInvoicePenalties(query, verificationScope),
       ]);
       const pvRow = paymentVerification;
       const arvRow = arVerification;
@@ -479,6 +481,10 @@ router.get(
             unverified_amount: parseFloat(arvRow.unverified_amount) || 0,
             rejected_count: parseInt(arvRow.rejected_count, 10) || 0,
             rejected_amount: parseFloat(arvRow.rejected_amount) || 0,
+          },
+          paid_invoice_penalties: {
+            invoice_count: paidInvoicePenalties.invoice_count || 0,
+            penalty_amount: paidInvoicePenalties.penalty_amount || 0,
           },
           crossing_procedures: {
             total_violations: crossingProceduresResult.rows.length,
@@ -909,8 +915,9 @@ router.get(
 /**
  * GET /api/v1/dashboard/leadershipboard
  * Cross-branch leadership ranking.
- * - Superadmin / Superfinance: full numbers; optional branch_id filter.
+ * - Superadmin: full numbers; optional branch_id filter.
  * - Admin: all branch names + ranks, peer metrics redacted; spotlight = own branch.
+ * Finance / Superfinance do not have access.
  */
 router.get(
   '/leadershipboard',
@@ -919,17 +926,11 @@ router.get(
     queryValidator('summary_month').optional().matches(/^\d{4}-\d{2}$/).withMessage('summary_month must be YYYY-MM'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Finance', 'Admin'),
+  requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
       const userType = req.user.userType || req.user.user_type;
       const userBranchId = req.user.branchId ?? req.user.branch_id;
-      if (userType === 'Finance' && !isSuperfinanceOperator(userType, userBranchId)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Access denied. Leadershipboard is available to Superadmin, Superfinance, and Admin only.',
-        });
-      }
 
       const summaryMonth = req.query.summary_month || getCurrentManilaMonthKey();
       const parsed = parseMonthRange(summaryMonth);
@@ -948,7 +949,7 @@ router.get(
         });
       }
 
-      // Always score the full network. Superadmin/Superfinance branch_id = focus only
+      // Always score the full network. Superadmin branch_id = focus only
       // (side-by-side compare). Admin privacy redacts peers afterward.
       const optionalFocus =
         !isAdmin && req.query.branch_id ? parseInt(req.query.branch_id, 10) : null;

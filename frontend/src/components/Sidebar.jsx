@@ -53,7 +53,7 @@ const Sidebar = ({ isOpen, onClose }) => {
         {
           name: 'Leadershipboard',
           path: `${basePath}/leadershipboard`,
-          roles: ['Superadmin', 'Finance', 'Admin'],
+          roles: ['Superadmin', 'Admin'],
         },
         {
           name: 'Operational',
@@ -523,7 +523,6 @@ const Sidebar = ({ isOpen, onClose }) => {
             (child) =>
               child.name !== 'Leadershipboard' ||
               basePath === '/superadmin' ||
-              basePath === '/superfinance' ||
               basePath === '/admin'
           )
           ?.map(mapDashboardChild)

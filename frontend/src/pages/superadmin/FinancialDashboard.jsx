@@ -24,6 +24,7 @@ import {
   appendFinancialDashboardArMonthParams,
   appendFinancialDashboardPaymentMonthParams,
 } from '../../utils/financialDashboardMonthRange';
+import { buildPaidInvoicePenaltiesInvoiceListSearchParams } from '../../utils/invoiceListDeepLink';
 import { AR_STATUS_FILTER } from '../../utils/acknowledgementReceiptStatus';
 
 const COLORS = ['#F7C844', '#4F46E5', '#22C55E', '#F97316', '#14B8A6', '#EC4899'];
@@ -136,6 +137,15 @@ const FinancialDashboard = () => {
         unverified_amount: 0,
         rejected_count: 0,
         rejected_amount: 0,
+      },
+    [metrics]
+  );
+
+  const paidInvoicePenalties = useMemo(
+    () =>
+      metrics?.paid_invoice_penalties || {
+        invoice_count: 0,
+        penalty_amount: 0,
       },
     [metrics]
   );
@@ -299,10 +309,18 @@ const FinancialDashboard = () => {
             onClick={() => navigate('/superadmin/payment-logs')}
           />
           <StatsCard
-            title="Active Classes"
-            value={totals.active_classes}
-            accent="bg-gradient-to-br from-orange-400 to-orange-500"
-            iconName="bookOpen"
+            title="Penalties"
+            value={formatPeso(paidInvoicePenalties.penalty_amount)}
+            trend={FINANCIAL_DASHBOARD.paidInvoicePenalties}
+            trendClassName="text-rose-700"
+            accent="bg-gradient-to-br from-rose-500 to-red-600"
+            iconName="exclamationTriangle"
+            onClick={() => {
+              const params = buildPaidInvoicePenaltiesInvoiceListSearchParams({
+                monthYm: selectedMonth,
+              });
+              navigate(`/superadmin/invoice?${params.toString()}`);
+            }}
           />
         </div>
 

@@ -72,6 +72,10 @@ Shared Acknowledgement Receipt sales totals for **Financial Dashboard All AR**, 
 | Returned queue | Excluded (status + `[Returned]` notes marker) |
 | Paired package AR | Leader row hidden; follower row sums downpayment + Phase 1 amounts |
 
+## `financialDashboardPaidInvoicePenalties/`
+
+Paid invoices with late-penalty line amounts for Financial Dashboard KPIs (`invoice_count`, `penalty_amount`). Scoped by payment business date and optional branch. Used by `GET /dashboard` (`paid_invoice_penalties`) and `GET /payments/financial-dashboard-metrics`.
+
 ## `financialDashboardVerificationMetrics.js`
 
 Superadmin **Financial Dashboard** payment / AR verification cards (`GET /dashboard` → `payment_verification`, `ar_verification`):

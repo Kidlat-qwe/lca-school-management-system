@@ -177,6 +177,8 @@ export const FINANCIAL_DASHBOARD = {
   totalPaymentsAmount:
     'Net payable + tips for the same scope. Returned and rejected payment lines with payment date in the month are deducted; settled payments count again when approved.',
   totalPaymentsTrend: (amount) => `${amount} from completed invoice payments in the selected month (amount due + tips)`,
+  paidInvoicePenalties:
+    'Late-payment penalty ₱ on Paid invoices in the selected month (by payment date). Click to open Invoice list.',
   paymentVerificationIntro:
     'Payment issue date in the selected month. Verified = finance approved. Unverified = completed but not approved yet (not returned or rejected). Invoice payment lines only — unapplied package AR is on AR verification below.',
   arVerificationIntro:
@@ -195,6 +197,8 @@ export const FINANCE_ROLE_DASHBOARD = {
   pageIntroAllBranches: 'Payment and acknowledgement receipt totals across all branches.',
   totalRevenue: 'Money collected from completed payments in your date range (amount due + tips).',
   completedPayments: 'Number of completed payment records in the range.',
+  paidInvoicePenalties:
+    'Late-payment penalty ₱ on Paid invoices in your date range (by payment date). Click to open Invoice list.',
   arSales: (count) => `${count} acknowledgement receipt(s) in the selected date range.`,
   verifiedPayments: (amount) => `${amount} — finance has approved these payments`,
   unverifiedPayments: (amount) => `${amount} — completed, waiting for finance approval`,

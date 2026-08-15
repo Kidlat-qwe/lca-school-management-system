@@ -278,7 +278,6 @@ function App() {
           >
             <Route index element={<Navigate to="financial-dashboard" replace />} />
             <Route path="financial-dashboard" element={<SuperfinanceFinancialDashboard />} />
-            <Route path="leadershipboard" element={<Leadershipboard />} />
             <Route path="enrollment-dashboard" element={<Navigate to="phase-enrollment-dashboard" replace />} />
             <Route path="phase-enrollment-dashboard" element={<PhaseEnrollmentDashboard />} />
             <Route path="monthly-enrollment-dashboard" element={<MonthlyEnrollmentDashboard />} />
