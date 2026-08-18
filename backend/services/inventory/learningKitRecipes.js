@@ -1,22 +1,126 @@
 /**
  * CMS kit recipes (BOM category slots) for Learning Kit Request Stock.
  *
- * RHET kit BOM is category-only; CMS must send concrete components[] at request time.
- * Until RHET /catalog returns live BOM, keep recipes here (or extend via env JSON).
- *
- * When RHET exposes BOM on catalog/detail, prefer that live source and deprecate
- * these static entries.
- *
- * Keys: lowercase kit itemName and/or sku.
+ * Prefer live BOM on RHET `/catalog` kit items (`components[]`).
+ * Static `BUILTIN_RECIPES` + env JSON are fallback when catalog is unavailable.
  */
 
+import { getCatalog } from './inventoryClient.js';
+
+const UNIFORM_BOM_CATEGORY_NAMES = new Set([
+  'school uniform',
+  'pe uniform',
+  'lca uniform',
+  'lca pe uniform',
+  'shirt',
+  'lca t-shirt',
+  'lca tshirt',
+  'lca shirt',
+]);
+
+function isUniformBomCategory(categoryName) {
+  const name = String(categoryName || '').trim().toLowerCase();
+  if (!name) return false;
+  if (name.includes('learning kit')) return false;
+  if (UNIFORM_BOM_CATEGORY_NAMES.has(name)) return true;
+  if (name.includes('lca') && name.includes('shirt')) return true;
+  return name.endsWith(' uniform');
+}
+
+/**
+ * Build a CMS recipe from a RHET catalog Learning Kit item (live BOM).
+ * @returns {object|null}
+ */
+export function recipeFromCatalogKitItem(catalogItem) {
+  if (!catalogItem || !Array.isArray(catalogItem.components) || !catalogItem.components.length) {
+    return null;
+  }
+  const itemName = String(catalogItem.itemName || catalogItem.item_name || '').trim();
+  const sku = String(catalogItem.sku || '').trim();
+  const slots = catalogItem.components
+    .map((component) => {
+      const categoryName = String(
+        component.categoryName || component.category_name || ''
+      ).trim();
+      if (!categoryName) return null;
+      return {
+        categoryName,
+        kind: isUniformBomCategory(categoryName) ? 'uniform' : 'other',
+        minCount: Math.max(1, Number(component.quantity) || 1),
+      };
+    })
+    .filter(Boolean);
+  if (!slots.length) return null;
+  return {
+    itemName: itemName || sku,
+    sku: sku || null,
+    label: catalogItem.label || itemName || sku,
+    slots,
+    source: 'catalog',
+  };
+}
+
 const BUILTIN_RECIPES = {
+  'nc-learningkit': {
+    itemName: 'nc-learningkit',
+    sku: 'LEA-NC-LEARNINGKIT',
+    label: 'NC Learning Kit',
+    slots: [
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
   'nc-kg-learningkits': {
     itemName: 'nc-kg-learningkits',
     sku: 'LEA-NC-KG-LEARNINGKITS',
     label: 'NC KG Learning Kits',
     slots: [
-      { categoryName: 'LCA T-Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'arts-crafts-learningkit': {
+    itemName: 'arts-crafts-learningkit',
+    sku: 'LEA-ARTS-CRAFTS-LEARNINGKIT',
+    label: 'Arts & Crafts Learning Kit',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'gs-learningkit': {
+    itemName: 'gs-learningkit',
+    sku: 'LEA-GS-LEARNINGKIT',
+    label: 'GS Learning Kit',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'kg-learningkit-set-2': {
+    itemName: 'kg-learningkit-set-2',
+    sku: 'LEA-KG-LEARNINGKIT-SET-2',
+    label: 'KG Learning Kit Set 2',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'pk-learningkit-set4': {
+    itemName: 'pk-learningkit-set4',
+    sku: 'LEA-PK-LEARNINGKIT-SET4',
+    label: 'PK Learning Kit Set 4',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
       { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
       { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
     ],
@@ -65,16 +169,43 @@ function recipeIndex() {
 }
 
 /**
- * Find a kit recipe by catalog itemName or sku.
+ * Find a kit recipe by catalog item, itemName, or sku.
  * @returns {object|null}
  */
-export function getLearningKitRecipe({ itemName, sku } = {}) {
+export function getLearningKitRecipe({ itemName, sku, catalogItem } = {}) {
+  const fromCatalog = catalogItem ? recipeFromCatalogKitItem(catalogItem) : null;
+  if (fromCatalog) return fromCatalog;
   const index = recipeIndex();
   return (
     index[normalizeKey(itemName)] ||
     index[normalizeKey(sku)] ||
     null
   );
+}
+
+/**
+ * Resolve kit recipe: static/env map first, then live RHET /catalog BOM.
+ * @returns {Promise<object|null>}
+ */
+export async function resolveLearningKitRecipe({ itemName, sku } = {}) {
+  const staticRecipe = getLearningKitRecipe({ itemName, sku });
+  if (staticRecipe) return staticRecipe;
+  try {
+    const payload = await getCatalog();
+    const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+    const items = Array.isArray(root?.items) ? root.items : [];
+    const keyName = normalizeKey(itemName);
+    const keySku = normalizeKey(sku);
+    const match = items.find((item) => {
+      const name = normalizeKey(item.itemName || item.item_name);
+      const itemSku = normalizeKey(item.sku);
+      return (keyName && name === keyName) || (keySku && itemSku === keySku);
+    });
+    return match ? recipeFromCatalogKitItem(match) : null;
+  } catch (err) {
+    console.warn('[learningKitRecipes] Catalog recipe lookup failed:', err.message);
+    return null;
+  }
 }
 
 /**

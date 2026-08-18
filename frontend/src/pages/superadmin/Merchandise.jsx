@@ -58,7 +58,7 @@ import {
 } from '../../utils/merchandiseStock';
 
 /** Superadmin "Add Merchandise Type" control. Set true to re-enable. */
-const ADD_MERCHANDISE_TYPE_ENABLED = true;
+const ADD_MERCHANDISE_TYPE_ENABLED = false;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();

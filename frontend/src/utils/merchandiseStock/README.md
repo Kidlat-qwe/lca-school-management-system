@@ -11,7 +11,7 @@ Shared helpers for branch **Stocks** tables and enrollment stock picks.
 | `merchandiseHasAvailableStock` | Quantity > 0 (or untracked) |
 | `pickFirstInStockMerchandiseItem` | Prefer an in-stock variant |
 | `isUniformStockCategory` / `isItemNamedStockCategory` | Column layout: Gender/Type/Size vs Item name |
-| `getMerchandiseStockItemName` / `getMerchandiseStockSku` | Read `item_name`/`sku`, with legacy `remarks` `"item \| sku"` fallback |
+| `getMerchandiseStockItemName` / `getMerchandiseStockSku` | Read `item_name`/`sku`, with legacy `remarks` `"item \| sku"` fallback (ops audit notes are ignored) |
 | `formatMerchandiseStockItemName` | Display for Stocks table |
 | `formatMerchandiseVariantOptionLabel` | AR / picker dropdown: Item name · SKU - ₱price |
 | `formatMerchandiseVariantSubtitle` | Selected-row subtitle without price |

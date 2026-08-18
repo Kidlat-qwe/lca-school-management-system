@@ -14,13 +14,117 @@ export function isLearningKitMerchandiseName(merchandiseName) {
 export const LEARNING_KIT_NOT_SUPPORTED_MESSAGE =
   'Select a kit and fill every component slot from the kit recipe.';
 
+const UNIFORM_BOM_CATEGORY_NAMES = new Set([
+  'school uniform',
+  'pe uniform',
+  'lca uniform',
+  'lca pe uniform',
+  'shirt',
+  'lca t-shirt',
+  'lca tshirt',
+  'lca shirt',
+]);
+
+function isUniformBomCategory(categoryName) {
+  const name = String(categoryName || '').trim().toLowerCase();
+  if (!name) return false;
+  if (name.includes('learning kit')) return false;
+  if (UNIFORM_BOM_CATEGORY_NAMES.has(name)) return true;
+  if (name.includes('lca') && name.includes('shirt')) return true;
+  return name.endsWith(' uniform');
+}
+
+/** Build recipe slots from RHET catalog kit item.components[] (live BOM). */
+export function recipeFromCatalogKitItem(catalogItem) {
+  if (!catalogItem || !Array.isArray(catalogItem.components) || !catalogItem.components.length) {
+    return null;
+  }
+  const itemName = String(catalogItem.itemName || catalogItem.item_name || '').trim();
+  const sku = String(catalogItem.sku || '').trim();
+  const slots = catalogItem.components
+    .map((component) => {
+      const categoryName = String(
+        component.categoryName || component.category_name || ''
+      ).trim();
+      if (!categoryName) return null;
+      return {
+        categoryName,
+        kind: isUniformBomCategory(categoryName) ? 'uniform' : 'other',
+        minCount: Math.max(1, Number(component.quantity) || 1),
+      };
+    })
+    .filter(Boolean);
+  if (!slots.length) return null;
+  return {
+    itemName: itemName || sku,
+    sku: sku || null,
+    label: catalogItem.label || itemName || sku,
+    slots,
+    source: 'catalog',
+  };
+}
+
 const BUILTIN_RECIPES = {
+  'nc-learningkit': {
+    itemName: 'nc-learningkit',
+    sku: 'LEA-NC-LEARNINGKIT',
+    label: 'NC Learning Kit',
+    slots: [
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
   'nc-kg-learningkits': {
     itemName: 'nc-kg-learningkits',
     sku: 'LEA-NC-KG-LEARNINGKITS',
     label: 'NC KG Learning Kits',
     slots: [
-      { categoryName: 'LCA T-Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'arts-crafts-learningkit': {
+    itemName: 'arts-crafts-learningkit',
+    sku: 'LEA-ARTS-CRAFTS-LEARNINGKIT',
+    label: 'Arts & Crafts Learning Kit',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'gs-learningkit': {
+    itemName: 'gs-learningkit',
+    sku: 'LEA-GS-LEARNINGKIT',
+    label: 'GS Learning Kit',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'kg-learningkit-set-2': {
+    itemName: 'kg-learningkit-set-2',
+    sku: 'LEA-KG-LEARNINGKIT-SET-2',
+    label: 'KG Learning Kit Set 2',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
+      { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
+      { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
+    ],
+  },
+  'pk-learningkit-set4': {
+    itemName: 'pk-learningkit-set4',
+    sku: 'LEA-PK-LEARNINGKIT-SET4',
+    label: 'PK Learning Kit Set 4',
+    slots: [
+      { categoryName: 'ID Lace', kind: 'other', minCount: 1 },
+      { categoryName: 'Shirt', kind: 'uniform', minCount: 1 },
       { categoryName: 'Tool Kit', kind: 'other', minCount: 1 },
       { categoryName: 'Workbooks', kind: 'other', minCount: 1 },
     ],
@@ -31,7 +135,9 @@ function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-export function getLearningKitRecipe({ itemName, sku } = {}) {
+export function getLearningKitRecipe({ itemName, sku, catalogItem } = {}) {
+  const fromCatalog = catalogItem ? recipeFromCatalogKitItem(catalogItem) : null;
+  if (fromCatalog) return fromCatalog;
   const index = {};
   for (const recipe of Object.values(BUILTIN_RECIPES)) {
     index[normalizeKey(recipe.itemName)] = recipe;
@@ -73,7 +179,7 @@ export function validateKitLineComponents(line) {
   if (!itemName && !sku) {
     return 'Select a Learning Kit from the catalog';
   }
-  const recipe = getLearningKitRecipe({ itemName, sku });
+  const recipe = getLearningKitRecipe({ itemName, sku, catalogItem: line.catalog_kit_item });
   if (!recipe) {
     return 'Kit recipe not configured in CMS for this Learning Kit';
   }
@@ -90,7 +196,7 @@ export function validateKitLineComponents(line) {
     for (const row of rows) {
       if (slot.kind === 'uniform') {
         if (!row.gender || !row.type || !row.size) {
-          return `${slot.categoryName}: gender, type, and size are required`;
+          return `${slot.categoryName}: gender, logo/type, and size are required`;
         }
       } else if (!row.item_name && !row.sku) {
         return `${slot.categoryName}: select a catalog item`;

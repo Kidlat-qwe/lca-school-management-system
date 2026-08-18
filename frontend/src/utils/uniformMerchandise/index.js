@@ -152,8 +152,11 @@ export const UNIFORM_PE_PIECE_OPTIONS = [
 
 export const UNIFORM_TSHIRT_PIECE_OPTIONS = [{ value: 'Shirt', label: 'Shirt' }];
 
-/** LCA_SHIRT / category "Shirt" — RHET type is Logo 1 / Logo 2 (not PE "Shirt"). */
+/** LCA_SHIRT / category "Shirt" — RHET logos from catalog (ACC / Beeli / LCA) or legacy Logo 1 / Logo 2. */
 export const UNIFORM_LCA_SHIRT_PIECE_OPTIONS = [
+  { value: 'ACC', label: 'ACC' },
+  { value: 'Beeli', label: 'Beeli' },
+  { value: 'LCA', label: 'LCA' },
   { value: 'Logo 1', label: 'Logo 1' },
   { value: 'Logo 2', label: 'Logo 2' },
 ];
@@ -315,9 +318,11 @@ export function isUpperUniformPiece(type) {
   return (
     t === 'top' ||
     t === 'polo' ||
-    t === 'shirt' ||
     t.includes('blouse') ||
-    t.startsWith('logo')
+    t.startsWith('logo') ||
+    t === 'acc' ||
+    t === 'beeli' ||
+    t === 'lca'
   );
 }
 

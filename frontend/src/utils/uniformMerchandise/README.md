@@ -27,7 +27,7 @@ read** and **normalized on write** via `normalizeMerchandiseAttributes()`.
 | School Uniform | Male | Polo, Short, Set |
 | School Uniform | Female | Blouse, Skirt, Set |
 | PE Uniform | any | Shirt, Pants, Set |
-| Shirt (LCA_SHIRT) | any | Logo 1, Logo 2 |
+| Shirt (LCA_SHIRT) | any | Logo 1, Logo 2, ACC, Beeli, LCA (from RHET catalog) |
 
 Enrollment / Configure Merchandise roles (`getUniformCategory`):
 

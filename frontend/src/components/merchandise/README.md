@@ -95,3 +95,13 @@ Uses `utils/merchandiseRequests/trackProgress.js` to map local `status`
 
 Admin / Superadmin Merchandise pages use `useMerchandiseLiveRefresh` so request
 status and branch stock update automatically after RHET webhooks (no manual reload).
+
+## UI feature flags (temporary)
+
+| Page | Constant | Location |
+|------|----------|----------|
+| Superadmin Merchandise | `ADD_MERCHANDISE_TYPE_ENABLED` | `pages/superadmin/Merchandise.jsx` |
+| Admin Merchandise | `REQUEST_STOCK_ENABLED` | `pages/admin/adminMerchandise.jsx` |
+| Admin Merchandise | `RETURN_STOCK_ENABLED` | `pages/admin/adminMerchandise.jsx` |
+
+Set to `true` to re-enable the header buttons. Disabled buttons stay visible with reduced opacity and a tooltip.

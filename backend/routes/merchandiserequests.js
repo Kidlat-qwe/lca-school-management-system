@@ -41,6 +41,7 @@ import {
   parseLegacyItemIdentityFromRemarks,
 } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
+import { resolveLearningKitRecipe } from '../services/inventory/learningKitRecipes.js';
 import {
   LOCAL_REQUEST_STATUS,
   isDeliveredRemoteStatus,
@@ -346,12 +347,29 @@ async function insertLocalMerchandiseRequestRow({
   return mapRowTimestampsToManila(result.rows[0]);
 }
 
-function normalizeIncomingRequestLine(body, { inventoryOn, requested_quantity }) {
+async function resolveKitRecipeForBody(body) {
+  const categoryName = String(
+    body.category_name || body.categoryName || body.merchandise_name || ''
+  ).trim();
+  if (!isLearningKitCategory(categoryName) && !isLearningKitCategory(body.merchandise_name)) {
+    return null;
+  }
+  return resolveLearningKitRecipe({
+    itemName: body.item_name || body.itemName,
+    sku: body.sku,
+  });
+}
+
+async function normalizeIncomingRequestLine(body, { inventoryOn, requested_quantity }) {
   if (inventoryOn) {
-    const normalized = normalizeMerchandiseRequestInput({
-      ...body,
-      requested_quantity,
-    });
+    const learningKitRecipe = await resolveKitRecipeForBody(body);
+    const normalized = normalizeMerchandiseRequestInput(
+      {
+        ...body,
+        requested_quantity,
+      },
+      { learningKitRecipe }
+    );
     if (normalized.error) {
       return {
         error: {
@@ -735,11 +753,14 @@ router.post(
       let inventory_components_json = null;
 
       if (inventoryOn) {
-        // Catalog-first: RHET category + variant/item (never free-text "LCA Bag" alone).
-        const normalized = normalizeMerchandiseRequestInput({
-          ...req.body,
-          requested_quantity,
-        });
+        const learningKitRecipe = await resolveKitRecipeForBody(req.body);
+        const normalized = normalizeMerchandiseRequestInput(
+          {
+            ...req.body,
+            requested_quantity,
+          },
+          { learningKitRecipe }
+        );
         if (normalized.error) {
           return res.status(400).json({
             success: false,
@@ -1080,7 +1101,7 @@ router.post(
       for (let i = 0; i < incomingItems.length; i += 1) {
         const itemBody = incomingItems[i] || {};
         const requested_quantity = parseInt(itemBody.requested_quantity, 10);
-        const line = normalizeIncomingRequestLine(
+        const line = await normalizeIncomingRequestLine(
           { ...itemBody, request_reason: itemBody.request_reason || sharedReason },
           { inventoryOn, requested_quantity }
         );

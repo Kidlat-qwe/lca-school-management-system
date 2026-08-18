@@ -28,17 +28,40 @@ import {
   resolveLocalMerchandiseTypeName,
 } from './inventoryFieldMapping.js';
 
+function isOpsAuditRemarks(remarks) {
+  const text = String(remarks || '').trim();
+  if (!text) return false;
+  return (
+    /^Ops\s+(seed|repair)\b/i.test(text) ||
+    /(?:^|\|\s*)Ops\s+(seed|repair)\b/i.test(text)
+  );
+}
+
+function looksLikeLegacyItemIdentityPair(itemName, sku) {
+  if (!itemName || !sku) return false;
+  if (isOpsAuditRemarks(itemName) || isOpsAuditRemarks(sku)) return false;
+  if (itemName.length > 80 || sku.length > 80) return false;
+  if (itemName.includes('—') || sku.includes('—')) return false;
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(itemName)) return false;
+  if (!/^[A-Z0-9][A-Z0-9-]*$/i.test(sku)) return false;
+  return true;
+}
+
 /**
  * Parse legacy remarks "itemName | sku" (Learning Kit / early non-uniform).
+ * Ignores ops audit notes that use " | " as a joiner between free-text lines.
  */
 export function parseLegacyItemIdentityFromRemarks(remarks) {
   const text = String(remarks || '').trim();
-  if (!text || !text.includes('|')) {
+  if (!text || !text.includes('|') || isOpsAuditRemarks(text)) {
     return { itemName: null, sku: null };
   }
   const [left, ...rest] = text.split('|');
   const itemName = String(left || '').trim() || null;
   const sku = String(rest.join('|') || '').trim() || null;
+  if (!looksLikeLegacyItemIdentityPair(itemName, sku)) {
+    return { itemName: null, sku: null };
+  }
   return { itemName, sku };
 }
 

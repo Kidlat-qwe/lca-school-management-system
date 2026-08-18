@@ -68,10 +68,28 @@ function testDoNotMatchEmptyIdentity() {
   assert.equal(stockRowMatchesItemIdentity(row, { itemName: null, sku: null }), false);
 }
 
+function testOpsRemarksNotIdentity() {
+  const row = {
+    item_name: null,
+    sku: null,
+    remarks:
+      'Ops seed 2026-08-18 — Backpack +50 (from RHET BAC-LCA-BACKPACK) | Ops repair 2026-08-18 — LCA Bag clear item_name/sku (legacy) (CMS qty only; legacy shell)',
+  };
+  assert.equal(getStockRowItemName(row), null);
+  assert.equal(
+    stockRowMatchesItemIdentity(row, {
+      itemName: 'lca-backpack',
+      sku: 'BAC-LCA-BACKPACK',
+    }),
+    false
+  );
+}
+
 testParseLegacyRemarks();
 testMatchByItemNameColumn();
 testMatchBySku();
 testMatchLegacyRemarks();
 testBlankRowNeverMatches();
 testDoNotMatchEmptyIdentity();
+testOpsRemarksNotIdentity();
 console.log('merchandiseStockItemMatch.test.js: all passed');

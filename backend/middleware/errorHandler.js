@@ -46,18 +46,24 @@ export const errorHandler = (err, req, res, next) => {
           error: err.column,
         });
       case '23514': // Check constraint violation
-        return res.status(400).json({
-          success: false,
-          message:
+        {
+          const constraintHint =
             err.constraint === 'check_request_type' || err.constraint === 'check_type'
-              ? 'This uniform type is not allowed by the database yet. Apply migration 137_allow_uniform_set_type.sql (allows Set), then retry.'
-              : 'A database check constraint was violated. Please verify the submitted values.',
-          error:
-            process.env.NODE_ENV === 'development'
-              ? `${err.message}${err.constraint ? ` [${err.constraint}]` : ''}`
-              : err.constraint || 'check_violation',
-          code: err.code,
-        });
+              ? 'Uniform/logo type is not allowed in the database yet. Apply migration 139_allow_lca_shirt_rhet_logo_labels.sql (ACC/Beeli/LCA) or 137_allow_uniform_set_type.sql (Set), then retry.'
+              : 'A database check constraint was violated. Please verify the submitted values.';
+          const detail =
+            process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'production'
+              ? [err.message, err.detail, err.constraint ? `[${err.constraint}]` : '']
+                  .filter(Boolean)
+                  .join(' ')
+              : err.constraint || 'check_violation';
+          return res.status(400).json({
+            success: false,
+            message: constraintHint,
+            error: detail,
+            code: err.code,
+          });
+        }
       case '42P01': // Undefined table
         return res.status(500).json({
           success: false,

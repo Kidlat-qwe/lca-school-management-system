@@ -161,6 +161,9 @@ export function normalizeCatalogItem(item) {
     status: item.status || '',
     variation: item.variation || '',
     inventoryId: item.inventoryId || item.inventory_id || null,
+    stockMode: item.stockMode || item.stock_mode || null,
+    bomComplete: item.bomComplete ?? item.bom_complete ?? null,
+    components: Array.isArray(item.components) ? item.components : [],
   };
 }
 
@@ -249,6 +252,9 @@ export function getUniformTypeOptions(items, categoryName, gender) {
   return uniqueSorted(rows.map((r) => r.type), [
     'Logo 1',
     'Logo 2',
+    'ACC',
+    'Beeli',
+    'LCA',
     'Polo',
     'Short',
     'Blouse',

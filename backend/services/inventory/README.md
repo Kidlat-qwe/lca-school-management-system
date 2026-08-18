@@ -50,7 +50,7 @@ free text. **Request Stock** form mode prefers catalog `categoryKind`:
 |---|---|---|
 | `SCHOOL_UNIFORM` | Uniform | gender + type + size |
 | `PE_UNIFORM` | Uniform | gender + type + size |
-| `LCA_SHIRT` | Uniform (Shirt) | gender + type (`Logo 1`/`Logo 2`) + size |
+| `LCA_SHIRT` | Uniform (Shirt) | gender + type (`Logo 1`/`Logo 2`, or RHET labels `ACC`/`Beeli`/`LCA`) + size |
 | `LEARNING_KIT` | Kit | itemName/sku + components[] |
 | `OTHER` (or missing + not kit) | Non-uniform | itemName + sku |
 
@@ -62,10 +62,11 @@ Name heuristics are **fallback only** when `categoryKind` is missing
 | Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `Shirt`, `Backpack`, … |
 | Gender | `Male`, `Female`, `Unisex` |
 | Size | `XS` … `5XL`, `Teen` |
-| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `Set` |
+| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `ACC`, `Beeli`, `LCA`, `Set` |
 
 Migration **134** allows `Logo 1` / `Logo 2` on merchandise + request-log type CHECKs.
 Migration **137** allows RHET type `Set` (Request Stock was failing with check_request_type).
+Migration **139** allows RHET Shirt logo labels `ACC`, `Beeli`, `LCA` (current `/catalog` variation tokens).
 Legacy labels (`LCA Uniform`, `Men`, `Extra Small`) are still recognized on read
 and normalized on write. Migration **129** + script
 `migrateMerchandiseLabelsToRhet.js` rewrite existing rows.
@@ -77,7 +78,8 @@ with identity for the new canonical names. Fulfill type name = RHET
 ## Learning Kit (Request Stock enabled)
 
 Learning Kit is a **virtual RHET kit**: BOM = category slots only. CMS Request Stock
-collects concrete `components[]` from a CMS recipe map (`learningKitRecipes.js`).
+collects concrete `components[]` from RHET catalog BOM (`components[]` on kit items)
+or the CMS recipe fallback map (`learningKitRecipes.js`).
 
 1. Admin selects category **Learning Kit** + kit item (e.g. `nc-kg-learningkits`)
 2. UI requires a choice for every recipe slot (uniform attrs or itemName/sku)
@@ -193,6 +195,7 @@ for normal fulfills — that script is one-time legacy cleanup only.
 | `134_...` | Allow `Logo 1` / `Logo 2` on type CHECKs (LCA_SHIRT) |
 | `135_...` | Document lifecycle statuses (Pending/Shipped/Delivered/Returned) |
 | `137_...` | Allow `Set` on type CHECKs (uniform Request Stock) |
+| `139_...` | Allow `ACC` / `Beeli` / `LCA` on type CHECKs (RHET Shirt logos) |
 
 ## Repair stuck DELIVERED (e.g. PSMS-33)
 

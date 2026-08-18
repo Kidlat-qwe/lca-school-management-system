@@ -65,17 +65,40 @@ export function pickFirstInStockMerchandiseItem(items = []) {
   return inStock[0] || items[0];
 }
 
-/** Parse legacy remarks "itemName | sku". */
+/** True when remarks are ops audit notes, not RHET item identity. */
+export function isOpsAuditRemarks(remarks) {
+  const text = String(remarks || '').trim();
+  if (!text) return false;
+  return (
+    /^Ops\s+(seed|repair)\b/i.test(text) ||
+    /(?:^|\|\s*)Ops\s+(seed|repair)\b/i.test(text)
+  );
+}
+
+/** True for pre-migration rows: compact slug + SKU, not free-text ops notes. */
+function looksLikeLegacyItemIdentityPair(itemName, sku) {
+  if (!itemName || !sku) return false;
+  if (isOpsAuditRemarks(itemName) || isOpsAuditRemarks(sku)) return false;
+  if (itemName.length > 80 || sku.length > 80) return false;
+  if (itemName.includes('—') || sku.includes('—')) return false;
+  if (!/^[a-z0-9][a-z0-9-]*$/i.test(itemName)) return false;
+  if (!/^[A-Z0-9][A-Z0-9-]*$/i.test(sku)) return false;
+  return true;
+}
+
+/** Parse legacy remarks "itemName | sku" (pre item_name/sku columns). */
 export function parseLegacyItemIdentityFromRemarks(remarks) {
   const text = String(remarks || '').trim();
-  if (!text || !text.includes('|')) {
+  if (!text || !text.includes('|') || isOpsAuditRemarks(text)) {
     return { itemName: '', sku: '' };
   }
   const [left, ...rest] = text.split('|');
-  return {
-    itemName: String(left || '').trim(),
-    sku: String(rest.join('|') || '').trim(),
-  };
+  const itemName = String(left || '').trim();
+  const sku = String(rest.join('|') || '').trim();
+  if (!looksLikeLegacyItemIdentityPair(itemName, sku)) {
+    return { itemName: '', sku: '' };
+  }
+  return { itemName, sku };
 }
 
 export function getMerchandiseStockItemName(stock) {
@@ -139,9 +162,10 @@ export function formatMerchandiseVariantOptionLabel(stock, { includePrice = true
 
   const itemName = getMerchandiseStockItemName(stock);
   const sku = getMerchandiseStockSku(stock);
+  const remarksText = String(stock.remarks || '').trim();
   const identity =
     [itemName, sku].filter(Boolean).join(' · ') ||
-    String(stock.remarks || '').trim() ||
+    (remarksText && !isOpsAuditRemarks(remarksText) ? remarksText : '') ||
     'Unlabeled item';
   return [identity, pricePart].filter(Boolean).join(' - ');
 }
@@ -154,5 +178,10 @@ export function formatMerchandiseVariantSubtitle(stock) {
   }
   const itemName = getMerchandiseStockItemName(stock);
   const sku = getMerchandiseStockSku(stock);
-  return [itemName, sku].filter(Boolean).join(' • ') || String(stock.remarks || '').trim() || 'Select item';
+  const remarksText = String(stock.remarks || '').trim();
+  return (
+    [itemName, sku].filter(Boolean).join(' • ') ||
+    (remarksText && !isOpsAuditRemarks(remarksText) ? remarksText : '') ||
+    'Select item'
+  );
 }

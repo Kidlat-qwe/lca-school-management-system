@@ -30,6 +30,7 @@ My Requests: **Pending** until `stock_return.accepted`, then **Returned**.
    `getCreateMerchandiseCategoryOptions(catalog)` — exact RHET `categoryName` values only.
 3. Prefer `categories[].categoryKind` for form mode:
    - `SCHOOL_UNIFORM` / `PE_UNIFORM` / `LCA_SHIRT` → Gender + Type/Logo + Size
+     (Shirt logos from RHET catalog: `ACC`, `Beeli`, `LCA`, or legacy `Logo 1`/`Logo 2`)
    - `OTHER` → concrete catalog item (`itemName` + `sku`)
    - `LEARNING_KIT` → kit item + `components[]`
    Name heuristics are fallback only when kind is missing (`Shirt` is still uniform).
@@ -79,6 +80,7 @@ Backend `POST /merchandise` accepts a type shell (`quantity` + attrs blank) with
 
 RHET kits are virtual (category-slot BOM). CMS recipes live in
 `frontend/.../learningKit.js` and `backend/services/inventory/learningKitRecipes.js`
+(keep in sync). Prefer live RHET catalog kit `components[]` when present.
 (keep in sync). Missing recipe → clear error, not silent submit.
 
 ## Catalog helpers

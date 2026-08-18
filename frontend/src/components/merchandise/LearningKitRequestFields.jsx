@@ -27,10 +27,6 @@ export default function LearningKitRequestFields({
   onRemoveComponent,
 }) {
   const kitItems = getCatalogItemsForCategory(catalogItems, line.category_name);
-  const recipe = getLearningKitRecipe({
-    itemName: line.item_name,
-    sku: line.sku,
-  });
   const catalogItemKey =
     line.catalog_item_key ||
     (line.item_name || line.sku
@@ -40,6 +36,15 @@ export default function LearningKitRequestFields({
           inventoryId: line.inventory_id,
         })
       : '');
+  const selectedKitItem =
+    line.catalog_kit_item ||
+    kitItems.find((item) => catalogItemSelectKey(item) === catalogItemKey) ||
+    null;
+  const recipe = getLearningKitRecipe({
+    itemName: line.item_name,
+    sku: line.sku,
+    catalogItem: selectedKitItem,
+  });
 
   return (
     <div className="space-y-3">
@@ -73,8 +78,8 @@ export default function LearningKitRequestFields({
 
       {line.item_name && !recipe && (
         <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">
-          Kit recipe not configured in CMS for this kit. Ask an admin to add BOM slots
-          (e.g. LCA T-Shirt, Tool Kit, Workbooks).
+          Kit recipe not configured for this kit. Reload the RHET catalog or ask an admin to
+          add BOM slots in CMS (Shirt, Tool Kit, Workbooks, ID Lace, etc.).
         </p>
       )}
 

@@ -365,21 +365,42 @@ export function parseUniformIdentityFromMatchedSku(sku) {
   const raw = String(sku || '').trim();
   if (!raw) return null;
   const m = raw.match(/^SHI-([A-Za-z])-LOGO\s*(\d+)-([A-Za-z0-9]+)$/i);
-  if (!m) return null;
-  const genderCode = m[1].toUpperCase();
-  const genderMap = { U: 'Unisex', M: 'Male', F: 'Female' };
-  const gender = genderMap[genderCode] || null;
-  const type = `Logo ${m[2]}`;
-  let size = m[3];
-  // Normalize common size tokens
-  const sizeUpper = size.toUpperCase();
-  if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(sizeUpper)) {
-    size = sizeUpper;
-  } else if (sizeUpper === 'TEEN') {
-    size = 'Teen';
+  if (m) {
+    const genderCode = m[1].toUpperCase();
+    const genderMap = { U: 'Unisex', M: 'Male', F: 'Female' };
+    const gender = genderMap[genderCode] || null;
+    const type = `Logo ${m[2]}`;
+    let size = m[3];
+    const sizeUpper = size.toUpperCase();
+    if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(sizeUpper)) {
+      size = sizeUpper;
+    } else if (sizeUpper === 'TEEN') {
+      size = 'Teen';
+    }
+    if (!gender || !type || !size) return null;
+    return { gender, type, size };
   }
-  if (!gender || !type || !size) return null;
-  return { gender, type, size };
+
+  const rhetLogo = raw.match(/^SHI-([A-Za-z])-([A-Za-z0-9]+)-([A-Za-z0-9]+)$/i);
+  if (rhetLogo) {
+    const genderCode = rhetLogo[1].toUpperCase();
+    const genderMap = { U: 'Unisex', M: 'Male', F: 'Female' };
+    const gender = genderMap[genderCode] || null;
+    const token = rhetLogo[2].toUpperCase();
+    const typeMap = { ACC: 'ACC', BEELI: 'Beeli', LCA: 'LCA' };
+    const type = typeMap[token] || rhetLogo[2];
+    let size = rhetLogo[3];
+    const sizeUpper = size.toUpperCase();
+    if (['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL'].includes(sizeUpper)) {
+      size = sizeUpper;
+    } else if (sizeUpper === 'TEEN') {
+      size = 'Teen';
+    }
+    if (!gender || !type || !size) return null;
+    return { gender, type, size };
+  }
+
+  return null;
 }
 
 /**
@@ -551,6 +572,9 @@ export function mapTypeToInventory(type, merchandiseName = '') {
       'Pants',
       'Logo 1',
       'Logo 2',
+      'ACC',
+      'Beeli',
+      'LCA',
       'Set',
     ].includes(key)
   ) {
@@ -672,7 +696,7 @@ function omitEmpty(obj) {
  * Normalize create-request body into DB + RHET identity fields.
  * Accepts catalog-driven fields: category_name, item_name, sku, gender, type, size.
  */
-export function normalizeMerchandiseRequestInput(body = {}) {
+export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
   const categoryName = String(body.category_name || body.categoryName || '').trim();
   const itemName = String(body.item_name || body.itemName || '').trim();
   const sku = String(body.sku || '').trim();
@@ -704,7 +728,7 @@ export function normalizeMerchandiseRequestInput(body = {}) {
         error: 'Select a Learning Kit from the RHET catalog (item name or SKU).',
       };
     }
-    const recipe = getLearningKitRecipe({ itemName: resolvedItemName, sku });
+    const recipe = options.learningKitRecipe ?? getLearningKitRecipe({ itemName: resolvedItemName, sku });
     if (!recipe) {
       return {
         error:

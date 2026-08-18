@@ -1,37 +1,27 @@
 # Learning Kit recipes (CMS)
 
-Static BOM category slots for Learning Kit Request Stock until RHET `/catalog`
-returns live kit BOM.
+BOM category slots for Learning Kit Request Stock.
 
-## Why
+## Source of truth (preferred)
 
-RHET kits are **virtual**: warehouse BOM = category slots only
-(e.g. LCA T-Shirt + Tool Kit + Workbooks). CMS must send `components[]` with
-concrete choices when requesting. Available kits on RHET = min(category totals).
+RHET `GET /catalog` Learning Kit items include live **`components[]`** BOM
+(`stockMode: VIRTUAL_BUNDLE`, `bomComplete: true`). CMS derives recipe slots from
+that payload when you pick a kit in Request Stock.
 
-## Config
+Example **NC Learning Kit** (`nc-learningkit` / `LEA-NC-LEARNINGKIT`):
+
+- Shirt (uniform — gender + logo/type + size)
+- Tool Kit (pick catalog item)
+- Workbooks (pick catalog item)
+
+Other kits may also include **ID Lace**.
+
+## Fallback
+
+When catalog BOM is unavailable, static maps apply:
 
 1. Built-in map: `learningKitRecipes.js` (`BUILTIN_RECIPES`)
 2. Optional override / extras: backend env `LEARNING_KIT_RECIPES_JSON`
 
-Example env JSON:
-
-```json
-{
-  "nc-kg-learningkits": {
-    "itemName": "nc-kg-learningkits",
-    "sku": "LEA-NC-KG-LEARNINGKITS",
-    "label": "NC KG Learning Kits",
-    "slots": [
-      { "categoryName": "LCA T-Shirt", "kind": "uniform", "minCount": 1 },
-      { "categoryName": "Tool Kit", "kind": "other", "minCount": 1 },
-      { "categoryName": "Workbooks", "kind": "other", "minCount": 1 }
-    ]
-  }
-}
-```
-
-If a kit is selected in Request Stock but has no recipe, CMS returns:
-**Kit recipe not configured in CMS** (better than silent wrong components).
-
-When RHET exposes BOM on catalog/detail, switch to live BOM and deprecate this map.
+If a kit has no catalog BOM and no static recipe, CMS shows:
+**Kit recipe not configured** (better than silent wrong components).

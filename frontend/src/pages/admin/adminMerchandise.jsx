@@ -89,7 +89,10 @@ import {
 } from '../../utils/merchandiseReturns';
 
 /** Branch Admin "Request Stock" control. Set true to re-enable. */
-const REQUEST_STOCK_ENABLED = true;
+const REQUEST_STOCK_ENABLED = false;
+
+/** Branch Admin "Return Stock" control. Set true to re-enable. */
+const RETURN_STOCK_ENABLED = false;
 
 const createEmptyBulkLine = createEmptyCatalogRequestLine;
 
@@ -576,7 +579,9 @@ const AdminMerchandise = () => {
             const recipe = getLearningKitRecipe({
               itemName: updated.item_name,
               sku: updated.sku,
+              catalogItem: selected,
             });
+            updated.catalog_kit_item = selected || null;
             const kitQty = Math.max(1, parseInt(updated.quantity, 10) || 1);
             updated.components = recipe
               ? buildKitComponentsFromRecipe(recipe, kitQty)
@@ -2763,8 +2768,21 @@ const AdminMerchandise = () => {
           </button>
           <button
             type="button"
-            onClick={() => setIsReturnModalOpen(true)}
-            className="px-4 py-2 text-sm font-medium text-white bg-orange-600 hover:bg-orange-700 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-md"
+            disabled={!RETURN_STOCK_ENABLED}
+            title={
+              RETURN_STOCK_ENABLED
+                ? undefined
+                : 'Temporarily disabled — will be re-enabled later'
+            }
+            onClick={() => {
+              if (!RETURN_STOCK_ENABLED) return;
+              setIsReturnModalOpen(true);
+            }}
+            className={`px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-lg transition-colors flex items-center justify-center space-x-2 shadow-md ${
+              RETURN_STOCK_ENABLED
+                ? 'hover:bg-orange-700'
+                : 'cursor-not-allowed opacity-50'
+            }`}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path

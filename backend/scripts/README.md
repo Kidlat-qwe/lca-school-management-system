@@ -234,15 +234,89 @@ node backend/scripts/repairOliviaSalesMovePhase9PaymentToPlan2Phase5.js --produc
 
 ### `migrateMerchandiseLabelsToRhet.js`
 
-Rewrites `merchandisestbl` category / gender / size / PE piece-type labels to RHET-canonical values
+Rewrites `merchandisestbl` category / gender / size / piece-type labels to RHET-canonical values
 (`School Uniform`, `Shirt`, `Learning Kit`, `Moving Up Kit`, `Male`/`Female`, `XS`/`S`/`M`/…,
-PE Uniform `Top`→`Shirt`, `Bottom`→`Pants`). Optional `--branch-id=N` for pilot branch (e.g. Malolos = 1).
+PE Uniform `Top`→`Shirt`, `Bottom`→`Pants`;
+School Uniform Male `Top`→`Polo`, `Bottom`→`Short`, Female `Top`→`Blouse`, `Bottom`→`Skirt`).
+Optional `--branch-id=N` for pilot branch (e.g. Malolos = 1).
+Use `removeInvalidLcaShirtStockRows.js` to delete legacy `type=Shirt` rows on LCA Shirt (RHET uses ACC/Beeli/LCA/Logo).
 Run migration **129** first.
 
 ```bash
 node scripts/migrateMerchandiseLabelsToRhet.js --dry-run
 node scripts/migrateMerchandiseLabelsToRhet.js --dry-run --branch-id=1
 node scripts/migrateMerchandiseLabelsToRhet.js --apply --branch-id=1
+```
+
+### `removeInvalidLcaShirtStockRows.js`
+
+Deletes branch stock rows for **Shirt / LCA_SHIRT** where `type = 'Shirt'`
+(CMS-only label — RHET uses `ACC`, `Beeli`, `LCA`, `Logo 1`, `Logo 2`).
+Clears blocking package/promo/release FKs first; request log rows are kept (`merchandise_id` → NULL).
+
+```bash
+node scripts/removeInvalidLcaShirtStockRows.js --dry-run --branch-id=1
+node scripts/removeInvalidLcaShirtStockRows.js --apply --branch-id=1
+```
+
+### `seedLearningKitCatalogFromRhet.js`
+
+Inserts **qty 0** CMS stock rows for every **Learning Kit** variant from RHET
+`GET /catalog` (same itemName/sku as [RHET Inventory admin](https://inventory.lca-app.com/admin/dashboard)).
+Read-only toward RHET — only writes `merchandisestbl`. Skips rows that already
+match `branch_id + Learning Kit + item_name + sku`.
+
+```bash
+node scripts/seedLearningKitCatalogFromRhet.js --dry-run --branch-id=1
+node scripts/seedLearningKitCatalogFromRhet.js --apply --branch-id=1
+node scripts/seedLearningKitCatalogFromRhet.js --dry-run --all-branches
+node scripts/seedLearningKitCatalogFromRhet.js --apply --all-branches
+```
+
+Requires `INVENTORY_API_URL` and `INVENTORY_INTEGRATION_KEY` in backend `.env`.
+
+### `seedBackpackStockFromRhet.js`
+
+Adds CMS **LCA Bag / Backpack** stock for a branch (bypasses Merchandise UI + Request Stock).
+
+**Default (legacy):** bumps qty on the blank type shell only — **does not** set `item_name` or `sku`
+(Pampanga / legacy merchandise page). No RHET call.
+
+**Optional `--from-rhet`:** backfill RHET `itemName` + `sku` from `/catalog`.
+
+```bash
+node scripts/seedBackpackStockFromRhet.js --dry-run --branch-id=6 --qty=50
+node scripts/seedBackpackStockFromRhet.js --apply --branch-id=6 --qty=50
+node scripts/seedBackpackStockFromRhet.js --dry-run --branch-name=Pampanga --qty=50
+```
+
+### `seedLearningKitStockLegacy.js`
+
+Adds CMS **Learning Kit** stock for a branch (bypasses Merchandise UI + Request Stock).
+
+**Legacy blank shell:** bumps qty on the existing type row only — **does not** set `item_name` or `sku`.
+Matches `Learning Kit`, `LCA Learning Kits`, and `LCA Learning Kit`. No RHET call.
+
+```bash
+node scripts/seedLearningKitStockLegacy.js --dry-run --branch-id=5 --qty=50
+node scripts/seedLearningKitStockLegacy.js --apply --branch-id=5 --qty=50
+node scripts/seedLearningKitStockLegacy.js --dry-run --branch-name=Guiguinto --qty=50
+```
+
+Malolos reset (remove RHET catalog rows, dedupe blank shells, set qty 50):
+
+```bash
+node scripts/seedLearningKitStockLegacy.js --dry-run --branch-id=1 --remove-rhet-seeds --dedupe-blank-shells --set-qty=50
+node scripts/seedLearningKitStockLegacy.js --apply --branch-id=1 --remove-rhet-seeds --dedupe-blank-shells --set-qty=50
+```
+
+### `repairLcaShirtLegacyType.js`
+
+Sets **Shirt** category stock rows to legacy piece type **`Shirt`** (instead of RHET logo labels ACC / Beeli / LCA / Logo 1 / Logo 2).
+
+```bash
+node scripts/repairLcaShirtLegacyType.js --dry-run --branch-id=1
+node scripts/repairLcaShirtLegacyType.js --apply --branch-id=1
 ```
 
 ### `clearAllMerchandise.js`
