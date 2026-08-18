@@ -234,12 +234,15 @@ node backend/scripts/repairOliviaSalesMovePhase9PaymentToPlan2Phase5.js --produc
 
 ### `migrateMerchandiseLabelsToRhet.js`
 
-Rewrites `merchandisestbl` category / gender / size labels to RHET-canonical values
-(`School Uniform`, `Male`/`Female`, `XS`/`S`/`M`/…). Run migration **129** first.
+Rewrites `merchandisestbl` category / gender / size / PE piece-type labels to RHET-canonical values
+(`School Uniform`, `Shirt`, `Learning Kit`, `Moving Up Kit`, `Male`/`Female`, `XS`/`S`/`M`/…,
+PE Uniform `Top`→`Shirt`, `Bottom`→`Pants`). Optional `--branch-id=N` for pilot branch (e.g. Malolos = 1).
+Run migration **129** first.
 
 ```bash
 node scripts/migrateMerchandiseLabelsToRhet.js --dry-run
-node scripts/migrateMerchandiseLabelsToRhet.js
+node scripts/migrateMerchandiseLabelsToRhet.js --dry-run --branch-id=1
+node scripts/migrateMerchandiseLabelsToRhet.js --apply --branch-id=1
 ```
 
 ### `clearAllMerchandise.js`

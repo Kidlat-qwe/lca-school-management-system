@@ -2,6 +2,9 @@
 
 Shared UI for the Merchandise module (Superadmin / Admin).
 
+**My Requests Date & Time** uses `formatDateTimeManila` (Asia/Manila, UTC+8). Do not use
+`toLocaleString()` — Coolify UTC ISO timestamps would show the wrong clock.
+
 ## MerchandiseReleaseLogsPanel
 
 Tab panel listing **released stocks** from `merchandise_release_logtbl`.
@@ -16,6 +19,9 @@ Tab panel listing **released stocks** from `merchandise_release_logtbl`.
 
 Sources: Package first payment (`package_enroll`) and Merchandise AR (`merchandise_ar`).
 
+Package items still owed after 0-stock enroll/pay are on **Pending issue**
+(`PackageMerchPendingQueue` in `components/packageMerch/`).
+
 ## RhetCategorySelect
 
 Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**
@@ -23,6 +29,8 @@ Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Typ
 
 Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy) — not a hard-coded
 CMS category list. Supports `onRetry` when RHET catalog fails temporarily.
+A stale/cached catalog is a warning (`describeInventoryCatalogLoad`); do not pass it as
+`error` or Request Stock Submit stays disabled.
 
 Options are usually filtered with `getCreateMerchandiseCategoryOptions(catalog, {
   excludeLearningKit: true,

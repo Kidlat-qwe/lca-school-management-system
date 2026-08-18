@@ -211,6 +211,9 @@ const StudentFullPaymentPanel = ({ studentId, focusClassId = null, focusClassNam
                 <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-3 sm:gap-4">
                   <MetaField label="Package">{row.package_name || '\u2014'}</MetaField>
                   <MetaField label="Class enrolled">{row.class_name || '\u2014'}</MetaField>
+                  <MetaField label="Class started date">
+                    {row.class_start_date ? formatDateManila(row.class_start_date) : '\u2014'}
+                  </MetaField>
                   <MetaField label="Level tag">{row.level_tag || '\u2014'}</MetaField>
                   <MetaField label="Branch">{row.branch_name || '\u2014'}</MetaField>
                   <MetaField label="Phase coverage">{coverage || '\u2014'}</MetaField>
@@ -228,6 +231,19 @@ const StudentFullPaymentPanel = ({ studentId, focusClassId = null, focusClassNam
                         </span>
                       ) : null}
                     </div>
+                  </MetaField>
+                  <MetaField label="Student status">
+                    {row.student_status === 'active' ? (
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-800">
+                        <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                        Active
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600">
+                        <span className="h-2 w-2 rounded-full bg-gray-400" />
+                        Inactive
+                      </span>
+                    )}
                   </MetaField>
                 </div>
               </section>
@@ -377,7 +393,20 @@ const StudentFullPaymentPanel = ({ studentId, focusClassId = null, focusClassNam
               ) : null}
 
               <section className="rounded-lg border border-gray-200 bg-white p-3 sm:p-4">
-                <h4 className="text-sm font-semibold text-gray-900 mb-3">Enrollment</h4>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-semibold text-gray-900">Enrollment</h4>
+                  {row.student_status === 'active' ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      Active
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-700 ring-1 ring-gray-200">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+                      Inactive
+                    </span>
+                  )}
+                </div>
                 {enrollments.length === 0 ? (
                   <p className="text-sm text-gray-500">No class enrollment rows for this settlement.</p>
                 ) : (
@@ -396,7 +425,11 @@ const StudentFullPaymentPanel = ({ studentId, focusClassId = null, focusClassNam
                           {phase.phase_number != null ? `Phase ${phase.phase_number}` : 'Phase'}
                           {' · '}
                           {label}
-                          {phase.enrolled ? ` · ${formatDateManila(phase.enrolled)}` : ''}
+                          {phase.phase_start_date
+                            ? ` · ${formatDateManila(phase.phase_start_date)}`
+                            : phase.enrolled
+                              ? ` · ${formatDateManila(phase.enrolled)}`
+                              : ''}
                         </span>
                       );
                     })}

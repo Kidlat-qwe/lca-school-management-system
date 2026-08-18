@@ -62,9 +62,10 @@ Name heuristics are **fallback only** when `categoryKind` is missing
 | Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `Shirt`, `Backpack`, … |
 | Gender | `Male`, `Female`, `Unisex` |
 | Size | `XS` … `5XL`, `Teen` |
-| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2` |
+| Type | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `Set` |
 
 Migration **134** allows `Logo 1` / `Logo 2` on merchandise + request-log type CHECKs.
+Migration **137** allows RHET type `Set` (Request Stock was failing with check_request_type).
 Legacy labels (`LCA Uniform`, `Men`, `Extra Small`) are still recognized on read
 and normalized on write. Migration **129** + script
 `migrateMerchandiseLabelsToRhet.js` rewrite existing rows.
@@ -124,7 +125,7 @@ row (`item_name`/`sku` null). Also `isUniformLikeCategory` wrongly treated any
 | `INVENTORY_WEBHOOK_URL` | Recommended | e.g. `https://api-cms.lca-app.com/api/webhooks/inventory` |
 | `INVENTORY_SYSTEM_CODE` | No (default `PSMS`) | Prefix for `externalReference` |
 | `INVENTORY_HTTP_TIMEOUT_MS` | No (default `45000`) | Per-request abort timeout |
-| `INVENTORY_CATALOG_CACHE_MS` | No (default `120000`) | In-memory catalog TTL; `0` disables. On RHET catalog 5xx, CMS may serve a stale cache so Request Stock still opens. |
+| `INVENTORY_CATALOG_CACHE_MS` | No (default `120000`) | In-memory catalog TTL; `0` disables. On RHET catalog 5xx, CMS may serve a stale cache (`meta.stale`) so Request Stock still opens. Frontend must not treat that as a blocking catalog error. |
 
 \* Set one of the two key variables.
 
@@ -189,7 +190,9 @@ for normal fulfills — that script is one-time legacy cleanup only.
 | `130_...` | Ensure `merchandiserequestlogtbl.updated_at` exists (PSMS-33 500 fix) |
 | `131_...` | `inventory_components_json` (Learning Kit components[] snapshot) |
 | `133_...` | `merchandisestbl.item_name`, `sku` (non-uniform / kit identity under category) |
+| `134_...` | Allow `Logo 1` / `Logo 2` on type CHECKs (LCA_SHIRT) |
 | `135_...` | Document lifecycle statuses (Pending/Shipped/Delivered/Returned) |
+| `137_...` | Allow `Set` on type CHECKs (uniform Request Stock) |
 
 ## Repair stuck DELIVERED (e.g. PSMS-33)
 
@@ -216,9 +219,24 @@ WHERE inventory_request_id IS NOT NULL
 
 Then confirm each against RHET; if RHET is DELIVERED, run sync/repair above.
 
+## Package freebies keep / swap (enroll)
+
+When a package includes non-uniform freebies (e.g. Backpack), Branch Admin can
+**Keep** the included item (default) or **Swap** to another item at enroll time
+(same package price). Zero-stock items are allowed; they appear on Merchandise →
+**Pending issue** until restocked and issued.
+
+Persisted on `selected_merchandise[].action` / `original_type_name` / `reason`
+and invoice `MERCH_PENDING` JSON — no schema change. First payment issues
+in-stock keep (`issue`) / swap lines; remainder is a staff fulfill queue.
+
+See `frontend/src/utils/packageMerchSwap/`,
+`frontend/src/components/packageMerch/`, and
+`backend/lib/packageMerchFulfillment/`.
+
 ## Regression checklist
 
-- `node backend/tests/runMerchRequestSql.test.js` — strip/retry helper
+- `node backend/tests/packageMerchSwapLifecycle.test.js` — keep/swap + pending-line remainder
 - `node backend/tests/merchandiseFulfillTypeMatch.test.js` — category vs itemName
 - `node backend/tests/stockRequestLifecycle.test.js` — shipped/delivered/returned helpers
 - `node backend/tests/inventoryBranchNamePayload.test.js` — `branchName` + `batchReference` + Return Stock `PSMS-RET-*`

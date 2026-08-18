@@ -1,6 +1,7 @@
 import express from 'express';
 import { body, param, query } from 'express-validator';
 import { query as dbQuery, getClient } from '../config/database.js';
+import { mapRowTimestampsToManila, MERCH_REQUEST_MANILA_TIMESTAMP_SQL } from '../utils/dateUtils.js';
 import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import {
@@ -342,7 +343,7 @@ async function insertLocalMerchandiseRequestRow({
     result.rows[0].inventory_components_json = inventory_components_json;
   }
 
-  return result.rows[0];
+  return mapRowTimestampsToManila(result.rows[0]);
 }
 
 function normalizeIncomingRequestLine(body, { inventoryOn, requested_quantity }) {
@@ -427,6 +428,7 @@ router.get(
       let sql = `
         SELECT 
           mr.*,
+          ${MERCH_REQUEST_MANILA_TIMESTAMP_SQL},
           u.full_name as requested_by_name,
           u.email as requested_by_email,
           b.branch_name as requested_branch_name,
@@ -490,11 +492,11 @@ router.get(
           row.reviewed_by_name != null ? String(row.reviewed_by_name).trim() : '';
         const approvedBy = inventoryProcessedBy || reviewedByName || null;
 
-        return {
+        return mapRowTimestampsToManila({
           ...row,
           inventory_processed_by: inventoryProcessedBy || null,
           approved_by: approvedBy,
-        };
+        });
       });
 
       res.json({
@@ -649,6 +651,7 @@ router.get(
       let sql = `
         SELECT 
           mr.*,
+          ${MERCH_REQUEST_MANILA_TIMESTAMP_SQL},
           u.full_name as requested_by_name,
           u.email as requested_by_email,
           b.branch_name as requested_branch_name,
@@ -683,7 +686,7 @@ router.get(
 
       res.json({
         success: true,
-        data: result.rows[0],
+        data: mapRowTimestampsToManila(result.rows[0]),
       });
     } catch (error) {
       next(error);
@@ -1621,14 +1624,14 @@ router.post(
           return res.json({
             success: true,
             message: 'Request already delivered — backfilled Approved By from RHET',
-            data: refreshed.rows[0],
+            data: mapRowTimestampsToManila(refreshed.rows[0]),
           });
         }
         await client.query('COMMIT');
         return res.json({
           success: true,
           message: 'Request is already delivered and stock was applied',
-          data: request,
+          data: mapRowTimestampsToManila(request),
         });
       }
 
@@ -1682,7 +1685,7 @@ router.post(
         return res.json({
           success: true,
           message: 'RHET status is SHIPPED — local request marked Shipped; stock is only added when DELIVERED',
-          data: refreshed.rows[0],
+          data: mapRowTimestampsToManila(refreshed.rows[0]),
         });
       }
 
@@ -1691,11 +1694,11 @@ router.post(
         return res.json({
           success: true,
           message: `RHET status is ${remoteStatus || 'unknown'} — stock is only added when DELIVERED`,
-          data: {
+          data: mapRowTimestampsToManila({
             ...request,
             inventory_status: storeStatus,
             inventory_processed_by: processedBy || request.inventory_processed_by,
-          },
+          }),
         });
       }
 
@@ -1757,7 +1760,7 @@ router.post(
       res.json({
         success: true,
         message: 'RHET delivery synced — branch stock updated',
-        data: updated.rows[0],
+        data: mapRowTimestampsToManila(updated.rows[0]),
         stockResult,
       });
     } catch (error) {
@@ -1827,7 +1830,7 @@ router.post(
         return res.json({
           success: true,
           message: 'Request is already delivered and stock was applied',
-          data: request,
+          data: mapRowTimestampsToManila(request),
           alreadyDelivered: true,
         });
       }
@@ -1975,7 +1978,7 @@ router.post(
         success: true,
         message:
           'Receipt confirmed. RHET Inventory moved the request to Delivered and branch stock was updated.',
-        data: updated.rows[0],
+        data: mapRowTimestampsToManila(updated.rows[0]),
         stockResult,
       });
     } catch (error) {
@@ -2117,7 +2120,7 @@ router.put(
       res.json({
         success: true,
         message: 'Merchandise request approved successfully',
-        data: updateResult.rows[0],
+        data: mapRowTimestampsToManila(updateResult.rows[0]),
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -2203,7 +2206,7 @@ router.put(
       res.json({
         success: true,
         message: 'Merchandise request rejected',
-        data: result.rows[0],
+        data: mapRowTimestampsToManila(result.rows[0]),
       });
     } catch (error) {
       next(error);
@@ -2264,7 +2267,7 @@ router.put(
       res.json({
         success: true,
         message: 'Merchandise request cancelled',
-        data: result.rows[0],
+        data: mapRowTimestampsToManila(result.rows[0]),
       });
     } catch (error) {
       next(error);

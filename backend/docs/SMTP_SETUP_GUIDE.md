@@ -1,6 +1,6 @@
 # SMTP Email Configuration Guide
 
-> **Full guide (SMTP + SendGrid, production & local):** see [`docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md`](../../docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md) — use that document for step-by-step setup your team can follow end-to-end.
+> **Full guide (SMTP + Brevo, production & local):** see [`docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md`](../../docs/EMAIL_SMTP_AND_SENDGRID_SETUP.md) — use that document for step-by-step setup your team can follow end-to-end.
 
 This guide will help you set up SMTP email service for sending invoice emails to students when they make payments.
 
@@ -185,17 +185,17 @@ SMTP_FROM=noreply@yourdomain.com
 
 If `node scripts/diagnoseEodEmail.js` shows **BLOCKED** for ports 465 and 587, your VPS provider blocks outbound SMTP. SpaceMail/cPanel SMTP will **not** work from that server.
 
-**Recommended fix — SendGrid (HTTPS, port 443):**
+**Recommended fix — Brevo (HTTPS, port 443):**
 
-1. Sign up at [SendGrid](https://sendgrid.com) (free tier available).
-2. **Settings → Sender Authentication → Single Sender Verification** — verify `lca@little-champion.com`.
-3. **Settings → API Keys** — create a key with **Mail Send** permission.
-4. Add to `backend/.env` on Linode:
+1. Verify sender in Brevo: `no-reply@little-champion.com`.
+2. Create a transactional API key.
+3. Add to `backend/.env` on Linode:
 
 ```env
-EMAIL_PROVIDER=sendgrid
-SENDGRID_API_KEY=SG.your_api_key_here
-SENDGRID_FROM_EMAIL=lca@little-champion.com
+EMAIL_PROVIDER=brevo
+BREVO_API_KEY=xkeysib-your_api_key_here
+BREVO_FROM_EMAIL=no-reply@little-champion.com
+BREVO_FROM_NAME=Little Champions Academy Inc.
 ```
 
 5. Restart the API and run:
@@ -204,7 +204,7 @@ SENDGRID_FROM_EMAIL=lca@little-champion.com
 node scripts/diagnoseEodEmail.js --send-test your@email.com
 ```
 
-Local development can keep using SpaceMail SMTP; production on Linode should use SendGrid.
+Local development can keep using SpaceMail SMTP; production on Linode should use Brevo.
 
 ### Error: "Connection timeout" (general)
 - **Solution**: Check your firewall settings

@@ -20,6 +20,7 @@ import {
   formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import PackageMerchPendingQueue from '../../components/packageMerch/PackageMerchPendingQueue';
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
@@ -28,7 +29,10 @@ import FixedTablePagination, {
   TablePaginationSummary,
 } from '../../components/table/FixedTablePagination';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
-import { unwrapCatalogPayload } from '../../utils/merchandiseRequests/catalogOptions';
+import {
+  unwrapCatalogPayload,
+  describeInventoryCatalogLoad,
+} from '../../utils/merchandiseRequests/catalogOptions';
 import {
   getCreateMerchandiseCategoryOptions,
   applyCreateTypeCategoryDefaults,
@@ -54,7 +58,7 @@ import {
 } from '../../utils/merchandiseStock';
 
 /** Superadmin "Add Merchandise Type" control. Set true to re-enable. */
-const ADD_MERCHANDISE_TYPE_ENABLED = false;
+const ADD_MERCHANDISE_TYPE_ENABLED = true;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -99,13 +103,14 @@ const Merchandise = () => {
   const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
-  const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'requests' | 'logs'
+  const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'requests' | 'pending' | 'logs'
   const [requestStatusModule, setRequestStatusModule] = useState(DEFAULT_REQUEST_STATUS_MODULE);
   /** Page number per status module so switching tabs keeps each module's page. */
   const [requestModulePageByStatus, setRequestModulePageByStatus] = useState({});
   const [inventoryCatalog, setInventoryCatalog] = useState({ categories: [], items: [] });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  const [catalogWarning, setCatalogWarning] = useState('');
   /** false = inventory env missing → legacy free-text create type */
   const [inventoryIntegrationEnabled, setInventoryIntegrationEnabled] = useState(true);
   const [pendingCategoryName, setPendingCategoryName] = useState('');
@@ -114,6 +119,7 @@ const Merchandise = () => {
   const fetchInventoryCatalog = async () => {
     setCatalogLoading(true);
     setCatalogError('');
+    setCatalogWarning('');
     const attempt = async () => {
       const response = await apiRequest('/merchandise-requests/inventory/catalog');
       return unwrapCatalogPayload(response);
@@ -127,6 +133,7 @@ const Merchandise = () => {
           setInventoryIntegrationEnabled(false);
           setInventoryCatalog({ categories: [], items: [] });
           setCatalogError('');
+          setCatalogWarning('');
           return;
         }
         const msg = String(firstErr?.message || '').toLowerCase();
@@ -144,23 +151,19 @@ const Merchandise = () => {
       }
       setInventoryIntegrationEnabled(true);
       setInventoryCatalog(catalog);
-      if (!catalog.categories.length) {
-        setCatalogError(
-          'No RHET Inventory categories returned. Check inventory integration or try again.'
-        );
-      } else if (catalog?.meta?.stale || catalog?.meta?.cached) {
-        setCatalogError(
-          'Loaded a recent cached RHET catalog (inventory is slow right now). You can continue, or tap Retry catalog.'
-        );
-      }
+      const outcome = describeInventoryCatalogLoad(catalog);
+      setCatalogError(outcome.error);
+      setCatalogWarning(outcome.warning);
     } catch (err) {
       if (isInventoryIntegrationDisabledError(err)) {
         setInventoryIntegrationEnabled(false);
         setInventoryCatalog({ categories: [], items: [] });
         setCatalogError('');
+        setCatalogWarning('');
       } else {
         setInventoryIntegrationEnabled(true);
         setInventoryCatalog({ categories: [], items: [] });
+        setCatalogWarning('');
         setCatalogError(
           err.message ||
             'Could not load RHET Inventory categories. Check inventory integration settings.'
@@ -218,6 +221,7 @@ const Merchandise = () => {
     const tab = params.get('notificationTab') || params.get('tab');
     if (tab === 'requests') setActiveTab('requests');
     if (tab === 'logs') setActiveTab('logs');
+    if (tab === 'pending') setActiveTab('pending');
   }, [location.search]);
 
   const fetchBranches = async () => {
@@ -1240,8 +1244,8 @@ const Merchandise = () => {
                             {formErrors.merchandise_name && (
                               <p className="mt-1 text-sm text-red-600">{formErrors.merchandise_name}</p>
                             )}
-                            {catalogError && createTypeCategoryOptions.length > 0 && (
-                              <p className="text-xs text-amber-700 mt-1">{catalogError}</p>
+                            {catalogWarning && createTypeCategoryOptions.length > 0 && (
+                              <p className="text-xs text-amber-700 mt-1">{catalogWarning}</p>
                             )}
                           </div>
                         ) : (
@@ -1718,7 +1722,7 @@ const Merchandise = () => {
                     <div>
                       <span className="text-gray-500">Date:</span>
                       <p className="font-medium text-gray-900">
-                        {new Date(selectedRequest.created_at).toLocaleString()}
+                        {formatDateTimeManila(selectedRequest.created_at)}
                       </p>
                     </div>
                   </div>
@@ -1888,7 +1892,7 @@ const Merchandise = () => {
                     <div>
                       <span className="text-gray-500">Date:</span>
                       <p className="font-medium text-gray-900">
-                        {new Date(selectedRequest.created_at).toLocaleString()}
+                        {formatDateTimeManila(selectedRequest.created_at)}
                       </p>
                     </div>
                     <div>
@@ -1918,7 +1922,7 @@ const Merchandise = () => {
                         <div>
                           <span className="text-gray-500">Reviewed at:</span>
                           <p className="font-medium text-gray-900">
-                            {new Date(selectedRequest.reviewed_at).toLocaleString()}
+                            {formatDateTimeManila(selectedRequest.reviewed_at)}
                           </p>
                         </div>
                       )}
@@ -2658,6 +2662,17 @@ const Merchandise = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('pending')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'pending'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Pending issue
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('logs')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'logs'
@@ -2752,6 +2767,12 @@ const Merchandise = () => {
         </div>
       )}
         </>
+      ) : activeTab === 'pending' ? (
+        <PackageMerchPendingQueue
+          branchId={globalBranchId || null}
+          showBranchColumn={!globalBranchId}
+          active={activeTab === 'pending'}
+        />
       ) : activeTab === 'logs' ? (
         <MerchandiseReleaseLogsPanel
           branchId={globalBranchId || ''}
@@ -2856,7 +2877,7 @@ const Merchandise = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDateTimeManila(request.created_at)}
+                          {formatDateTimeManila(request.created_at, { hour12: true })}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <RequestActionsMenu

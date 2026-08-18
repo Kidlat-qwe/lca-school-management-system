@@ -8,7 +8,7 @@ import {
   sortMatrixStudentsByEnrollmentDate,
   sortMonthMatrixStudentsByStatus,
 } from '../../utils/enrollmentMatrixSort';
-import { useEnrollmentMatrixStudentHistory } from '../../utils/enrollmentMatrixStudentHistory';
+import { useEnrollmentMatrixStudentHistory } from '../../utils/enrollmentMatrixStudentHistory/index.js';
 import { computeMatrixColumnSequences } from '../../utils/enrollmentMatrixStatusSequence';
 import EnrollmentMatrixCellBadge from './EnrollmentMatrixCellBadge';
 import EnrollmentMatrixStatusLegend from './EnrollmentMatrixStatusLegend';

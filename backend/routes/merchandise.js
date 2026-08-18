@@ -2,8 +2,12 @@ import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
-import { query } from '../config/database.js';
+import { query, getClient } from '../config/database.js';
 import { PACKAGE_UNIFORM_TYPE_NAMES } from '../lib/merchandiseReleaseLog.js';
+import {
+  issuePendingPackageMerchLine,
+  listPendingPackageMerch,
+} from '../lib/packageMerchFulfillment/index.js';
 import { isUniformLikeCategory } from '../services/inventory/inventoryFieldMapping.js';
 
 const router = express.Router();
@@ -177,6 +181,108 @@ router.get(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/merchandise/package-pending
+ * Package included merch still owed (enrolled at 0 stock / partial issue).
+ */
+router.get(
+  '/package-pending',
+  [
+    queryValidator('branch_id').optional().isInt().withMessage('Branch ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const requestedBranch =
+        req.query.branch_id != null ? parseInt(String(req.query.branch_id), 10) : null;
+      const branchId =
+        req.user.userType === 'Superadmin'
+          ? requestedBranch
+          : req.user.branchId || requestedBranch;
+      const data = await listPendingPackageMerch(query, { branchId });
+      res.json({ success: true, data });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/merchandise/package-pending/issue
+ * Staff fulfill one pending package merch line after restock.
+ */
+router.post(
+  '/package-pending/issue',
+  [
+    body('invoice_id').isInt({ min: 1 }).withMessage('invoice_id is required'),
+    body('student_id').isInt({ min: 1 }).withMessage('student_id is required'),
+    body('line_key').optional({ nullable: true, checkFalsy: true }).isString(),
+    body('merchandise_id').optional({ nullable: true }).isInt({ min: 1 }),
+    body('size').optional({ nullable: true, checkFalsy: true }).isString(),
+    body('category').optional({ nullable: true, checkFalsy: true }).isString(),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const invoiceRes = await client.query(
+        'SELECT branch_id FROM invoicestbl WHERE invoice_id = $1',
+        [req.body.invoice_id]
+      );
+      const invoiceBranch = invoiceRes.rows[0]?.branch_id;
+      if (
+        req.user.userType !== 'Superadmin' &&
+        req.user.branchId &&
+        invoiceBranch &&
+        Number(invoiceBranch) !== Number(req.user.branchId)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({
+          success: false,
+          message: 'You can only issue merchandise for your branch',
+        });
+      }
+
+      const outcome = await issuePendingPackageMerchLine(client, {
+        invoiceId: Number(req.body.invoice_id),
+        studentId: Number(req.body.student_id),
+        lineKey: req.body.line_key || null,
+        merchandiseId: req.body.merchandise_id != null ? Number(req.body.merchandise_id) : null,
+        size: req.body.size || null,
+        category: req.body.category || null,
+        createdBy: req.user.userId || req.user.user_id || null,
+      });
+
+      if (!outcome.ok) {
+        await client.query('ROLLBACK');
+        return res.status(outcome.status || 400).json({
+          success: false,
+          message: outcome.message,
+        });
+      }
+
+      await client.query('COMMIT');
+      res.json({
+        success: true,
+        message: 'Package merchandise issued',
+        data: outcome.result,
+      });
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
+      next(error);
+    } finally {
+      client.release();
     }
   }
 );

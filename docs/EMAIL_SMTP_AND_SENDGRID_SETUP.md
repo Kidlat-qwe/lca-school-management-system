@@ -1,4 +1,4 @@
-# Email Setup Guide — SMTP & SendGrid (PSMS)
+# Email Setup Guide — SMTP & Brevo (PSMS)
 
 Step-by-step instructions for configuring outbound email in the **Physical School Management System (PSMS)** backend.
 
@@ -10,7 +10,7 @@ Step-by-step instructions for configuring outbound email in the **Physical Schoo
 
 1. [Which method should I use?](#1-which-method-should-i-use)
 2. [Where to put settings](#2-where-to-put-settings)
-3. [SendGrid setup (recommended for production / Linode)](#3-sendgrid-setup-recommended-for-production--linode)
+3. [Brevo setup (recommended for production / Linode)](#3-brevo-setup-recommended-for-production--linode)
 4. [SMTP setup (local dev or servers that allow SMTP ports)](#4-smtp-setup-local-dev-or-servers-that-allow-smtp-ports)
 5. [Optional: EOD email recipients](#5-optional-eod-email-recipients)
 6. [Test your configuration](#6-test-your-configuration)
@@ -24,16 +24,16 @@ Step-by-step instructions for configuring outbound email in the **Physical Schoo
 
 | Environment | Recommended method | Why |
 |---|---|---|
-| **Production server (Linode / VPS)** | **SendGrid** | Most VPS providers **block outbound SMTP ports 25, 465, and 587**. SendGrid uses **HTTPS (port 443)**, which is not blocked. |
-| **Local development (your laptop)** | **SMTP** (Gmail App Password or hosting email) | Easier to set up; SMTP works from home/office networks. |
+| **Production server (Linode / VPS)** | **Brevo** | Most VPS providers **block outbound SMTP ports 25, 465, and 587**. Brevo uses **HTTPS (port 443)**, which is not blocked. |
+| **Local development (your laptop)** | **SMTP** (Gmail App Password or hosting email) or Brevo | SMTP works from home/office networks. Brevo also works locally. |
 | **Production with unblocked SMTP** | SMTP (SpaceMail / cPanel / custom domain) | Only if port check passes (see [Test your configuration](#6-test-your-configuration)). |
 
 **Rule of thumb**
 
-- Linode / cloud VPS → **SendGrid**
-- Your PC → **SMTP** (Gmail or `mail.yourdomain.com`)
+- Linode / cloud VPS → **Brevo**
+- Your PC → **SMTP** or **Brevo**
 
-The backend supports **both**. You configure one (or both) in `backend/.env`. With default `EMAIL_PROVIDER=auto`, **SendGrid wins if `SENDGRID_API_KEY` is set**; otherwise SMTP is used.
+The backend supports **both**. You configure one (or both) in `backend/.env`. With default `EMAIL_PROVIDER=auto`, **Brevo wins if `BREVO_API_KEY` is set**; otherwise SMTP is used.
 
 ---
 
@@ -59,73 +59,51 @@ backend/.env
 
 ---
 
-## 3. SendGrid setup (recommended for production / Linode)
+## 3. Brevo setup (recommended for production / Linode)
 
-### Step 3.1 — Create a SendGrid account
+Transactional send API: [Send a transactional email](https://developers.brevo.com/docs/send-a-transactional-email).
 
-1. Go to [https://sendgrid.com](https://sendgrid.com).
-2. Sign up (free tier is enough to start).
-3. Complete email verification SendGrid sends you.
-4. Complete any account setup wizard (company name, etc.).
+### Step 3.1 — Verify the sender in Brevo
 
-### Step 3.2 — Verify your sender address
+Brevo **rejects** mail if the **From** address is not a verified sender.
 
-SendGrid will **reject** mail if the **From** address is not verified.
+Preferred production sender:
 
-**Option A — Single Sender Verification (fastest, good for testing)**
+- **From Name:** `Little Champions Academy Inc.`
+- **From Email:** `no-reply@little-champion.com`
 
-1. In SendGrid: **Settings → Sender Authentication → Single Sender Verification**.
-2. Click **Create New Sender**.
-3. Fill in:
-   - **From Name:** `Little Champions Academy` (or your school name)
-   - **From Email Address:** the address you want emails to come from (e.g. `lca@little-champion.com` or `noreply@yourdomain.com`)
-   - Reply-to, address, etc. as required
-4. Submit and **open the verification email** SendGrid sends to that address.
-5. Click the verify link. Status must show **Verified**.
+See [Create a new sender](https://help.brevo.com/hc/en-us/articles/208836149-Create-a-new-sender-From-name-and-From-email). Authenticate `little-champion.com` in DNS (SPF/DKIM) when possible.
 
-**Option B — Domain Authentication (best for production)**
+### Step 3.2 — Create an API key
 
-1. **Settings → Sender Authentication → Authenticate Your Domain**.
-2. Choose your DNS host and follow SendGrid’s DNS record instructions (CNAME records for DKIM).
-3. Wait until SendGrid shows the domain as **Verified**.
-4. You can then send from any address `@yourdomain.com` (e.g. `noreply@yourdomain.com`).
+1. In Brevo: **SMTP & API → API Keys**.
+2. Create a key with transactional email permission.
+3. Copy the key immediately. It starts with `xkeysib-` and is shown **only once**.
 
-> Use **Option B** on production if you control DNS. It improves deliverability and reduces spam folder issues.
+Do **not** put API keys in git or chat. Store them only in `backend/.env`.
 
-### Step 3.3 — Create an API key
-
-1. **Settings → API Keys → Create API Key**.
-2. Name: e.g. `PSMS Production`.
-3. Permissions: **Restricted Access** → enable **Mail Send** → **Full Access** (or at minimum Mail Send).
-4. Click **Create & View**.
-5. **Copy the key immediately.** It starts with `SG.` and is shown **only once**.
-
-### Step 3.4 — Add variables to `backend/.env`
+### Step 3.3 — Add variables to `backend/.env`
 
 Open `backend/.env` on the **server** (Linode), not only on your laptop.
 
 Add or update:
 
 ```env
-EMAIL_PROVIDER=sendgrid
-SENDGRID_API_KEY=SG.paste_your_full_api_key_here
-SENDGRID_FROM_EMAIL=lca@little-champion.com
+EMAIL_PROVIDER=brevo
+BREVO_API_KEY=xkeysib-paste_your_full_api_key_here
+BREVO_FROM_EMAIL=no-reply@little-champion.com
+BREVO_FROM_NAME=Little Champions Academy Inc.
 ```
 
-Replace:
+**Optional:** If you also have SMTP variables in `.env` for local use, `EMAIL_PROVIDER=brevo` forces Brevo so SMTP is ignored.
 
-- `SG.paste_your_full_api_key_here` → your real API key from Step 3.3.
-- `lca@little-champion.com` → the **exact verified** sender from Step 3.2.
-
-**Optional:** If you also have SMTP variables in `.env` for local use, `EMAIL_PROVIDER=sendgrid` forces SendGrid on the server so SMTP is ignored.
-
-### Step 3.5 — Restart the API
+### Step 3.4 — Restart the API
 
 Restart the Node backend so it reloads `.env`.
 
-On startup you should see SendGrid-related success in logs when email is verified (see Section 6).
+On startup you should see: `Brevo API key is valid (HTTPS — works when SMTP ports are blocked)`.
 
-### Step 3.6 — Confirm it works
+### Step 3.5 — Confirm it works
 
 From the `backend/` folder:
 
@@ -253,7 +231,7 @@ SMTP_FROM=noreply@yourdomain.com
 node scripts/diagnoseEodEmail.js --send-test your.email@example.com
 ```
 
-If you see **BLOCKED** for ports 465 and 587 on the server, **stop using SMTP on that server** and switch to [SendGrid (Section 3)](#3-sendgrid-setup-recommended-for-production--linode).
+If you see **BLOCKED** for ports 465 and 587 on the server, **stop using SMTP on that server** and switch to [Brevo (Section 3)](#3-brevo-setup-recommended-for-production--linode).
 
 ---
 
@@ -286,7 +264,7 @@ node scripts/diagnoseEodEmail.js
 
 This prints:
 
-- Active provider (`sendgrid` or `smtp`)
+- Active provider (`brevo` or `smtp`)
 - SMTP port reachability (OPEN vs BLOCKED)
 - Superadmin recipient list
 - Whether the EOD template is enabled
@@ -301,10 +279,10 @@ Replace `you@example.com` with your real inbox.
 
 ### 6.3 — What success looks like
 
-**SendGrid:**
+**Brevo:**
 
 ```
-✅ SendGrid API key is valid (HTTPS — works when SMTP ports are blocked)
+✅ Brevo API key is valid (HTTPS — works when SMTP ports are blocked)
 ✅ Email transport verify OK
 ✅ Test email sent
 ```
@@ -340,7 +318,7 @@ Templates can be toggled under **Superadmin → Settings → Templates**.
 
 **Fix:**
 
-- **SendGrid:** Set `SENDGRID_API_KEY` and `SENDGRID_FROM_EMAIL`.
+- **Brevo:** Set `BREVO_API_KEY` and `BREVO_FROM_EMAIL`.
 - **SMTP:** Set `SMTP_HOST`, `SMTP_USER`, and `SMTP_PASSWORD`.
 - Restart the API after saving.
 
@@ -350,19 +328,19 @@ Templates can be toggled under **Superadmin → Settings → Templates**.
 
 **Cause:** VPS provider (common on Linode) blocks outbound SMTP.
 
-**Fix:** Use SendGrid ([Section 3](#3-sendgrid-setup-recommended-for-production--linode)). Do not keep retrying SMTP on that server.
+**Fix:** Use Brevo ([Section 3](#3-brevo-setup-recommended-for-production--linode)). Do not keep retrying SMTP on that server.
 
 ---
 
-### SendGrid API 403 / 401
+### Brevo API 401 / 403 / 400
 
 **Causes & fixes:**
 
 | Error | Fix |
 |---|---|
-| Invalid API key | Create a new key; paste full `SG....` value with no extra spaces |
-| Key missing Mail Send permission | Recreate key with **Mail Send** access |
-| From address not verified | Complete Single Sender or Domain Authentication in SendGrid |
+| Invalid API key | Create a new key; paste full `xkeysib-...` value with no extra spaces |
+| Sender not verified | Add `no-reply@little-champion.com` as an active sender in Brevo |
+| 400 invalid sender | `BREVO_FROM_EMAIL` must match a verified sender exactly |
 
 ---
 
@@ -380,7 +358,7 @@ Templates can be toggled under **Superadmin → Settings → Templates**.
 
 **Fix:**
 
-- Prefer SendGrid **Domain Authentication** (DKIM + SPF via DNS).
+- Prefer Brevo **domain authentication** (DKIM + SPF via DNS).
 - Use a professional `@yourdomain.com` sender, not a personal Gmail, for production.
 - Ask recipients to mark as "Not spam" once.
 
@@ -406,9 +384,9 @@ The backend **uses `SMTP_USER` as the From address** when they differ. Set both 
 ## 8. Security checklist
 
 - [ ] `.env` is listed in `.gitignore` and never committed
-- [ ] SendGrid API keys are **restricted** (Mail Send only)
+- [ ] Brevo API keys are stored only in `.env` (never in git)
 - [ ] Rotate keys if leaked or shared in chat by mistake
-- [ ] Production uses SendGrid or verified domain SMTP — not a personal Gmail
+- [ ] Production uses Brevo or verified domain SMTP — not a personal Gmail
 - [ ] Do not post API keys, App Passwords, or mailbox passwords in tickets/screenshots
 
 ---
@@ -417,9 +395,11 @@ The backend **uses `SMTP_USER` as the From address** when they differ. Set both 
 
 | Variable | Required when | Example |
 |---|---|---|
-| `EMAIL_PROVIDER` | Optional | `auto` (default), `sendgrid`, or `smtp` |
-| `SENDGRID_API_KEY` | SendGrid | `SG.xxxxx` |
-| `SENDGRID_FROM_EMAIL` | SendGrid | `lca@little-champion.com` |
+| `EMAIL_PROVIDER` | Optional | `auto` (default), `brevo`, or `smtp` |
+| `BREVO_API_KEY` | Brevo | `xkeysib-xxxxx` |
+| `BREVO_FROM_EMAIL` | Brevo | `no-reply@little-champion.com` |
+| `BREVO_FROM_NAME` | Brevo | `Little Champions Academy Inc.` |
+| `EMAIL_LOGO_URL` | Optional | `https://cms.little-champion.com/LCA%20Icon.png` |
 | `SMTP_HOST` | SMTP | `smtp.gmail.com` or `mail.yourdomain.com` |
 | `SMTP_PORT` | SMTP | `587` or `465` |
 | `SMTP_SECURE` | SMTP | `false` for 587, `true` for 465 |
@@ -428,12 +408,14 @@ The backend **uses `SMTP_USER` as the From address** when they differ. Set both 
 | `SMTP_FROM` | SMTP | Same as `SMTP_USER` (recommended) |
 | `EOD_STAKEHOLDER_EMAILS` | Optional | `a@x.com,b@y.com` |
 
-### Example — Production (Linode + SendGrid)
+### Example — Production (Linode + Brevo)
 
 ```env
-EMAIL_PROVIDER=sendgrid
-SENDGRID_API_KEY=SG.your_key_here
-SENDGRID_FROM_EMAIL=lca@little-champion.com
+EMAIL_PROVIDER=brevo
+BREVO_API_KEY=xkeysib-your_key_here
+BREVO_FROM_EMAIL=no-reply@little-champion.com
+BREVO_FROM_NAME=Little Champions Academy Inc.
+EMAIL_LOGO_URL=https://cms.little-champion.com/LCA%20Icon.png
 EOD_STAKEHOLDER_EMAILS=owner@little-champion.com
 ```
 
@@ -456,7 +438,7 @@ SMTP_FROM=dev@gmail.com
 1. Run `node scripts/diagnoseEodEmail.js` and copy the **full terminal output** (redact API keys).
 2. Confirm you restarted the API **after** editing `.env`.
 3. Confirm the test message is not in **Spam/Junk**.
-4. For SendGrid issues, check **Activity → Email Activity** in the SendGrid dashboard for bounce/block reasons.
+4. For Brevo issues, check **Transactional → Logs** in the Brevo dashboard for bounce/block reasons.
 
 ---
 

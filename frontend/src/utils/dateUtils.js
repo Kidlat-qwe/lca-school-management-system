@@ -4,6 +4,38 @@
  */
 
 const MANILA_TZ = 'Asia/Manila';
+/** Philippines has no DST — always UTC+8. */
+const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+const pad2 = (value) => String(value).padStart(2, '0');
+
+/** Calendar parts in Asia/Manila from an absolute instant (05:24Z → 13:24). */
+export const getManilaDateTimeParts = (date) => {
+  const manila = new Date(date.getTime() + MANILA_OFFSET_MS);
+  return {
+    year: manila.getUTCFullYear(),
+    month: manila.getUTCMonth() + 1,
+    day: manila.getUTCDate(),
+    hour: manila.getUTCHours(),
+    minute: manila.getUTCMinutes(),
+    second: manila.getUTCSeconds(),
+  };
+};
 
 /** Shared Intl options for date-only display. */
 export const DISPLAY_DATE_OPTIONS = {
@@ -26,7 +58,14 @@ export const parseDateForDisplay = (dateInput) => {
 
   const str = String(dateInput).trim();
 
-  // YYYY-MM-DD HH:MM:SS — API timestamps from payment logs (UTC stored, formatted as Manila wall clock)
+  // Absolute instants from JSON Date / ISO (`...Z` or `...+08:00`).
+  // Coolify serializes pg timestamps as UTC ISO; do not re-tag those digits as +08:00.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(str) && /(?:Z|[+-]\d{2}:\d{2})$/i.test(str)) {
+    const parsed = new Date(str);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  // Naive YYYY-MM-DD HH:MM:SS — already Manila wall clock (e.g. payment-log TO_CHAR).
   const ymdHms = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/);
   if (ymdHms) {
     const isoManila = `${ymdHms[1]}-${ymdHms[2]}-${ymdHms[3]}T${ymdHms[4]}:${ymdHms[5]}:${ymdHms[6] || '00'}+08:00`;
@@ -57,7 +96,8 @@ export const parseDateForDisplay = (dateInput) => {
 export const formatDateManila = (dateInput) => {
   const d = parseDateForDisplay(dateInput);
   if (!d) return '-';
-  return d.toLocaleDateString('en-US', DISPLAY_DATE_OPTIONS);
+  const p = getManilaDateTimeParts(d);
+  return `${MONTH_NAMES[p.month - 1]} ${pad2(p.day)}, ${p.year}`;
 };
 
 /**
@@ -70,14 +110,16 @@ export const formatDateTimeManila = (dateInput, options = {}) => {
   const { hour12 = false } = options;
   const d = parseDateForDisplay(dateInput);
   if (!d) return '-';
-  const datePart = d.toLocaleDateString('en-US', DISPLAY_DATE_OPTIONS);
-  const timePart = d.toLocaleTimeString('en-US', {
-    timeZone: MANILA_TZ,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12,
-  });
+  const p = getManilaDateTimeParts(d);
+  const datePart = `${MONTH_NAMES[p.month - 1]} ${pad2(p.day)}, ${p.year}`;
+  let hour = p.hour;
+  let suffix = '';
+  if (hour12) {
+    suffix = hour >= 12 ? ' PM' : ' AM';
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+  }
+  const timePart = `${hour12 ? String(hour) : pad2(hour)}:${pad2(p.minute)}:${pad2(p.second)}${suffix}`;
   return `${datePart}, ${timePart}`;
 };
 

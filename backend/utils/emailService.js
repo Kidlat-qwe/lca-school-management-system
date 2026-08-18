@@ -33,7 +33,7 @@ const SMTP_FROM = getNodemailerFromHeader();
 const requireEmailConfigured = () => {
   if (!isEmailConfigured()) {
     throw new Error(
-      'Email is not configured. Set SENDGRID_API_KEY (recommended on Linode) or SMTP_HOST/SMTP_USER/SMTP_PASSWORD in backend/.env.'
+      'Email is not configured. Set BREVO_API_KEY (recommended on Linode) or SMTP_HOST/SMTP_USER/SMTP_PASSWORD in backend/.env.'
     );
   }
 };
@@ -674,6 +674,7 @@ export const sendSystemNotificationEmail = async ({
           content: att.content,
           path: att.path,
           contentType: att.contentType || 'application/pdf',
+          cid: att.cid,
         }))
     : [];
 

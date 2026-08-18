@@ -7,6 +7,18 @@ import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext'
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import AnnouncementAttachmentPreview, { isAnnouncementImageFile } from '../../components/announcementAttachment';
+import AnnouncementSendEmailToggle from '../../components/announcementSendEmailToggle';
+import {
+  AnnouncementBoardFilters,
+  AnnouncementTableLoadingShell,
+  useAnnouncementBoardList,
+} from '../../components/announcementBoardFilters';
+import {
+  expandAnnouncementRecipientGroupsForForm,
+  normalizeAnnouncementRecipientGroupsForSubmit,
+  toggleAnnouncementRecipientGroups,
+} from '../../utils/announcementRecipientGroups';
 
 const RECIPIENT_GROUPS = [
   { value: 'All', label: 'All' },
@@ -14,6 +26,9 @@ const RECIPIENT_GROUPS = [
   { value: 'Teachers', label: 'Teachers' },
   { value: 'Admin', label: 'Admin' },
   { value: 'Finance', label: 'Finance' },
+  { value: 'Superadmin', label: 'Superadmin' },
+  { value: 'Superfinance', label: 'Superfinance' },
+  { value: 'Guardians', label: 'Guardians' },
 ];
 
 const STATUS_OPTIONS = [
@@ -42,20 +57,30 @@ const Announcements = () => {
   const userType = userInfo?.user_type || userInfo?.userType;
   const canManageAnnouncements = userType === 'Superadmin';
   const [searchParams, setSearchParams] = useSearchParams();
-  const [announcements, setAnnouncements] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [titleSearchTerm, setTitleSearchTerm] = useState('');
-  const [filterRecipientGroup, setFilterRecipientGroup] = useState('');
-  const [filterCreatedOn, setFilterCreatedOn] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const {
+    announcements,
+    tableLoading,
+    error,
+    setError,
+    titleSearchTerm,
+    setTitleSearchTerm,
+    filterRecipientGroup,
+    setFilterRecipientGroup,
+    filterCreatedOn,
+    setFilterCreatedOn,
+    filterStatus,
+    setFilterStatus,
+    currentPage,
+    setCurrentPage,
+    itemsPerPage,
+    totalItems,
+    totalPages,
+    fetchAnnouncements,
+  } = useAnnouncementBoardList({
+    extraParams: globalBranchId ? { branch_id: String(globalBranchId) } : {},
+  });
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
-  const [openRecipientGroupDropdown, setOpenRecipientGroupDropdown] = useState(false);
-  const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
-  const [openOptionsDropdown, setOpenOptionsDropdown] = useState(false);
-  const [optionsMenuPosition, setOptionsMenuPosition] = useState({ top: 0, right: 0 });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingAnnouncement, setViewingAnnouncement] = useState(null);
@@ -63,6 +88,7 @@ const Announcements = () => {
   const [branches, setBranches] = useState([]);
   const [formData, setFormData] = useState({
     title: '',
+    email_subject: '',
     body: '',
     recipient_groups: [],
     status: 'Active',
@@ -71,28 +97,20 @@ const Announcements = () => {
     start_date: '',
     end_date: '',
     attachment_url: '',
+    send_email: true,
   });
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [attachmentFileName, setAttachmentFileName] = useState('');
+  const [attachmentLocalPreviewUrl, setAttachmentLocalPreviewUrl] = useState('');
   const attachmentInputRef = useRef(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(10);
-  const [totalItems, setTotalItems] = useState(0);
-  const [totalPages, setTotalPages] = useState(0);
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
   const highlightedRowRef = useRef(null);
-  const searchHydratedRef = useRef(false);
 
   useEffect(() => {
-    fetchAnnouncements();
     fetchBranches();
-  }, [currentPage, itemsPerPage, globalBranchId]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [globalBranchId]);
+  }, []);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -138,24 +156,15 @@ const Announcements = () => {
       if (openMenuId && !event.target.closest('.action-menu-container') && !event.target.closest('.action-menu-overlay')) {
         setOpenMenuId(null);
       }
-      if (openRecipientGroupDropdown && !event.target.closest('.recipient-group-filter-dropdown')) {
-        setOpenRecipientGroupDropdown(false);
-      }
-      if (openStatusDropdown && !event.target.closest('.status-filter-dropdown')) {
-        setOpenStatusDropdown(false);
-      }
-      if (openOptionsDropdown && !event.target.closest('.options-menu-container') && !event.target.closest('.options-menu-overlay')) {
-        setOpenOptionsDropdown(false);
-      }
     };
 
-    if (openMenuId || openRecipientGroupDropdown || openStatusDropdown || openOptionsDropdown) {
+    if (openMenuId) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }
-  }, [openMenuId, openRecipientGroupDropdown, openStatusDropdown, openOptionsDropdown]);
+  }, [openMenuId]);
 
   const handleMenuClick = (announcementId, event) => {
     event.stopPropagation();
@@ -203,88 +212,6 @@ const Announcements = () => {
     }
   };
 
-  const handleOptionsMenuClick = (event) => {
-    event.stopPropagation();
-    const button = event.currentTarget;
-    const rect = button.getBoundingClientRect();
-    
-    if (openOptionsDropdown) {
-      setOpenOptionsDropdown(false);
-      setOptionsMenuPosition({ top: 0, right: 0 });
-    } else {
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      const spaceBelow = viewportHeight - rect.bottom;
-      const spaceAbove = rect.top;
-      const estimatedDropdownHeight = 150;
-      
-      let top, bottom;
-      if (spaceBelow >= estimatedDropdownHeight) {
-        top = rect.bottom + 4;
-        bottom = 'auto';
-      } else if (spaceAbove >= estimatedDropdownHeight) {
-        bottom = viewportHeight - rect.top + 4;
-        top = 'auto';
-      } else {
-        if (spaceBelow > spaceAbove) {
-          top = rect.bottom + 4;
-          bottom = 'auto';
-        } else {
-          bottom = viewportHeight - rect.top + 4;
-          top = 'auto';
-        }
-      }
-      
-      let right, left;
-      right = viewportWidth - rect.right;
-      left = 'auto';
-      
-      setOptionsMenuPosition({
-        top: top !== 'auto' ? top : undefined,
-        bottom: bottom !== 'auto' ? bottom : undefined,
-        right: right !== 'auto' ? right : undefined,
-        left: left !== 'auto' ? left : undefined,
-      });
-      setOpenOptionsDropdown(true);
-    }
-  };
-
-  const fetchAnnouncements = async () => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: itemsPerPage.toString(),
-      });
-
-      if (titleSearchTerm) {
-        params.append('title', titleSearchTerm);
-      }
-      if (filterRecipientGroup) {
-        params.append('recipient_group', filterRecipientGroup);
-      }
-      if (filterCreatedOn) {
-        params.append('created_on', filterCreatedOn);
-      }
-      if (filterStatus) {
-        params.append('status', filterStatus);
-      }
-      if (globalBranchId) {
-        params.append('branch_id', globalBranchId);
-      }
-
-      const response = await apiRequest(`/announcements?${params.toString()}`);
-      setAnnouncements(response.data || []);
-      setTotalItems(response.pagination?.total || 0);
-      setTotalPages(response.pagination?.totalPages || 0);
-    } catch (err) {
-      setError(err.message || 'Failed to fetch announcements');
-      console.error('Error fetching announcements:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const fetchBranches = async () => {
     try {
       const response = await apiRequest('/branches?limit=100');
@@ -317,11 +244,19 @@ const Announcements = () => {
     }
   };
 
+  const clearAttachmentLocalPreview = () => {
+    setAttachmentLocalPreviewUrl((prev) => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return '';
+    });
+  };
+
   const openCreateModal = () => {
     setEditingAnnouncement(null);
     setError('');
     setFormData({
       title: '',
+      email_subject: '',
       body: '',
       recipient_groups: [],
       status: 'Active',
@@ -330,8 +265,10 @@ const Announcements = () => {
       start_date: '',
       end_date: '',
       attachment_url: '',
+      send_email: true,
     });
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -359,8 +296,12 @@ const Announcements = () => {
     setError('');
     setFormData({
       title: announcement.title || '',
+      email_subject: announcement.email_subject || '',
       body: announcement.body || '',
-      recipient_groups: announcement.recipient_groups || [],
+      recipient_groups: expandAnnouncementRecipientGroupsForForm(
+        announcement.recipient_groups || [],
+        RECIPIENT_GROUPS
+      ),
       status: announcement.status || 'Active',
       priority: announcement.priority || 'Medium',
       branch_id: announcement.branch_id ? announcement.branch_id.toString() : 'all',
@@ -369,6 +310,7 @@ const Announcements = () => {
       attachment_url: announcement.attachment_url || '',
     });
     setAttachmentFileName(announcement.attachment_url ? 'Attached file' : '');
+    clearAttachmentLocalPreview();
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -379,6 +321,7 @@ const Announcements = () => {
     setFormErrors({});
     setFormData({
       title: '',
+      email_subject: '',
       body: '',
       recipient_groups: [],
       status: 'Active',
@@ -387,13 +330,21 @@ const Announcements = () => {
       start_date: '',
       end_date: '',
       attachment_url: '',
+      send_email: true,
     });
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
   };
 
   const handleAttachmentChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setAttachmentLocalPreviewUrl((prev) => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return isAnnouncementImageFile(file) ? URL.createObjectURL(file) : '';
+    });
+
     setAttachmentUploading(true);
     setError('');
     try {
@@ -420,6 +371,7 @@ const Announcements = () => {
   const removeAttachment = () => {
     setFormData((prev) => ({ ...prev, attachment_url: '' }));
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
     if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
@@ -450,20 +402,14 @@ const Announcements = () => {
   };
 
   const handleRecipientGroupToggle = (group) => {
-    setFormData((prev) => {
-      const currentGroups = prev.recipient_groups || [];
-      if (currentGroups.includes(group)) {
-        return {
-          ...prev,
-          recipient_groups: currentGroups.filter(g => g !== group),
-        };
-      } else {
-        return {
-          ...prev,
-          recipient_groups: [...currentGroups, group],
-        };
-      }
-    });
+    setFormData((prev) => ({
+      ...prev,
+      recipient_groups: toggleAnnouncementRecipientGroups(
+        prev.recipient_groups,
+        group,
+        RECIPIENT_GROUPS
+      ),
+    }));
   };
 
   const validateForm = () => {
@@ -473,8 +419,15 @@ const Announcements = () => {
       errors.title = 'Title is required';
     }
 
+    if (
+      (!editingAnnouncement && formData.send_email && formData.status === 'Active' && !formData.email_subject.trim()) ||
+      (editingAnnouncement && !formData.email_subject.trim())
+    ) {
+      errors.email_subject = 'Subject is required';
+    }
+
     if (!formData.body.trim()) {
-      errors.body = 'Body is required';
+      errors.body = 'Description is required';
     }
 
     if (!formData.recipient_groups || formData.recipient_groups.length === 0) {
@@ -492,14 +445,6 @@ const Announcements = () => {
     // Branch is required - "all" means all branches (valid), empty string means not selected (error)
     if (!formData.branch_id || formData.branch_id === '') {
       errors.branch_id = 'Branch is required';
-    }
-
-    if (!formData.start_date || formData.start_date.trim() === '') {
-      errors.start_date = 'Start date is required';
-    }
-
-    if (!formData.end_date || formData.end_date.trim() === '') {
-      errors.end_date = 'End date is required';
     }
 
     if (formData.start_date && formData.end_date) {
@@ -524,8 +469,12 @@ const Announcements = () => {
     try {
       const payload = {
         title: formData.title.trim(),
+        email_subject: formData.email_subject.trim(),
         body: formData.body.trim(),
-        recipient_groups: formData.recipient_groups,
+        recipient_groups: normalizeAnnouncementRecipientGroupsForSubmit(
+          formData.recipient_groups,
+          RECIPIENT_GROUPS
+        ),
         status: formData.status,
         priority: formData.priority,
         branch_id: formData.branch_id === 'all' || formData.branch_id === '' 
@@ -535,6 +484,10 @@ const Announcements = () => {
         end_date: formData.end_date && formData.end_date.trim() !== '' ? formData.end_date : null,
         attachment_url: formData.attachment_url && formData.attachment_url.trim() ? formData.attachment_url.trim() : null,
       };
+
+      if (!editingAnnouncement) {
+        payload.send_email = formData.send_email;
+      }
 
       if (editingAnnouncement) {
         await apiRequest(`/announcements/${editingAnnouncement.announcement_id}`, {
@@ -570,38 +523,6 @@ const Announcements = () => {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleSearch = () => {
-    setCurrentPage(1);
-    fetchAnnouncements();
-  };
-
-  useEffect(() => {
-    if (!searchHydratedRef.current) {
-      searchHydratedRef.current = true;
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (currentPage !== 1) {
-        setCurrentPage(1);
-      } else {
-        fetchAnnouncements();
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [titleSearchTerm]);
-
-  const handleReset = () => {
-    setTitleSearchTerm('');
-    setFilterRecipientGroup('');
-    setFilterCreatedOn('');
-    setFilterStatus('');
-    setCurrentPage(1);
-    setTimeout(() => {
-      fetchAnnouncements();
-    }, 0);
   };
 
   const getBranchName = (branchId) => {
@@ -647,14 +568,6 @@ const Announcements = () => {
     return text.substring(0, maxLength) + '...';
   };
 
-  if (loading && announcements.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -669,184 +582,16 @@ const Announcements = () => {
         </div>
       )}
 
-      {/* Search Filter Section */}
-      <div className="bg-white rounded-lg shadow-sm p-4">
-        <h2 className="text-base font-semibold text-gray-900 mb-3">Search Filter</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div>
-            <label htmlFor="title-search" className="block text-xs font-medium text-gray-700 mb-1">
-              Announcement Title
-            </label>
-            <input
-              type="text"
-              id="title-search"
-              value={titleSearchTerm}
-              onChange={(e) => setTitleSearchTerm(e.target.value)}
-              placeholder="Search by title..."
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            />
-          </div>
-          <div className="relative">
-            <label htmlFor="recipient-group-filter" className="block text-xs font-medium text-gray-700 mb-1">
-              Recipient Group
-            </label>
-            <div className="recipient-group-filter-dropdown relative">
-              <button
-                type="button"
-                onClick={() => setOpenRecipientGroupDropdown(!openRecipientGroupDropdown)}
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-left flex items-center justify-between focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-              >
-                <span>{filterRecipientGroup || 'All'}</span>
-                {filterRecipientGroup && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFilterRecipientGroup('');
-                    }}
-                    className="ml-2 text-gray-400 hover:text-gray-600"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                )}
-                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {openRecipientGroupDropdown && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                  {RECIPIENT_GROUPS.map((group) => (
-                    <button
-                      key={group.value}
-                      type="button"
-                      onClick={() => {
-                        setFilterRecipientGroup(group.value);
-                        setOpenRecipientGroupDropdown(false);
-                      }}
-                      className={`w-full px-3 py-2 text-sm text-left hover:bg-primary-50 ${
-                        filterRecipientGroup === group.value ? 'bg-primary-100' : ''
-                      }`}
-                    >
-                      {group.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-          <div>
-            <label htmlFor="created-on-filter" className="block text-xs font-medium text-gray-700 mb-1">
-              Announcement Created On
-            </label>
-            <input
-              type="date"
-              id="created-on-filter"
-              value={filterCreatedOn}
-              onChange={(e) => setFilterCreatedOn(e.target.value)}
-              className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-            />
-          </div>
-        </div>
-        <div className="mt-3 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-            className="text-primary-600 hover:text-primary-700 flex items-center space-x-1 text-sm"
-          >
-            <span>advanced filters</span>
-            <svg
-              className={`w-3.5 h-3.5 transform transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          <div className="flex space-x-2">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-3 py-1.5 text-sm border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50"
-            >
-              Reset
-            </button>
-            <button
-              type="button"
-              onClick={handleSearch}
-              className="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-            >
-              Search
-            </button>
-          </div>
-        </div>
-        {showAdvancedFilters && (
-          <div className="mt-3 pt-3 border-t border-gray-200">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="relative">
-                <label htmlFor="status-filter" className="block text-xs font-medium text-gray-700 mb-1">
-                  Status
-                </label>
-                <div className="status-filter-dropdown relative">
-                  <button
-                    type="button"
-                    onClick={() => setOpenStatusDropdown(!openStatusDropdown)}
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-left flex items-center justify-between focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                  >
-                    <span>{filterStatus || 'All'}</span>
-                    {filterStatus && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setFilterStatus('');
-                        }}
-                        className="ml-2 text-gray-400 hover:text-gray-600"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    )}
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-                  {openStatusDropdown && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFilterStatus('');
-                          setOpenStatusDropdown(false);
-                        }}
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-primary-50"
-                      >
-                        All
-                      </button>
-                      {STATUS_OPTIONS.map((status) => (
-                        <button
-                          key={status.value}
-                          type="button"
-                          onClick={() => {
-                            setFilterStatus(status.value);
-                            setOpenStatusDropdown(false);
-                          }}
-                          className={`w-full px-3 py-2 text-sm text-left hover:bg-primary-50 ${
-                            filterStatus === status.value ? 'bg-primary-100' : ''
-                          }`}
-                        >
-                          {status.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
+      <AnnouncementBoardFilters
+        titleSearchTerm={titleSearchTerm}
+        onTitleChange={setTitleSearchTerm}
+        filterRecipientGroup={filterRecipientGroup}
+        onRecipientGroupChange={setFilterRecipientGroup}
+        filterCreatedOn={filterCreatedOn}
+        onCreatedOnChange={setFilterCreatedOn}
+        filterStatus={filterStatus}
+        onStatusChange={setFilterStatus}
+      />
 
       {/* Table Section */}
       <div className="bg-white rounded-lg shadow-sm p-6">
@@ -861,64 +606,7 @@ const Announcements = () => {
               </svg>
               <span>Create</span>
             </button>
-          ) : (
-            <div />
-          )}
-          <div className="relative options-menu-container">
-            <button
-              onClick={handleOptionsMenuClick}
-              className="btn-primary flex items-center justify-center space-x-2"
-            >
-              <span>Options</span>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openOptionsDropdown && (
-              <>
-                <div
-                  className="options-menu-overlay fixed inset-0 z-40"
-                  onClick={() => setOpenOptionsDropdown(false)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                />
-                {createPortal(
-                  <div
-                    className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[192px]"
-                    style={{
-                      ...(optionsMenuPosition.top !== undefined && { top: `${optionsMenuPosition.top}px` }),
-                      ...(optionsMenuPosition.bottom !== undefined && { bottom: `${optionsMenuPosition.bottom}px` }),
-                      ...(optionsMenuPosition.right !== undefined && { right: `${optionsMenuPosition.right}px` }),
-                      ...(optionsMenuPosition.left !== undefined && { left: `${optionsMenuPosition.left}px` }),
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Export functionality can be added here
-                        setOpenOptionsDropdown(false);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      Export to CSV
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Print functionality can be added here
-                        setOpenOptionsDropdown(false);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      Print
-                    </button>
-                  </div>,
-                  document.body
-                )}
-              </>
-            )}
-          </div>
+          ) : null}
         </div>
 
         {/* Table */}
@@ -931,6 +619,7 @@ const Announcements = () => {
             className="px-4 pt-4 pb-2"
           />
         )}
+        <AnnouncementTableLoadingShell loading={tableLoading}>
         <div
           className="overflow-x-auto rounded-lg"
           style={{
@@ -1141,6 +830,7 @@ const Announcements = () => {
             </tbody>
           </table>
         </div>
+        </AnnouncementTableLoadingShell>
 
         {/* Pagination */}
         <div className="mt-4">
@@ -1195,8 +885,45 @@ const Announcements = () => {
                     </div>
 
                     <div>
+                      <label htmlFor="email_subject" className="block text-sm font-medium text-gray-700 mb-2">
+                        Subject{' '}
+                        {(editingAnnouncement || (formData.send_email && formData.status === 'Active')) && (
+                          <span className="text-red-500">*</span>
+                        )}
+                      </label>
+                      <input
+                        type="text"
+                        id="email_subject"
+                        name="email_subject"
+                        value={formData.email_subject}
+                        onChange={handleInputChange}
+                        required={editingAnnouncement || (formData.send_email && formData.status === 'Active')}
+                        disabled={!editingAnnouncement && !formData.send_email}
+                        placeholder="Email subject line"
+                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 disabled:text-gray-500 ${
+                          formErrors.email_subject ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                      />
+                      {formErrors.email_subject && (
+                        <p className="mt-1 text-sm text-red-600">{formErrors.email_subject}</p>
+                      )}
+                    </div>
+
+                    <AnnouncementSendEmailToggle
+                      checked={formData.send_email}
+                      onChange={(value) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          send_email: value,
+                        }))
+                      }
+                      status={formData.status}
+                      showEditHint={Boolean(editingAnnouncement)}
+                    />
+
+                    <div>
                       <label htmlFor="body" className="block text-sm font-medium text-gray-700 mb-2">
-                        Body <span className="text-red-500">*</span>
+                        Description <span className="text-red-500">*</span>
                       </label>
                       <textarea
                         id="body"
@@ -1230,16 +957,27 @@ const Announcements = () => {
                       {attachmentUploading && (
                         <p className="mt-1 text-sm text-gray-500">Uploading...</p>
                       )}
-                      {attachmentFileName && formData.attachment_url && (
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className="text-sm text-gray-700 truncate">{attachmentFileName}</span>
-                          <button
-                            type="button"
-                            onClick={removeAttachment}
-                            className="text-sm text-red-600 hover:text-red-700"
-                          >
-                            Remove
-                          </button>
+                      {(attachmentFileName || attachmentLocalPreviewUrl) && (
+                        <div className="mt-2 space-y-1.5">
+                          {(formData.attachment_url || attachmentLocalPreviewUrl) && (
+                            <AnnouncementAttachmentPreview
+                              url={formData.attachment_url}
+                              localPreviewUrl={attachmentLocalPreviewUrl}
+                              compact
+                            />
+                          )}
+                          {attachmentFileName && (
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-sm text-gray-700">{attachmentFileName}</span>
+                              <button
+                                type="button"
+                                onClick={removeAttachment}
+                                className="shrink-0 text-sm text-red-600 hover:text-red-700"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1348,7 +1086,7 @@ const Announcements = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <div>
                         <label htmlFor="start_date" className="block text-sm font-medium text-gray-700 mb-2">
-                          Start Date <span className="text-red-500">*</span>
+                          Start Date
                         </label>
                         <input
                           type="date"
@@ -1356,7 +1094,6 @@ const Announcements = () => {
                           name="start_date"
                           value={formData.start_date}
                           onChange={handleInputChange}
-                          required
                           className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
                             formErrors.start_date ? 'border-red-500' : 'border-gray-300'
                           }`}
@@ -1368,7 +1105,7 @@ const Announcements = () => {
 
                       <div>
                         <label htmlFor="end_date" className="block text-sm font-medium text-gray-700 mb-2">
-                          End Date <span className="text-red-500">*</span>
+                          End Date
                         </label>
                         <input
                           type="date"
@@ -1376,7 +1113,6 @@ const Announcements = () => {
                           name="end_date"
                           value={formData.end_date}
                           onChange={handleInputChange}
-                          required
                           className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
                             formErrors.end_date ? 'border-red-500' : 'border-gray-300'
                           }`}
@@ -1445,7 +1181,16 @@ const Announcements = () => {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Body
+                      Subject
+                    </label>
+                    <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
+                      {viewingAnnouncement.email_subject || viewingAnnouncement.title}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Description
                     </label>
                     <div className="text-sm text-gray-900 bg-gray-50 px-4 py-3 rounded-lg whitespace-pre-wrap max-h-96 overflow-y-auto">
                       {viewingAnnouncement.body}
@@ -1534,14 +1279,7 @@ const Announcements = () => {
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                           Attachment
                         </label>
-                        <a
-                          href={viewingAnnouncement.attachment_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm text-primary-600 hover:text-primary-700 underline"
-                        >
-                          Open attached file
-                        </a>
+                        <AnnouncementAttachmentPreview url={viewingAnnouncement.attachment_url} />
                       </div>
                     )}
                   </div>

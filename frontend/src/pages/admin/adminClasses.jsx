@@ -58,7 +58,26 @@ import {
   formatUniformSizeOptionLabel,
   formatUniformSameSizePairOptionLabel,
   isSchoolUniformMerchandiseName,
+  getUniformCategory,
+  listUniformStockCategories,
+  isStudentUniformSelectionComplete,
 } from '../../utils/uniformMerchandise';
+import {
+  PACKAGE_MERCH_ACTION,
+  isPackageMerchSwappable,
+  createDefaultPackageMerchEntitlement,
+  buildPackageMerchEntitlementLine,
+  validatePackageMerchEntitlements,
+  resolvePackageMerchInclusionDisplay,
+} from '../../utils/packageMerchSwap';
+import PackageMerchEntitlementPanel from '../../components/packageMerch/PackageMerchEntitlementPanel';
+import EnrollStudentSelectionLayout from '../../components/enrollStudentSelection/EnrollStudentSelectionLayout';
+import EnrollWizardStepper from '../../components/enrollStudentSelection/EnrollWizardStepper';
+import EnrollOrderSummary from '../../components/enrollStudentSelection/EnrollOrderSummary';
+import {
+  buildEnrollSummaryItems,
+  formatEnrollPackagePrice,
+} from '../../components/enrollStudentSelection/buildEnrollSummaryItems';
 import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
 
@@ -158,7 +177,7 @@ const AdminClasses = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [agendaDraft, setAgendaDraft] = useState('');
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'review'
+  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'merchandise-config', 'review'
   const [selectedClassForEnrollment, setSelectedClassForEnrollment] = useState(null);
   const [enrollmentPhaseContext, setEnrollmentPhaseContext] = useState({
     classId: null,
@@ -215,6 +234,8 @@ const AdminClasses = () => {
   const [uniformSameSizeEnabled, setUniformSameSizeEnabled] = useState({});
   // Per-student merchandise selections: { [student_id]: [{merchandise_id, size, merchandise_name}] }
   const [studentMerchandiseSelections, setStudentMerchandiseSelections] = useState({});
+  /** Per student → package freebie type → { action, replacement_merchandise_id, reason } */
+  const [studentPackageMerchEntitlements, setStudentPackageMerchEntitlements] = useState({});
   const [pricingLists, setPricingLists] = useState([]);
   const [merchandise, setMerchandise] = useState([]);
   const [enrollSubmitting, setEnrollSubmitting] = useState(false);
@@ -3479,6 +3500,7 @@ const initializePackageMerchSelections = useCallback(
     setSelectedMerchandise([]);
     setPackageMerchSelections({});
     setStudentMerchandiseSelections({});
+    setStudentPackageMerchEntitlements({});
     setGeneratedInvoices([]);
     setEnrolledStudents([]);
     setEnrollReservedStudents([]);
@@ -3819,6 +3841,11 @@ const initializePackageMerchSelections = useCallback(
           delete newSelections[student.user_id];
           return newSelections;
         });
+        setStudentPackageMerchEntitlements((prevEnt) => {
+          const next = { ...prevEnt };
+          delete next[student.user_id];
+          return next;
+        });
         return prev.filter(s => s.user_id !== student.user_id);
       } else {
         // Only allow 1 student to be selected for enrollment
@@ -3829,6 +3856,11 @@ const initializePackageMerchSelections = useCallback(
             const newSelections = { ...prevSelections };
             delete newSelections[previousStudent.user_id];
             return newSelections;
+          });
+          setStudentPackageMerchEntitlements((prevEnt) => {
+            const next = { ...prevEnt };
+            delete next[previousStudent.user_id];
+            return next;
           });
           // Replace with new student
           prev = [];
@@ -3864,6 +3896,22 @@ const initializePackageMerchSelections = useCallback(
             ...prevSelections,
             [student.user_id]: initialMerchSelections
           }));
+          const swappableTypes = (selectedPackageDetails.includedMerchandiseTypes || []).filter(
+            (typeName) =>
+              isPackageMerchSwappable(typeName, {
+                requiresSizing: requiresSizingForMerchandise(typeName),
+              })
+          );
+          if (swappableTypes.length > 0) {
+            const initialEnt = {};
+            swappableTypes.forEach((typeName) => {
+              initialEnt[typeName] = createDefaultPackageMerchEntitlement(typeName);
+            });
+            setStudentPackageMerchEntitlements((prevEnt) => ({
+              ...prevEnt,
+              [student.user_id]: initialEnt,
+            }));
+          }
         } else if (selectedMerchandise.length > 0) {
           // Initialize with manual merchandise selections
           // For per-phase enrollment with uniforms, don't pre-initialize - let users select sizes
@@ -3918,9 +3966,15 @@ const initializePackageMerchSelections = useCallback(
   const handleStudentMerchandiseSizeChange = (studentId, merchandiseName, selectedItem, category = null) => {
     setStudentMerchandiseSelections(prev => {
       const studentSelections = prev[studentId] || [];
-      // Remove existing selection for this merchandise/category
-      const filteredSelections = studentSelections.filter(selection => {
+      // Remove existing selection for this merchandise/category.
+      // Set replaces Top/Bottom; picking a piece clears Set for that type.
+      const filteredSelections = studentSelections.filter((selection) => {
         if (selection.merchandise_name !== merchandiseName) return true;
+        if (category === 'Set') return false;
+        if (category === 'Top' || category === 'Bottom') {
+          if (selection.category === 'Set') return false;
+          return selection.category && selection.category !== category;
+        }
         if (category) {
           return selection.category && selection.category !== category;
         }
@@ -3961,7 +4015,9 @@ const initializePackageMerchSelections = useCallback(
         (selection) =>
           !(
             selection.merchandise_name === merchandiseName &&
-            (selection.category === 'Top' || selection.category === 'Bottom')
+            (selection.category === 'Top' ||
+              selection.category === 'Bottom' ||
+              selection.category === 'Set')
           )
       );
       if (top) {
@@ -4146,6 +4202,18 @@ const initializePackageMerchSelections = useCallback(
   const selectedPackageMerchTypes = selectedPackageDetails.merchandiseTypes.filter(
     typeName => requiresSizingForMerchandise(typeName)
   );
+  const selectedPackageSwappableTypes = selectedPackageDetails.includedMerchandiseTypes.filter(
+    (typeName) =>
+      isPackageMerchSwappable(typeName, {
+        requiresSizing: requiresSizingForMerchandise(typeName),
+      })
+  );
+  const needsEnrollMerchandiseConfig =
+    Boolean(selectedPackage) &&
+    (selectedPackageMerchTypes.length > 0 ||
+      selectedPackageSwappableTypes.length > 0 ||
+      selectedPackageDetails.includedMerchandiseTypes.length > 0 ||
+      selectedPackageDetails.paidMerchandiseTypes.length > 0);
   
   // Calculate total quantity needed for all selected students
   const getTotalQuantityNeeded = () => {
@@ -4184,27 +4252,6 @@ const initializePackageMerchSelections = useCallback(
     return `${baseLabel} • Available: ${item.quantity ?? 0}`;
   };
 
-  const getUniformCategory = (item) => {
-    if (!item) return 'General';
-    // Use the type field directly
-    const typeValue = typeof item === 'string' ? item : (item.type || '');
-    const typeLower = typeValue.toLowerCase();
-    if (typeLower === 'top' || typeLower === 'polo' || typeLower === 'shirt' || typeLower.includes('blouse')) return 'Top';
-    if (
-      typeLower === 'bottom' ||
-      typeLower === 'short' ||
-      typeLower === 'shorts' ||
-      typeLower.includes('skirt') ||
-      typeLower.includes('pants') ||
-      typeLower.includes('short')
-    ) {
-      return 'Bottom';
-    }
-    return 'General';
-  };
-
-  // Fetch installment invoice schedule from system settings.
-  // branchId optional; Admin backend uses their branch anyway; pass for consistency/Superadmin reuse.
   const fetchInstallmentScheduleSettings = async (branchId = null) => {
     try {
       const params = new URLSearchParams({ category: 'installment_schedule' });
@@ -4267,37 +4314,16 @@ const initializePackageMerchSelections = useCallback(
       const selection = packageMerchSelections[typeName];
       if (selection && selection.length > 0) return false;
 
-      // Sized uniforms are chosen per student (Top/Bottom pieces) — accept those as selected
+      // Sized uniforms are chosen per student (Top/Bottom/Set) — accept those as selected
       if (requiresSizingForMerchandise(typeName) && selectedStudents.length > 0) {
         const itemsForType = getMerchandiseItemsByType(typeName);
-        const categories = Array.from(
-          new Set(
-            itemsForType
-              .map((item) => getUniformCategory(item))
-              .filter((category) => category && category !== 'General')
-          )
-        );
-
         const everyStudentConfigured = selectedStudents.every((student) => {
           const sels = studentMerchandiseSelections[student.user_id] || [];
-          if (categories.length > 0) {
-            return categories.every((category) =>
-              sels.some(
-                (m) =>
-                  m.merchandise_name === typeName &&
-                  m.category === category &&
-                  m.size &&
-                  String(m.size).trim() !== '' &&
-                  m.merchandise_id
-              )
-            );
-          }
-          return sels.some(
-            (m) =>
-              m.merchandise_name === typeName &&
-              m.size &&
-              String(m.size).trim() !== '' &&
-              m.merchandise_id
+          return isStudentUniformSelectionComplete(
+            sels,
+            typeName,
+            itemsForType,
+            getUniformCategory
           );
         });
         return !everyStudentConfigured;
@@ -4587,6 +4613,19 @@ const initializePackageMerchSelections = useCallback(
       return;
     }
 
+    if (selectedPackage && selectedPackageSwappableTypes.length > 0) {
+      const entitlementError = validatePackageMerchEntitlements({
+        students: selectedStudents,
+        swappableTypeNames: selectedPackageSwappableTypes,
+        entitlementsByStudent: studentPackageMerchEntitlements,
+        merchandiseList: merchandise,
+      });
+      if (entitlementError) {
+        appAlert(entitlementError);
+        return;
+      }
+    }
+
     // Validate per-student merchandise size selections
     if (selectedStudents.length > 0) {
       for (const student of selectedStudents) {
@@ -4605,37 +4644,36 @@ const initializePackageMerchSelections = useCallback(
           const hasSizes = itemsForType.some(m => m.size);
           
           if (hasSizes && isUniformTopBottomType(merchName)) {
-            // For uniforms with Top/Bottom, check both categories have sizes when applicable
-            const uniformCategories = Array.from(
-              new Set(
-                itemsForType
-                  .map(item => getUniformCategory(item))
-                  .filter(category => category && category !== 'General')
+            const itemsForType = getMerchandiseItemsByType(merchName);
+            if (
+              !isStudentUniformSelectionComplete(
+                studentMerchSelections,
+                merchName,
+                itemsForType,
+                getUniformCategory
               )
-            );
-            
-            if (uniformCategories.length > 0) {
-              // Check that each category has a size selected
-              for (const category of uniformCategories) {
-                const categorySelection = studentMerchSelections.find(m => 
-                  m.merchandise_name === merchName && m.category === category
-                );
-          
-                if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                  appAlert(`Please select a size for ${merchName} - ${category} for student: ${student.full_name}`);
-                  return;
-                }
-              }
-            } else {
-              // No categories, just check for any size selection
-              const studentSelection = studentMerchSelections.find(m => 
-                m.merchandise_name === merchName
+            ) {
+              const categories = listUniformStockCategories(itemsForType, getUniformCategory);
+              const missing =
+                categories.includes('Set') &&
+                !studentMerchSelections.some(
+                  (m) => m.merchandise_name === merchName && m.category === 'Set'
+                )
+                  ? categories.filter((c) => c !== 'Set').length === 0
+                    ? 'Set'
+                    : 'Set (or Top & Bottom)'
+                  : categories.filter((c) => c !== 'Set').find((category) => {
+                      return !studentMerchSelections.some(
+                        (m) =>
+                          m.merchandise_name === merchName &&
+                          m.category === category &&
+                          m.size
+                      );
+                    }) || 'size';
+              appAlert(
+                `Please select a size for ${merchName}${missing && missing !== 'size' ? ` - ${missing}` : ''} for student: ${student.full_name}`
               );
-              
-              if (!studentSelection || !studentSelection.size || studentSelection.size.trim() === '') {
-                appAlert(`Please select a size for ${merchName} for student: ${student.full_name}`);
-                return;
-              }
+                  return;
             }
           } else if (hasSizes) {
             // For other merchandise with sizes, check for size selection
@@ -4717,14 +4755,26 @@ const initializePackageMerchSelections = useCallback(
 
                   const typeName = merchMeta.merchandise_name;
 
+                  // Swappable freebies are handled via entitlements (keep / swap)
+                  if (
+                    isPackageMerchSwappable(typeName, {
+                      requiresSizing: requiresSizingForMerchandise(typeName),
+                    })
+                  ) {
+                    return;
+                  }
+
                   if (requiresSizingForMerchandise(typeName)) {
+                    const hasSet = studentMerchSelections.some(
+                      (m) => m.merchandise_name === typeName && m.category === 'Set'
+                    );
                     const hasTop = studentMerchSelections.some(
                       (m) => m.merchandise_name === typeName && m.category === 'Top'
                     );
                     const hasBottom = studentMerchSelections.some(
                       (m) => m.merchandise_name === typeName && m.category === 'Bottom'
                     );
-                    if (hasTop && hasBottom) return;
+                    if (hasSet || (hasTop && hasBottom)) return;
                   } else if (
                     [...merchByType.values()].some((m) => m.merchandise_name === typeName)
                   ) {
@@ -4740,18 +4790,94 @@ const initializePackageMerchSelections = useCallback(
                       size: selection.size || null,
                       merchandise_name: typeName,
                       category: category || null,
+                      action: PACKAGE_MERCH_ACTION.ISSUE,
+                      original_type_name: typeName,
                     });
+                  }
+                });
+
+                selectedPackageSwappableTypes.forEach((typeName) => {
+                  const defaultSel = (packageMerchSelections[typeName] || [])[0];
+                  const fallbackItem = getMerchandiseItemsByType(typeName)[0];
+                  const ent =
+                    studentPackageMerchEntitlements[student.user_id]?.[typeName] ||
+                    createDefaultPackageMerchEntitlement(typeName);
+                  const replacementItem =
+                    ent.action === PACKAGE_MERCH_ACTION.SWAP &&
+                    ent.replacement_merchandise_id
+                      ? merchandise.find(
+                          (m) =>
+                            Number(m.merchandise_id) ===
+                            Number(ent.replacement_merchandise_id)
+                        )
+                      : null;
+                  const line = buildPackageMerchEntitlementLine({
+                    typeName,
+                    entitlement: ent,
+                    defaultMerchandiseId:
+                      defaultSel?.merchandise_id || fallbackItem?.merchandise_id,
+                    defaultSize: defaultSel?.size || fallbackItem?.size || null,
+                    replacementItem,
+                  });
+                  for (const [k, v] of [...merchByType.entries()]) {
+                    if (
+                      v.merchandise_name === typeName ||
+                      v.original_type_name === typeName
+                    ) {
+                      merchByType.delete(k);
+                    }
+                  }
+                  if (line.action === PACKAGE_MERCH_ACTION.WAIVE) {
+                    merchByType.set(`waive-${typeName}`, line);
+                  } else if (
+                    line.action === PACKAGE_MERCH_ACTION.SWAP &&
+                    line.merchandise_id
+                  ) {
+                    merchByType.set(`swap-${typeName}`, line);
+                  } else if (line.merchandise_id) {
+                    merchByType.set(`issue-${typeName}`, line);
                   }
                 });
                 
                 // Convert map to array and validate merchandise_id
                 // Ensure all merchandise_ids exist in the current branch's merchandise list
                 return Array.from(merchByType.values())
-                  .filter(m => m.merchandise_id && m.merchandise_name)
+                  .filter(
+                    (m) =>
+                      m.merchandise_name &&
+                      (m.merchandise_id || m.action === PACKAGE_MERCH_ACTION.WAIVE)
+                  )
                   .map(m => {
                     let finalMerchId = null;
                     let finalSize = m.size || null;
                     let finalCategory = m.category || null;
+                    const lineAction = m.action || PACKAGE_MERCH_ACTION.ISSUE;
+                    const originalType = m.original_type_name || m.merchandise_name;
+                    const lineReason = m.reason || null;
+
+                    if (lineAction === PACKAGE_MERCH_ACTION.WAIVE) {
+                      return {
+                        merchandise_id: m.merchandise_id || null,
+                        size: null,
+                        merchandise_name: originalType,
+                        category: null,
+                        action: PACKAGE_MERCH_ACTION.WAIVE,
+                        original_type_name: originalType,
+                        reason: lineReason,
+                      };
+                    }
+
+                    if (lineAction === PACKAGE_MERCH_ACTION.SWAP && m.merchandise_id) {
+                      return {
+                        merchandise_id: m.merchandise_id,
+                        size: m.size || null,
+                        merchandise_name: m.merchandise_name,
+                        category: null,
+                        action: PACKAGE_MERCH_ACTION.SWAP,
+                        original_type_name: originalType,
+                        reason: lineReason,
+                      };
+                    }
                     
                     const uniformItem = findUniformStockByNameSizeCategory(
                       merchandise,
@@ -4793,15 +4919,17 @@ const initializePackageMerchSelections = useCallback(
                         merchandise_id: finalMerchId,
                         size: finalSize,
                         merchandise_name: m.merchandise_name,
-                        category: finalCategory
+                        category: finalCategory,
+                        action: PACKAGE_MERCH_ACTION.ISSUE,
+                        original_type_name: originalType,
+                        reason: lineReason,
                       };
                     }
                     
-                    // Log warning if merchandise not found
-                    console.warn(`Merchandise not found for ${m.merchandise_name}${m.size ? ` (${m.size})` : ''}${m.category ? ` - ${m.category}` : ''}`);
                     return null;
                   })
-                  .filter(m => m !== null && m.merchandise_id); // Remove any null or invalid entries
+                  .filter(m => m !== null && (m.merchandise_id || m.action === PACKAGE_MERCH_ACTION.WAIVE));
+
               })()
             : [];
 
@@ -10189,25 +10317,30 @@ const resolvedBranchId =
           onClick={closeEnrollModal}
         >
           <div 
-            className={`bg-white rounded-lg shadow-xl relative z-[101] w-full max-h-[90vh] flex flex-col overflow-hidden ${enrollStep === 'review' ? 'max-w-4xl' : 'max-w-6xl'}`}
+            className={`bg-white rounded-lg shadow-xl relative z-[101] w-full max-h-[90vh] flex flex-col overflow-hidden ${enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'max-w-7xl' : 'max-w-6xl'}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="flex items-center justify-between p-3 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
-              <div>
+            <div className="flex items-center justify-between gap-3 p-3 border-b border-gray-200 flex-shrink-0 bg-white rounded-t-lg">
+              <div className="min-w-0">
                 <h2 className="text-lg font-bold text-gray-900">
                   {enrollStep === 'view' && 'Enrolled Students'}
                   {enrollStep === 'enrollment-option' && 'Select Enrollment Option'}
                   {enrollStep === 'ack-receipt-selection' && 'Select Acknowledgement Receipt'}
                   {enrollStep === 'package-selection' && 'Select Package'}
                   {enrollStep === 'installment-setup' && 'Installment Enrollment Setup'}
-                  {enrollStep === 'student-selection' && 'Select Student'}
-                  {enrollStep === 'review' && 'Review & Enroll'}
+                  {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') && 'Add students to package'}
                 </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {selectedClassForEnrollment.program_name} - {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
+                  {selectedClassForEnrollment.program_name} • {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
                 </p>
               </div>
+              {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') ? (
+                <EnrollWizardStepper
+                  currentStep={enrollStep}
+                  includeConfigure={needsEnrollMerchandiseConfig || enrollStep === 'merchandise-config'}
+                />
+              ) : null}
               <button
                 onClick={closeEnrollModal}
                 className="text-gray-400 hover:text-gray-600 transition-colors p-1"
@@ -10219,7 +10352,7 @@ const resolvedBranchId =
             </div>
 
             {/* Modal Body */}
-            <div className={`p-3 sm:p-4 flex-1 ${enrollStep === 'review' ? 'overflow-visible' : 'overflow-y-auto'}`}>
+            <div className={`p-3 sm:p-4 flex-1 min-h-0 ${enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'overflow-y-auto lg:overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
               {/* Step 0: View Enrolled Students */}
               {enrollStep === 'view' && (
                 <div className="space-y-4">
@@ -11038,7 +11171,10 @@ const resolvedBranchId =
 
               {/* Step 3: Student Selection */}
               {enrollStep === 'student-selection' && (
-                <div className="space-y-3">
+                <div className="flex flex-col min-h-0 h-full gap-3">
+                  <EnrollStudentSelectionLayout
+                    left={(
+                      <>
                   {/* Student Selection - Moved to Top */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -11254,6 +11390,15 @@ const resolvedBranchId =
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </button>
+                        {selectedEnrollmentOption !== 'ack-receipt' ? (
+                          <button
+                            type="button"
+                            onClick={() => setEnrollStep('package-selection')}
+                            className="mt-2 text-xs font-semibold text-blue-700 hover:underline"
+                          >
+                            Change package
+                          </button>
+                        ) : null}
                         </div>
 
                       {/* Promo Selection - Always Visible Section */}
@@ -11528,445 +11673,6 @@ const resolvedBranchId =
                           </div>
                         </div>
                       )}
-                        
-                      {/* Collapsible Package Details */}
-                      {showPackageDetails && (
-                        <div className="p-4 bg-white border border-gray-200 rounded-lg">
-                        {selectedPackage.details && selectedPackage.details.length > 0 && (() => {
-                          const { pricingDetails, includedMerchandiseTypes, paidMerchandiseTypes } = selectedPackageDetails;
-                          return (
-                            <div className="pt-3 border-t border-gray-200">
-                              <p className="text-sm font-medium text-gray-900 mb-3">
-                                Package Includes
-                              </p>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {pricingDetails.map((detail, idx) => (
-                                  <div key={`pricing-${idx}`} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                                    <div className="flex items-start space-x-2">
-                                      <svg className="w-4 h-4 text-[#F7C844] mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                      </svg>
-                                      <div className="flex-1 min-w-0">
-                                        <span className="text-xs font-medium text-gray-500 uppercase">Pricing</span>
-                                        <p className="text-sm font-medium text-gray-900 mt-0.5 truncate">
-                                          {detail.pricing_name || detail.pricinglist_name || detail.pricinglist_id}
-                                        </p>
-                                        {detail.pricing_type && (
-                                          <span className="inline-block mt-1 text-xs text-gray-600 bg-white px-2 py-0.5 rounded border border-gray-200">
-                                            {detail.pricing_type}
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                                {/* Included Merchandise (Freebies) */}
-                                {includedMerchandiseTypes.map((typeName) => (
-                                  <div key={`included-merch-${typeName}`} className="p-3 bg-green-50 rounded-lg border border-green-200">
-                                    <div className="flex items-start space-x-2">
-                                      <svg className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                                      </svg>
-                                      <div className="flex-1">
-                                        <div className="flex items-center justify-between">
-                                          <span className="text-xs font-medium text-gray-500 uppercase">Merchandise</span>
-                                          <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded">Included</span>
-                                        </div>
-                                        <p className="text-sm font-medium text-gray-900 mt-0.5">{typeName}</p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                                {/* Paid Merchandise */}
-                                {paidMerchandiseTypes.map((typeName) => (
-                                  <div key={`paid-merch-${typeName}`} className="p-3 bg-orange-50 rounded-lg border border-orange-200">
-                                    <div className="flex items-start space-x-2">
-                                      <svg className="w-4 h-4 text-orange-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                                      </svg>
-                                      <div className="flex-1">
-                                        <div className="flex items-center justify-between">
-                                          <span className="text-xs font-medium text-gray-500 uppercase">Merchandise</span>
-                                          <span className="text-xs font-semibold text-orange-700 bg-orange-100 px-2 py-0.5 rounded">Paid</span>
-                                        </div>
-                                        <p className="text-sm font-medium text-gray-900 mt-0.5">{typeName}</p>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {selectedPackageMerchTypes.length > 0 && (
-                          <div className="pt-3 mt-3 border-t border-gray-200">
-                            <p className="text-sm font-medium text-gray-900 mb-3">Configure Merchandise</p>
-                            
-                            {/* Show per-student selection if students are selected */}
-                            {selectedStudents.length > 0 ? (
-                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                              {selectedPackageMerchTypes.map((typeName) => {
-                                const itemsForType = getMerchandiseItemsByType(typeName);
-                                const hasInventory = itemsForType.length > 0;
-                                  const hasSizes = itemsForType.some(item => item.size);
-
-                                return (
-                                    <div key={`config-${typeName}`} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
-                                      <label className="block text-sm font-medium text-gray-900 mb-2">
-                                      {typeName}
-                                    </label>
-                                    {!hasInventory ? (
-                                        <div className="flex items-center space-x-2 p-2 bg-red-50 border border-red-200 rounded">
-                                          <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                        </svg>
-                                        <p className="text-xs text-red-700 font-medium">
-                                            No inventory available
-                                        </p>
-                                      </div>
-                                      ) : hasSizes ? (
-                                        (() => {
-                                          const uniformCategories = Array.from(
-                                            new Set(
-                                              itemsForType
-                                                .map(item => getUniformCategory(item))
-                                                .filter(category => category && category !== 'General')
-                                            )
-                                          );
-                                          const hasCategoryFilter = uniformCategories.length > 0;
-                                          const hasTopAndBottom =
-                                            uniformCategories.includes('Top') &&
-                                            uniformCategories.includes('Bottom');
-                                          const activeCategory = hasCategoryFilter
-                                            ? (uniformCategoryFilters[typeName] && uniformCategories.includes(uniformCategoryFilters[typeName])
-                                                ? uniformCategoryFilters[typeName]
-                                                : uniformCategories[0])
-                                            : null;
-                                          const filteredItemsForCategory = hasCategoryFilter
-                                            ? itemsForType.filter(item => getUniformCategory(item) === activeCategory)
-                                            : itemsForType;
-                                          const colorSchemes = [
-                                            { border: 'border-blue-300', bg: 'bg-blue-50', badge: 'bg-blue-600' },
-                                            { border: 'border-green-300', bg: 'bg-green-50', badge: 'bg-green-600' },
-                                            { border: 'border-purple-300', bg: 'bg-purple-50', badge: 'bg-purple-600' },
-                                            { border: 'border-orange-300', bg: 'bg-orange-50', badge: 'bg-orange-600' },
-                                            { border: 'border-pink-300', bg: 'bg-pink-50', badge: 'bg-pink-600' },
-                                          ];
-                                          
-                                          return (
-                                            <div className="space-y-2">
-                                              {hasCategoryFilter && (
-                                                <div className="flex items-center gap-1.5 mb-2">
-                                                  {uniformCategories.map(category => (
-                                                    <button
-                                                      key={`${typeName}-${category}`}
-                                                      type="button"
-                                                      onClick={() => setUniformCategoryFilters(prev => ({ ...prev, [typeName]: category }))}
-                                                      className={`px-2 py-0.5 text-[11px] font-semibold rounded-full border transition-colors ${
-                                                        activeCategory === category
-                                                          ? 'bg-[#F7C844] text-gray-900 border-[#F7C844]'
-                                                          : 'bg-white text-gray-600 border-gray-300 hover:border-[#F7C844]'
-                                                      }`}
-                                                    >
-                                                      {category}
-                                                    </button>
-                                                  ))}
-                                                </div>
-                                              )}
-                                              {filteredItemsForCategory.length === 0 ? (
-                                                <div className="p-1.5 bg-yellow-50 border border-yellow-200 rounded text-[11px] text-yellow-800">
-                                                  No inventory for this category.
-                                                </div>
-                                              ) : (
-                                                <div className="space-y-1.5 max-h-64 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc' }}>
-                                                {selectedStudents.map((student, studentIndex) => {
-                                                  const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
-                                                  const colorScheme = colorSchemes[studentIndex % colorSchemes.length];
-                                                  const genderFilteredItems = filterMerchandiseByStudentGender(
-                                                    filteredItemsForCategory,
-                                                    student.gender
-                                                  );
-                                                  const currentSelection = studentMerchSelections.find(m =>
-                                                    m.merchandise_name === typeName &&
-                                                    (!activeCategory || m.category === activeCategory)
-                                                  );
-                                                  const currentMerchandiseId = currentSelection?.merchandise_id
-                                                    ? String(currentSelection.merchandise_id)
-                                                    : '';
-                                                  const genderLabel = student.gender
-                                                    ? formatMerchandiseGenderLabel(student.gender)
-                                                    : null;
-                                                  const sameSizeKey = uniformSameSizeKey(student.user_id, typeName);
-                                                  const sameSizeOn = !!uniformSameSizeEnabled[sameSizeKey];
-                                                  const sizePairAvailability = hasTopAndBottom
-                                                    ? getUniformSizePairAvailability(
-                                                        itemsForType,
-                                                        student.gender,
-                                                        getUniformCategory
-                                                      )
-                                                    : [];
-                                                  const sharedSizes = sizePairAvailability
-                                                    .filter((row) => row.canPair)
-                                                    .map((row) => row.size);
-                                                  const topSel = studentMerchSelections.find(
-                                                    (m) =>
-                                                      m.merchandise_name === typeName && m.category === 'Top'
-                                                  );
-                                                  const bottomSel = studentMerchSelections.find(
-                                                    (m) =>
-                                                      m.merchandise_name === typeName && m.category === 'Bottom'
-                                                  );
-                                                  const linkedSize =
-                                                    sameSizeOn &&
-                                                    topSel?.size &&
-                                                    bottomSel?.size &&
-                                                    topSel.size === bottomSel.size
-                                                      ? topSel.size
-                                                      : '';
-
-                                                  return (
-                                                    <div key={`${typeName}-${activeCategory || 'all'}-${student.user_id}`} className={`p-2.5 rounded-lg border ${colorScheme.border} ${colorScheme.bg} mb-1.5`}>
-                                                      <div className="flex items-center justify-between mb-1.5">
-                                                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                                                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${colorScheme.badge} text-white text-[10px] font-bold flex-shrink-0`}>
-                                                            {studentIndex + 1}
-                                                          </span>
-                                                          <span className="text-[11px] font-semibold text-gray-900 truncate">
-                                                            {student.full_name}
-                                                          </span>
-                                                          {genderLabel ? (
-                                                            <span className="flex-shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600 ring-1 ring-gray-200">
-                                                              {genderLabel}
-                                                            </span>
-                                                          ) : (
-                                                            <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
-                                                              No gender
-                                                            </span>
-                                                          )}
-                                                        </div>
-                                                        {hasCategoryFilter && (
-                                                          <span className="text-[10px] font-semibold text-gray-600 flex-shrink-0 ml-1">
-                                                            {activeCategory}
-                                                          </span>
-                                                        )}
-                                                      </div>
-                                                      {hasTopAndBottom && (
-                                                        <div className="mb-1.5 space-y-1">
-                                                          <label className="flex items-center gap-1.5 text-[10px] text-gray-700 cursor-pointer">
-                                                            <input
-                                                              type="checkbox"
-                                                              checked={sameSizeOn}
-                                                              onChange={(e) => {
-                                                                const enabled = e.target.checked;
-                                                                setUniformSameSizeEnabled((prev) => {
-                                                                  const next = { ...prev };
-                                                                  if (enabled) next[sameSizeKey] = true;
-                                                                  else delete next[sameSizeKey];
-                                                                  return next;
-                                                                });
-                                                              }}
-                                                              className="h-3 w-3 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
-                                                            />
-                                                            Use same size for Top &amp; Bottom
-                                                          </label>
-                                                          <p className="text-[9px] text-gray-500 leading-snug">
-                                                            Only sizes stocked for both Top and Bottom can be selected here. Uncheck to set Top and Bottom separately (e.g. Top-only sizes).
-                                                          </p>
-                                                          {sameSizeOn && (
-                                                            <select
-                                                              value={linkedSize}
-                                                              onChange={(e) => {
-                                                                handleStudentUniformSameSizeChange(
-                                                                  student.user_id,
-                                                                  typeName,
-                                                                  e.target.value || null,
-                                                                  student.gender
-                                                                );
-                                                              }}
-                                                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
-                                                            >
-                                                              <option value="">Select size for both</option>
-                                                              {sizePairAvailability.length === 0 ? (
-                                                                <option value="" disabled>
-                                                                  No Top/Bottom stock for this gender
-                                                                </option>
-                                                              ) : (
-                                                                sizePairAvailability.map((row) => {
-                                                                    const topInv = row.topItem
-                                                                      ? checkInventoryAvailability(row.topItem.merchandise_id)
-                                                                      : null;
-                                                                    const botInv = row.bottomItem
-                                                                      ? checkInventoryAvailability(row.bottomItem.merchandise_id)
-                                                                      : null;
-                                                                    return (
-                                                                    <option
-                                                                    key={row.size}
-                                                                    value={row.canPair ? row.size : ''}
-                                                                    disabled={!row.canPair}
-                                                                  >
-                                                                    {formatUniformSameSizePairOptionLabel(
-                                                                      row,
-                                                                      topInv?.available ?? null,
-                                                                      botInv?.available ?? null
-                                                                    )}
-                                                                  </option>
-                                                                );
-                                                                })
-                                                              )}
-                                                            </select>
-                                                          )}
-                                                        </div>
-                                                      )}
-                                                      <div className="flex items-center gap-1.5">
-                                                        <label className="text-[10px] text-gray-700 flex-shrink-0">
-                                                          Size:
-                                                        </label>
-                                                        <select
-                                                          value={currentMerchandiseId}
-                                                          disabled={sameSizeOn}
-                                                          onChange={(e) => {
-                                                            clearUniformSameSizeLink(student.user_id, typeName);
-                                                            const selectedId = e.target.value;
-                                                            if (!selectedId) {
-                                                              handleStudentMerchandiseSizeChange(student.user_id, typeName, null, activeCategory);
-                                                              return;
-                                                            }
-                                                            const selectedItem = genderFilteredItems.find(
-                                                              (item) => String(item.merchandise_id) === String(selectedId)
-                                                            );
-                                                            if (selectedItem) {
-                                                              handleStudentMerchandiseSizeChange(student.user_id, typeName, selectedItem, activeCategory);
-                                                              handlePackageMerchSelectionChange(typeName, selectedItem);
-                                                            }
-                                                          }}
-                                                          className="flex-1 px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] focus:border-transparent bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
-                                                        >
-                                                          <option value="">Select</option>
-                                                          {genderFilteredItems.length === 0 ? (
-                                                            <option value="" disabled>
-                                                              No matching {genderLabel || 'gender'} stock
-                                                            </option>
-                                                          ) : (
-                                                            genderFilteredItems.map((sizeItem) => {
-                                                              const inventory = sizeItem
-                                                                ? checkInventoryAvailability(sizeItem.merchandise_id)
-                                                                : null;
-                                                              const isOutOfStock = inventory?.isOutOfStock;
-                                                              const qty =
-                                                                inventory && !isOutOfStock
-                                                                  ? inventory.available
-                                                                  : null;
-                                                              return (
-                                                                <option
-                                                                  key={`${student.user_id}-${sizeItem.merchandise_id}`}
-                                                                  value={String(sizeItem.merchandise_id)}
-                                                                  disabled={isOutOfStock}
-                                                                >
-                                                                  {formatUniformSizeOptionLabel(sizeItem, qty)}
-                                                                  {isOutOfStock ? ' (OOS)' : ''}
-                                                                </option>
-                                                              );
-                                                            })
-                                                          )}
-                                                        </select>
-                                                      </div>
-                                                      {currentSelection?.size && (
-                                                        <div className="mt-1.5 flex flex-wrap gap-1">
-                                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
-                                                            ✓ {currentSelection.size}
-                                                          </span>
-                                                          {(() => {
-                                                            const selectedMeta = genderFilteredItems.find(
-                                                              (item) =>
-                                                                String(item.merchandise_id) ===
-                                                                String(currentSelection.merchandise_id)
-                                                            );
-                                                            return selectedMeta ? (
-                                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-gray-700 ring-1 ring-gray-200">
-                                                                {formatMerchandiseGenderLabel(selectedMeta.gender)}
-                                                              </span>
-                                                            ) : null;
-                                                          })()}
-                                                        </div>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                })}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })()
-                                      ) : (
-                                        // For items without sizes, show global checkbox
-                                        <div className="space-y-2">
-                                        {itemsForType.map((item) => {
-                                            const selections = packageMerchSelections[typeName] || [];
-                                          const isChecked = selections.some(
-                                            (selection) => selection.merchandise_id === item.merchandise_id
-                                          );
-                                            const inventory = checkInventoryAvailability(item.merchandise_id);
-                                          return (
-                                            <label
-                                              key={item.merchandise_id}
-                                                className={`flex items-start space-x-2 p-2 rounded cursor-pointer transition-all border ${
-                                                  inventory.isOutOfStock ? 'bg-red-50 border-red-200 cursor-not-allowed opacity-60' :
-                                                  inventory.isLowStock ? 'bg-orange-50 border-orange-200' :
-                                                isChecked 
-                                                    ? 'bg-white border border-[#F7C844]' 
-                                                    : 'hover:bg-white border border-gray-200'
-                                              }`}
-                                            >
-                                              <input
-                                                type="checkbox"
-                                                checked={isChecked}
-                                                onChange={() => handlePackageMerchSelectionChange(typeName, item)}
-                                                  className="h-4 w-4 text-[#F7C844] focus:ring-[#F7C844] border-gray-300 rounded transition-all mt-0.5"
-                                                  disabled={inventory.isOutOfStock}
-                                              />
-                                                <div className="flex-1">
-                                                  <span className={`text-sm font-medium ${isChecked ? 'text-gray-900' : 'text-gray-700'}`}>
-                                                {getMerchandiseOptionLabel(item)}
-                                              </span>
-                                                  {inventory.available !== null && (
-                                                    <div className={`text-xs mt-1 ${
-                                                      inventory.isOutOfStock ? 'text-red-600 font-semibold' :
-                                                      inventory.isLowStock ? 'text-orange-600' :
-                                                      'text-gray-500'
-                                                    }`}>
-                                                      Stock: {inventory.available}
-                                                      {selectedStudents.length > 1 && (
-                                                        <span className="ml-1">
-                                                          (Need: {inventory.needed})
-                                                          {inventory.isLowStock && ' ? Low stock'}
-                                                          {inventory.isOutOfStock && ' ? Out of stock'}
-                                                        </span>
-                                                      )}
-                                                    </div>
-                                                  )}
-                                                </div>
-                                            </label>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            ) : (
-                              // Show message if no students selected yet
-                              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                                <p className="text-sm text-yellow-800">
-                                  Please select students first to configure merchandise sizes.
-                                </p>
-                          </div>
-                        )}
-                      </div>
-                        )}
-                        </div>
-                      )}
                     </div>
                   )}
 
@@ -12174,13 +11880,7 @@ const resolvedBranchId =
                                       {isSelected && isSchoolUniformMerchandiseName(item.merchandise_name) && hasSizes && selectedStudents.length > 0 && (
                                         <div className="mt-3 pt-3 border-t border-gray-200">
                                           {(() => {
-                                            const uniformCategories = Array.from(
-                                              new Set(
-                                                itemsForType
-                                                  .map(merchItem => getUniformCategory(merchItem))
-                                                  .filter(category => category && category !== 'General')
-                                              )
-                                            );
+                                            const uniformCategories = listUniformStockCategories(itemsForType, getUniformCategory);
                                             const hasCategoryFilter = uniformCategories.length > 0;
                                             const hasTopAndBottom =
                                               uniformCategories.includes('Top') &&
@@ -12401,15 +12101,11 @@ const resolvedBranchId =
                                                                     ? checkInventoryAvailability(sizeItem.merchandise_id)
                                                                     : null;
                                                                   const isOutOfStock = sizeInventory?.isOutOfStock;
-                                                                  const qty =
-                                                                    sizeInventory && !isOutOfStock
-                                                                      ? sizeInventory.available
-                                                                      : null;
+                                                                  const qty = sizeInventory?.available ?? null;
                                                                   return (
                                                                     <option
                                                                       key={`${student.user_id}-${sizeItem.merchandise_id}`}
                                                                       value={String(sizeItem.merchandise_id)}
-                                                                      disabled={isOutOfStock}
                                                                     >
                                                                       {formatUniformSizeOptionLabel(sizeItem, qty)}
                                                                       {isOutOfStock ? ' (OOS)' : ''}
@@ -12466,6 +12162,34 @@ const resolvedBranchId =
                     </div>
                   )}
 
+                      </>
+                    )}
+                    right={
+                      <EnrollOrderSummary
+                        packageName={selectedPackage?.package_name}
+                        packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
+                        totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
+                        promoName={selectedPromo?.promo_name}
+                        students={selectedStudents}
+                        items={buildEnrollSummaryItems({
+                          includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
+                          student: selectedStudents[0] || null,
+                          entitlementsByStudent: studentPackageMerchEntitlements,
+                          merchandiseList: merchandise,
+                          studentMerchSelections: selectedStudents[0]
+                            ? (studentMerchandiseSelections[selectedStudents[0].user_id] || [])
+                            : [],
+                        })}
+                        slotsAvailable={getAvailableSlots()}
+                        configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
+                        showInvoiceNote={enrollStep === 'review'}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                      />
+                    }
+                  />
+
+
+                  <div className="flex-shrink-0 space-y-3">
                   {/* Installment Settings Toggle - Show for package option, but hide for fullpayment packages and Reserved packages */}
                   {selectedPackage && selectedEnrollmentOption !== 'per-phase' && (() => {
                     // Hide installment settings if enrollment option is reservation
@@ -12605,12 +12329,438 @@ const resolvedBranchId =
                       </div>
                     </div>
                   )}
+                  </div>
                 </div>
               )}
 
+
+              {enrollStep === 'merchandise-config' && (
+                <div className="flex flex-col min-h-0 h-full gap-3">
+                  <EnrollStudentSelectionLayout
+                    left={(
+                      <>
+                        <div>
+                          <h3 className="text-base font-semibold text-gray-900">Configure package items</h3>
+                          <p className="text-sm text-emerald-700 mt-0.5">
+                            {selectedStudents.length} of {selectedStudents.length} students configured
+                          </p>
+                          <p className="text-xs text-gray-500 mt-2">
+                            Zero-stock items can still be selected. They are issued later from Merchandise → Pending issue after restock (and first payment).
+                          </p>
+                        </div>
+                        <div className="space-y-3">
+
+
+                        {selectedPackageMerchTypes.length > 0 && (
+                          <div className="p-3 bg-white border border-gray-200 rounded-lg">
+                            <p className="text-sm font-medium text-gray-900 mb-3">Configure Merchandise</p>
+                            
+                            {/* Show per-student selection if students are selected */}
+                            {selectedStudents.length > 0 ? (
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                              {selectedPackageMerchTypes.map((typeName) => {
+                                const itemsForType = getMerchandiseItemsByType(typeName);
+                                const hasInventory = itemsForType.length > 0;
+                                  const hasSizes = itemsForType.some(item => item.size);
+
+                                return (
+                                    <div key={`config-${typeName}`} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                      <label className="block text-sm font-medium text-gray-900 mb-2">
+                                      {typeName}
+                                    </label>
+                                    {!hasInventory ? (
+                                        <div className="flex items-center space-x-2 p-2 bg-red-50 border border-red-200 rounded">
+                                          <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                        </svg>
+                                        <p className="text-xs text-red-700 font-medium">
+                                            No inventory available
+                                        </p>
+                                      </div>
+                                      ) : hasSizes ? (
+                                        (() => {
+                                          const uniformCategories = listUniformStockCategories(
+                                            itemsForType,
+                                            getUniformCategory
+                                          );
+                                          const hasCategoryFilter = uniformCategories.length > 0;
+                                          const hasTopAndBottom =
+                                            uniformCategories.includes('Top') &&
+                                            uniformCategories.includes('Bottom');
+                                          const activeCategory = hasCategoryFilter
+                                            ? (uniformCategoryFilters[typeName] && uniformCategories.includes(uniformCategoryFilters[typeName])
+                                                ? uniformCategoryFilters[typeName]
+                                                : uniformCategories[0])
+                                            : null;
+                                          const filteredItemsForCategory = hasCategoryFilter
+                                            ? itemsForType.filter(item => getUniformCategory(item) === activeCategory)
+                                            : itemsForType;
+                                          const colorSchemes = [
+                                            { border: 'border-blue-300', bg: 'bg-blue-50', badge: 'bg-blue-600' },
+                                            { border: 'border-green-300', bg: 'bg-green-50', badge: 'bg-green-600' },
+                                            { border: 'border-purple-300', bg: 'bg-purple-50', badge: 'bg-purple-600' },
+                                            { border: 'border-orange-300', bg: 'bg-orange-50', badge: 'bg-orange-600' },
+                                            { border: 'border-pink-300', bg: 'bg-pink-50', badge: 'bg-pink-600' },
+                                          ];
+                                          
+                                          return (
+                                            <div className="space-y-2">
+                                              {hasCategoryFilter && (
+                                                <div className="flex items-center gap-1.5 mb-2">
+                                                  {uniformCategories.map(category => (
+                                                    <button
+                                                      key={`${typeName}-${category}`}
+                                                      type="button"
+                                                      onClick={() => setUniformCategoryFilters(prev => ({ ...prev, [typeName]: category }))}
+                                                      className={`px-2 py-0.5 text-[11px] font-semibold rounded-full border transition-colors ${
+                                                        activeCategory === category
+                                                          ? 'bg-[#F7C844] text-gray-900 border-[#F7C844]'
+                                                          : 'bg-white text-gray-600 border-gray-300 hover:border-[#F7C844]'
+                                                      }`}
+                                                    >
+                                                      {category}
+                                                    </button>
+                                                  ))}
+                                                </div>
+                                              )}
+                                              {filteredItemsForCategory.length === 0 ? (
+                                                <div className="p-1.5 bg-yellow-50 border border-yellow-200 rounded text-[11px] text-yellow-800">
+                                                  No inventory for this category.
+                                                </div>
+                                              ) : (
+                                                <div className="space-y-1.5 max-h-64 overflow-y-auto" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc' }}>
+                                                {selectedStudents.map((student, studentIndex) => {
+                                                  const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
+                                                  const colorScheme = colorSchemes[studentIndex % colorSchemes.length];
+                                                  const genderFilteredItems = filterMerchandiseByStudentGender(
+                                                    filteredItemsForCategory,
+                                                    student.gender
+                                                  );
+                                                  const currentSelection = studentMerchSelections.find(m =>
+                                                    m.merchandise_name === typeName &&
+                                                    (!activeCategory || m.category === activeCategory)
+                                                  );
+                                                  const currentMerchandiseId = currentSelection?.merchandise_id
+                                                    ? String(currentSelection.merchandise_id)
+                                                    : '';
+                                                  const genderLabel = student.gender
+                                                    ? formatMerchandiseGenderLabel(student.gender)
+                                                    : null;
+                                                  const sameSizeKey = uniformSameSizeKey(student.user_id, typeName);
+                                                  const sameSizeOn = !!uniformSameSizeEnabled[sameSizeKey];
+                                                  const sizePairAvailability = hasTopAndBottom
+                                                    ? getUniformSizePairAvailability(
+                                                        itemsForType,
+                                                        student.gender,
+                                                        getUniformCategory
+                                                      )
+                                                    : [];
+                                                  const sharedSizes = sizePairAvailability
+                                                    .filter((row) => row.canPair)
+                                                    .map((row) => row.size);
+                                                  const topSel = studentMerchSelections.find(
+                                                    (m) =>
+                                                      m.merchandise_name === typeName && m.category === 'Top'
+                                                  );
+                                                  const bottomSel = studentMerchSelections.find(
+                                                    (m) =>
+                                                      m.merchandise_name === typeName && m.category === 'Bottom'
+                                                  );
+                                                  const linkedSize =
+                                                    sameSizeOn &&
+                                                    topSel?.size &&
+                                                    bottomSel?.size &&
+                                                    topSel.size === bottomSel.size
+                                                      ? topSel.size
+                                                      : '';
+
+                                                  return (
+                                                    <div key={`${typeName}-${activeCategory || 'all'}-${student.user_id}`} className={`p-2.5 rounded-lg border ${colorScheme.border} ${colorScheme.bg} mb-1.5`}>
+                                                      <div className="flex items-center justify-between mb-1.5">
+                                                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                                                          <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full ${colorScheme.badge} text-white text-[10px] font-bold flex-shrink-0`}>
+                                                            {studentIndex + 1}
+                                                          </span>
+                                                          <span className="text-[11px] font-semibold text-gray-900 truncate">
+                                                            {student.full_name}
+                                                          </span>
+                                                          {genderLabel ? (
+                                                            <span className="flex-shrink-0 rounded-full bg-white/80 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-600 ring-1 ring-gray-200">
+                                                              {genderLabel}
+                                                            </span>
+                                                          ) : (
+                                                            <span className="flex-shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
+                                                              No gender
+                                                            </span>
+                                                          )}
+                                                        </div>
+                                                        {hasCategoryFilter && (
+                                                          <span className="text-[10px] font-semibold text-gray-600 flex-shrink-0 ml-1">
+                                                            {activeCategory}
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                      {hasTopAndBottom && (
+                                                        <div className="mb-1.5 space-y-1">
+                                                          <label className="flex items-center gap-1.5 text-[10px] text-gray-700 cursor-pointer">
+                                                            <input
+                                                              type="checkbox"
+                                                              checked={sameSizeOn}
+                                                              onChange={(e) => {
+                                                                const enabled = e.target.checked;
+                                                                setUniformSameSizeEnabled((prev) => {
+                                                                  const next = { ...prev };
+                                                                  if (enabled) next[sameSizeKey] = true;
+                                                                  else delete next[sameSizeKey];
+                                                                  return next;
+                                                                });
+                                                              }}
+                                                              className="h-3 w-3 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
+                                                            />
+                                                            Use same size for Top &amp; Bottom
+                                                          </label>
+                                                          <p className="text-[9px] text-gray-500 leading-snug">
+                                                            Only sizes stocked for both Top and Bottom can be selected here. Uncheck to set Top and Bottom separately (e.g. Top-only sizes).
+                                                          </p>
+                                                          {sameSizeOn && (
+                                                            <select
+                                                              value={linkedSize}
+                                                              onChange={(e) => {
+                                                                handleStudentUniformSameSizeChange(
+                                                                  student.user_id,
+                                                                  typeName,
+                                                                  e.target.value || null,
+                                                                  student.gender
+                                                                );
+                                                              }}
+                                                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
+                                                            >
+                                                              <option value="">Select size for both</option>
+                                                              {sizePairAvailability.length === 0 ? (
+                                                                <option value="" disabled>
+                                                                  No Top/Bottom stock for this gender
+                                                                </option>
+                                                              ) : (
+                                                                sizePairAvailability.map((row) => {
+                                                                    const topInv = row.topItem
+                                                                      ? checkInventoryAvailability(row.topItem.merchandise_id)
+                                                                      : null;
+                                                                    const botInv = row.bottomItem
+                                                                      ? checkInventoryAvailability(row.bottomItem.merchandise_id)
+                                                                      : null;
+                                                                    return (
+                                                                    <option
+                                                                    key={row.size}
+                                                                    value={row.canPair ? row.size : ''}
+                                                                    disabled={!row.canPair}
+                                                                  >
+                                                                    {formatUniformSameSizePairOptionLabel(
+                                                                      row,
+                                                                      topInv?.available ?? null,
+                                                                      botInv?.available ?? null
+                                                                    )}
+                                                                  </option>
+                                                                );
+                                                                })
+                                                              )}
+                                                            </select>
+                                                          )}
+                                                        </div>
+                                                      )}
+                                                      <div className="flex items-center gap-1.5">
+                                                        <label className="text-[10px] text-gray-700 flex-shrink-0">
+                                                          Size:
+                                                        </label>
+                                                        <select
+                                                          value={currentMerchandiseId}
+                                                          disabled={sameSizeOn}
+                                                          onChange={(e) => {
+                                                            clearUniformSameSizeLink(student.user_id, typeName);
+                                                            const selectedId = e.target.value;
+                                                            if (!selectedId) {
+                                                              handleStudentMerchandiseSizeChange(student.user_id, typeName, null, activeCategory);
+                                                              return;
+                                                            }
+                                                            const selectedItem = genderFilteredItems.find(
+                                                              (item) => String(item.merchandise_id) === String(selectedId)
+                                                            );
+                                                            if (selectedItem) {
+                                                              handleStudentMerchandiseSizeChange(student.user_id, typeName, selectedItem, activeCategory);
+                                                              handlePackageMerchSelectionChange(typeName, selectedItem);
+                                                            }
+                                                          }}
+                                                          className="flex-1 px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] focus:border-transparent bg-white disabled:bg-gray-100 disabled:cursor-not-allowed"
+                                                        >
+                                                          <option value="">Select</option>
+                                                          {genderFilteredItems.length === 0 ? (
+                                                            <option value="" disabled>
+                                                              No matching {genderLabel || 'gender'} stock
+                                                            </option>
+                                                          ) : (
+                                                            genderFilteredItems.map((sizeItem) => {
+                                                              const inventory = sizeItem
+                                                                ? checkInventoryAvailability(sizeItem.merchandise_id)
+                                                                : null;
+                                                              const isOutOfStock = inventory?.isOutOfStock;
+                                                              const qty = inventory?.available ?? null;
+                                                              return (
+                                                                <option
+                                                                  key={`${student.user_id}-${sizeItem.merchandise_id}`}
+                                                                  value={String(sizeItem.merchandise_id)}
+                                                                >
+                                                                  {formatUniformSizeOptionLabel(sizeItem, qty)}
+                                                                  {isOutOfStock ? ' (OOS)' : ''}
+                                                                </option>
+                                                              );
+                                                            })
+                                                          )}
+                                                        </select>
+                                                      </div>
+                                                      {currentSelection?.size && (
+                                                        <div className="mt-1.5 flex flex-wrap gap-1">
+                                                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
+                                                            ✓ {currentSelection.size}
+                                                          </span>
+                                                          {(() => {
+                                                            const selectedMeta = genderFilteredItems.find(
+                                                              (item) =>
+                                                                String(item.merchandise_id) ===
+                                                                String(currentSelection.merchandise_id)
+                                                            );
+                                                            return selectedMeta ? (
+                                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-gray-700 ring-1 ring-gray-200">
+                                                                {formatMerchandiseGenderLabel(selectedMeta.gender)}
+                                                              </span>
+                                                            ) : null;
+                                                          })()}
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  );
+                                                })}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })()
+                                      ) : (
+                                        // For items without sizes, show global checkbox
+                                        <div className="space-y-2">
+                                        {itemsForType.map((item) => {
+                                            const selections = packageMerchSelections[typeName] || [];
+                                          const isChecked = selections.some(
+                                            (selection) => selection.merchandise_id === item.merchandise_id
+                                          );
+                                            const inventory = checkInventoryAvailability(item.merchandise_id);
+                                          return (
+                                            <label
+                                              key={item.merchandise_id}
+                                                className={`flex items-start space-x-2 p-2 rounded cursor-pointer transition-all border ${
+                                                  inventory.isOutOfStock ? 'bg-red-50 border-red-200' :
+                                                  inventory.isLowStock ? 'bg-orange-50 border-orange-200' :
+                                                isChecked 
+                                                    ? 'bg-white border border-[#F7C844]' 
+                                                    : 'hover:bg-white border border-gray-200'
+                                              }`}
+                                            >
+                                              <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={() => handlePackageMerchSelectionChange(typeName, item)}
+                                                  className="h-4 w-4 text-[#F7C844] focus:ring-[#F7C844] border-gray-300 rounded transition-all mt-0.5"
+                                              />
+                                                <div className="flex-1">
+                                                  <span className={`text-sm font-medium ${isChecked ? 'text-gray-900' : 'text-gray-700'}`}>
+                                                {getMerchandiseOptionLabel(item)}
+                                              </span>
+                                                  {inventory.available !== null && (
+                                                    <div className={`text-xs mt-1 ${
+                                                      inventory.isOutOfStock ? 'text-red-600 font-semibold' :
+                                                      inventory.isLowStock ? 'text-orange-600' :
+                                                      'text-gray-500'
+                                                    }`}>
+                                                      Stock: {inventory.available}
+                                                      {selectedStudents.length > 1 && (
+                                                        <span className="ml-1">
+                                                          (Need: {inventory.needed})
+                                                          {inventory.isLowStock && ' ? Low stock'}
+                                                          {inventory.isOutOfStock && ' ? Out of stock'}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            ) : (
+                              // Show message if no students selected yet
+                              <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <p className="text-sm text-yellow-800">
+                                  Please select students first to configure merchandise sizes.
+                                </p>
+                          </div>
+                        )}
+                      </div>
+                        )}
+
+                        {selectedPackageSwappableTypes.length > 0 && selectedStudents.length > 0 ? (
+                          <PackageMerchEntitlementPanel
+                            students={selectedStudents}
+                            typeNames={selectedPackageSwappableTypes}
+                            merchandise={merchandise}
+                            entitlementsByStudent={studentPackageMerchEntitlements}
+                            onChange={setStudentPackageMerchEntitlements}
+                            embedded
+                          />
+                        ) : selectedPackageSwappableTypes.length > 0 ? (
+                          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                            <p className="text-sm text-yellow-800">
+                              Select a student to keep or swap package freebies (e.g. Backpack).
+                            </p>
+                          </div>
+                        ) : null}
+
+
+                        </div>
+                      </>
+                    )}
+                    summary={
+                      <EnrollOrderSummary
+                        packageName={selectedPackage?.package_name}
+                        packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
+                        totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
+                        promoName={selectedPromo?.promo_name}
+                        students={selectedStudents}
+                        items={buildEnrollSummaryItems({
+                          includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
+                          student: selectedStudents[0] || null,
+                          entitlementsByStudent: studentPackageMerchEntitlements,
+                          merchandiseList: merchandise,
+                          studentMerchSelections: selectedStudents[0]
+                            ? (studentMerchandiseSelections[selectedStudents[0].user_id] || [])
+                            : [],
+                        })}
+                        slotsAvailable={getAvailableSlots()}
+                        configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
+                        showInvoiceNote={enrollStep === 'review'}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                      />
+                    }
+                  />
+                </div>
+              )}
+
+
               {/* Step 4: Review & Invoice */}
               {enrollStep === 'review' && (
-                <div className="space-y-4">
+                <div className="flex flex-col min-h-0 h-full gap-3">
                   {(() => {
                     const classLabel = [
                       selectedClassForEnrollment?.program_name,
@@ -12682,13 +12832,29 @@ const resolvedBranchId =
 
                       packageMerchTypes.forEach((typeName) => {
                         if (requiresSizingForMerchandise(typeName)) return;
-                        if (lines.some((l) => l.name === typeName)) return;
+                        const display = resolvePackageMerchInclusionDisplay({
+                          typeName,
+                          entitlement:
+                            studentPackageMerchEntitlements[student.user_id]?.[typeName],
+                          merchandiseList: merchandise,
+                        });
+                        if (
+                          !display.swapped &&
+                          lines.some((l) => l.name === typeName)
+                        ) {
+                          return;
+                        }
                         lines.push({
-                          name: typeName,
+                          name: display.name,
+                          originalTypeName: display.originalTypeName,
+                          swapped: display.swapped,
                           piece: null,
                           size: null,
                           gender: null,
-                          imageUrl: resolveMerchImage(typeName, null),
+                          subtitle: display.subtitle,
+                          imageUrl:
+                            display.imageUrl ||
+                            resolveMerchImage(display.name, display.merchandiseId),
                         });
                       });
 
@@ -12696,9 +12862,14 @@ const resolvedBranchId =
                     };
 
                     return (
-                      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 md:gap-6 items-start">
-                        {/* Left: student + class */}
-                        <div className="md:col-span-4 space-y-4">
+                      <EnrollStudentSelectionLayout
+                        left={(
+                      <div className="space-y-4">
+                        <div>
+                          <h3 className="text-base font-semibold text-gray-900">Review enrollment</h3>
+                          <p className="text-sm text-gray-500 mt-0.5">Please review the details below before enrolling.</p>
+                        </div>
+                        <div className="space-y-3">
                           <div className="rounded-xl border border-gray-200 bg-gradient-to-br from-slate-50 to-white p-4">
                             <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-2">
                               Student
@@ -12738,12 +12909,15 @@ const resolvedBranchId =
                           </div>
                         </div>
 
-                        {/* Right: merchandise inclusions */}
-                        <div className="md:col-span-8">
+                        {/* Package items */}
+                        <div>
                           <div className="flex flex-wrap items-end justify-between gap-2 mb-3">
                             <div>
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-                                Merchandise package inclusions
+                                Package items
+                              </p>
+                              <p className="text-xs text-gray-500 mt-0.5">
+                                These are the final items that will be included in the enrollment.
                               </p>
                               {selectedPackage ? (
                                 <p className="text-sm font-medium text-gray-800 mt-0.5">
@@ -12772,7 +12946,7 @@ const resolvedBranchId =
                                       <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                         {inclusions.map((line, idx) => (
                                           <li
-                                            key={`${student.user_id}-${line.name}-${line.piece || 'x'}-${line.size || 'x'}-${idx}`}
+                                            key={`${student.user_id}-${line.originalTypeName || line.name}-${line.piece || 'x'}-${line.size || 'x'}-${idx}`}
                                             className="flex items-center gap-3 rounded-xl border border-gray-200 bg-white px-2.5 py-2 shadow-sm"
                                           >
                                             <div className="h-12 w-12 flex-shrink-0 overflow-hidden rounded-lg bg-gray-100 ring-1 ring-gray-200">
@@ -12797,6 +12971,7 @@ const resolvedBranchId =
                                               </div>
                                             </div>
                                             <div className="min-w-0 flex-1">
+                                              <div className="flex items-center gap-1.5 flex-wrap">
                                               <p className="text-sm font-semibold text-gray-900 truncate">
                                                 {line.name}
                                                 {line.piece ? (
@@ -12805,9 +12980,15 @@ const resolvedBranchId =
                                                   </span>
                                                 ) : null}
                                               </p>
+                                                {line.swapped ? (
+                                                  <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-800">
+                                                    Replacement item
+                                                  </span>
+                                                ) : null}
+                                              </div>
                                               <p className="text-xs text-gray-600 mt-0.5 truncate">
                                                 {[line.size, line.gender].filter(Boolean).join(' · ') ||
-                                                  'Included'}
+                                                  (line.swapped ? line.subtitle : 'Included')}
                                               </p>
                                             </div>
                                           </li>
@@ -12820,7 +13001,38 @@ const resolvedBranchId =
                             </div>
                           )}
                         </div>
+                        <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+                          <svg className="w-4 h-4 text-blue-700 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <p className="text-xs text-blue-900">
+                            Enrolling will create the student&apos;s enrollment record and generate an invoice.
+                          </p>
                       </div>
+                      </div>
+                        )}
+                        summary={(
+                          <EnrollOrderSummary
+                            packageName={selectedPackage?.package_name}
+                            packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
+                            totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
+                            promoName={selectedPromo?.promo_name}
+                            students={selectedStudents}
+                            items={buildEnrollSummaryItems({
+                              includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
+                              student: selectedStudents[0] || null,
+                              entitlementsByStudent: studentPackageMerchEntitlements,
+                              merchandiseList: merchandise,
+                              studentMerchSelections: selectedStudents[0]
+                                ? (studentMerchandiseSelections[selectedStudents[0].user_id] || [])
+                                : [],
+                            })}
+                            slotsAvailable={getAvailableSlots()}
+                            showInvoiceNote
+                            classLabel={classLabel}
+                          />
+                        )}
+                      />
                     );
                   })()}
 
@@ -12958,8 +13170,10 @@ const resolvedBranchId =
                         });
                         setEnrollStep('enrollment-option');
                       }
-                    } else if (enrollStep === 'review') {
+                    } else if (enrollStep === 'merchandise-config') {
                       setEnrollStep('student-selection');
+                    } else if (enrollStep === 'review') {
+                      setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'student-selection');
                     }
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
@@ -13008,51 +13222,38 @@ const resolvedBranchId =
                     
                     // Installment settings are loaded from system Settings ? Invoice Schedule
                     
-                    // Validate uniform size selection if package includes uniforms
+                    setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'review');
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                  disabled={selectedStudents.length === 0}
+                >
+                  Continue
+                </button>
+              )}
+              {enrollStep === 'merchandise-config' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedStudents.length === 0) {
+                      appAlert('Please select a student to continue');
+                      setEnrollStep('student-selection');
+                      return;
+                    }
+
                     if (selectedPackage && selectedStudents.length > 0) {
                       const { merchandiseTypes } = groupPackageDetails(selectedPackage.details || []);
-                      // Check all merchandise types that require sizing
                       const uniformsRequiringSizing = merchandiseTypes.filter(typeName => requiresSizingForMerchandise(typeName));
                       
                       if (uniformsRequiringSizing.length > 0) {
-                        // Check if all students have uniform sizes selected
                         for (const student of selectedStudents) {
                           const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
                           
-                          // Validate each uniform type that requires sizing
                           for (const typeName of uniformsRequiringSizing) {
                             const uniformItems = getMerchandiseItemsByType(typeName);
                             const hasSizes = uniformItems.some(item => item.size);
                             
                             if (hasSizes) {
-                              // Check if uniform categories exist (for LCA Uniform with Top/Bottom)
-                              const uniformCategories = Array.from(
-                                new Set(
-                                  uniformItems
-                                    .map(item => getUniformCategory(item))
-                                    .filter(category => category && category !== 'General')
-                                )
-                              );
-                              
-                              if (uniformCategories.length > 0) {
-                                // Check that each category has a size selected for this student
-                                for (const category of uniformCategories) {
-                                  const categorySelection = studentMerchSelections.find(m => 
-                                    m.merchandise_name === typeName && m.category === category
-                                  );
-                                  
-                                  if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                                    appAlert(`Please select a size for ${typeName} (${category}) for student: ${student.full_name}`);
-                                    return;
-                                  }
-                                }
-                              } else {
-                                // No categories, just check for any uniform selection with size
-                                const uniformSelection = studentMerchSelections.find(m => 
-                                  m.merchandise_name === typeName
-                                );
-                                
-                                if (!uniformSelection || !uniformSelection.size || uniformSelection.size.trim() === '') {
+                              if (!isStudentUniformSelectionComplete(studentMerchSelections, typeName, uniformItems, getUniformCategory)) {
                                   appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
                                   return;
                                 }
@@ -13061,6 +13262,16 @@ const resolvedBranchId =
                           }
                         }
                       }
+
+                    const entitlementError = validatePackageMerchEntitlements({
+                      students: selectedStudents,
+                      swappableTypeNames: selectedPackageSwappableTypes,
+                      entitlementsByStudent: studentPackageMerchEntitlements,
+                      merchandiseList: merchandise,
+                    });
+                    if (entitlementError) {
+                      appAlert(entitlementError);
+                      return;
                     }
                     
                     setEnrollStep('review');
@@ -13068,7 +13279,7 @@ const resolvedBranchId =
                   className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
                   disabled={selectedStudents.length === 0}
                 >
-                  Continue {selectedStudents.length > 0 ? `(1 selected)` : '(0 selected)'}
+                  Review order
                 </button>
               )}
               {enrollStep === 'installment-setup' && (
@@ -13117,7 +13328,7 @@ const resolvedBranchId =
                       closeEnrollModal();
                     }
                   }}
-                  className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                  className={`px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors ${enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'mr-auto' : ''}`}
                   disabled={enrollSubmitting}
                 >
                   {generatedInvoices.length > 0 ? 'Back to List' : 'Cancel'}
@@ -13146,7 +13357,7 @@ const resolvedBranchId =
                       <span>Enrolling...</span>
                     </span>
                   ) : (
-                    `Enroll Student & Generate Invoice`
+                    `Enroll & Generate Invoice`
                   )}
                 </button>
               )}
@@ -15875,13 +16086,7 @@ const resolvedBranchId =
                                       {typeName}
                                     </label>
                                     {(() => {
-                                      const uniformCategories = Array.from(
-                                        new Set(
-                                          itemsForType
-                                            .map(item => getUniformCategory(item))
-                                            .filter(category => category && category !== 'General')
-                                        )
-                                      );
+                                      const uniformCategories = listUniformStockCategories(itemsForType, getUniformCategory);
                                       const hasCategoryFilter = uniformCategories.length > 0;
                                       const hasTopAndBottom =
                                         uniformCategories.includes('Top') &&
@@ -16131,13 +16336,11 @@ const resolvedBranchId =
                                                       genderFilteredItems.map((sizeItem) => {
                                                         const inventory = checkInventoryAvailability(sizeItem.merchandise_id);
                                                         const isOutOfStock = inventory?.isOutOfStock;
-                                                        const qty =
-                                                          inventory && !isOutOfStock ? inventory.available : null;
+                                                        const qty = inventory?.available ?? null;
                                                         return (
                                                           <option
                                                             key={String(sizeItem.merchandise_id)}
                                                             value={String(sizeItem.merchandise_id)}
-                                                            disabled={isOutOfStock}
                                                           >
                                                             {formatUniformSizeOptionLabel(sizeItem, qty)}
                                                             {isOutOfStock ? ' (OOS)' : ''}
@@ -16802,36 +17005,9 @@ const resolvedBranchId =
                             
                             if (hasSizes) {
                               // Check if uniform categories exist (for LCA Uniform with Top/Bottom)
-                              const uniformCategories = Array.from(
-                                new Set(
-                                  uniformItems
-                                    .map(item => getUniformCategory(item))
-                                    .filter(category => category && category !== 'General')
-                                )
-                              );
-                              
-                              if (uniformCategories.length > 0) {
-                                // Check that each category has a size selected for this student
-                                for (const category of uniformCategories) {
-                                  const categorySelection = studentMerchSelections.find(m => 
-                                    m.merchandise_name === typeName && m.category === category
-                                  );
-                                  
-                                  if (!categorySelection || !categorySelection.size || categorySelection.size.trim() === '') {
-                                    appAlert(`Please select a size for ${typeName} (${category}) for the student`);
+                              if (!isStudentUniformSelectionComplete(studentMerchSelections, typeName, uniformItems, getUniformCategory)) {
+                              appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
                                     return;
-                                  }
-                                }
-                              } else {
-                                // No categories, just check for any uniform selection with size
-                                const uniformSelection = studentMerchSelections.find(m => 
-                                  m.merchandise_name === typeName
-                                );
-                                
-                                if (!uniformSelection || !uniformSelection.size || uniformSelection.size.trim() === '') {
-                                  appAlert(`Please select a size for ${typeName} for the student`);
-                                  return;
-                                }
                               }
                             }
                           }

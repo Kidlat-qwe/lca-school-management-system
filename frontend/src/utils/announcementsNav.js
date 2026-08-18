@@ -1,5 +1,8 @@
 /**
  * React Router path to the announcements list for the logged-in user.
+ * That page lists board posts created from Create Announcement only.
+ * System alerts (stock, payments, …) stay in the notification bell
+ * (`GET /announcements/notifications`).
  * Finance with no branch_id is Superfinance (org-wide finance).
  */
 export function getAnnouncementsPathForUser(userInfo) {

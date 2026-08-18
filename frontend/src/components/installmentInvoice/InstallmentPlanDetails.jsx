@@ -998,6 +998,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   {profile.class_name || '\u2014'}
                 </p>
               </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
+                  Class started date
+                </p>
+                <p className="text-sm font-medium text-gray-800">
+                  {profile.class_start_date
+                    ? formatDateManila(profile.class_start_date)
+                    : '\u2014'}
+                </p>
+              </div>
               <div className="col-span-2 md:col-span-3 xl:col-span-4 2xl:col-span-6">
                 <p className="text-[11px] uppercase tracking-wide font-medium text-gray-500">
                   Phase Progress

@@ -873,7 +873,7 @@ const sendEodEmailNotifications = async ({
   try {
     if (!isEmailConfigured()) {
       console.warn(
-        '[EOD email] Email not configured on this server. Set SENDGRID_API_KEY (recommended on Linode — SMTP ports are blocked) or SMTP_* in backend/.env, then restart the API.'
+        '[EOD email] Email not configured on this server. Set BREVO_API_KEY (recommended on Linode — SMTP ports are blocked) or SMTP_* in backend/.env, then restart the API.'
       );
       return;
     }

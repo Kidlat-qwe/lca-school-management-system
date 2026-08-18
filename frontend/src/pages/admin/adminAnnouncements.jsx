@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
@@ -6,14 +6,20 @@ import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
+import AnnouncementAttachmentPreview, { isAnnouncementImageFile } from '../../components/announcementAttachment';
+import AnnouncementSendEmailToggle from '../../components/announcementSendEmailToggle';
 
 const RECIPIENT_GROUPS = [
-  { value: 'All', label: 'All' },
   { value: 'Students', label: 'Students' },
   { value: 'Teachers', label: 'Teachers' },
   { value: 'Admin', label: 'Admin' },
   { value: 'Finance', label: 'Finance' },
+  { value: 'Superadmin', label: 'Superadmin' },
+  { value: 'Superfinance', label: 'Superfinance' },
+  { value: 'Guardians', label: 'Guardians' },
 ];
+
+const FILTER_RECIPIENT_OPTIONS = [{ value: '', label: 'All' }, ...RECIPIENT_GROUPS];
 
 const STATUS_OPTIONS = [
   { value: 'Active', label: 'Active' },
@@ -39,25 +45,23 @@ const AdminAnnouncements = () => {
   const { userInfo } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [announcements, setAnnouncements] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [tableLoading, setTableLoading] = useState(true);
   const [error, setError] = useState('');
   const [titleSearchTerm, setTitleSearchTerm] = useState('');
   const [filterRecipientGroup, setFilterRecipientGroup] = useState('');
   const [filterCreatedOn, setFilterCreatedOn] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [openRecipientGroupDropdown, setOpenRecipientGroupDropdown] = useState(false);
   const [openStatusDropdown, setOpenStatusDropdown] = useState(false);
-  const [openOptionsDropdown, setOpenOptionsDropdown] = useState(false);
-  const [optionsMenuPosition, setOptionsMenuPosition] = useState({ top: 0, right: 0 });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingAnnouncement, setViewingAnnouncement] = useState(null);
   const [editingAnnouncement, setEditingAnnouncement] = useState(null);
   const [formData, setFormData] = useState({
     title: '',
+    email_subject: '',
     body: '',
     recipient_groups: [],
     status: 'Active',
@@ -66,9 +70,11 @@ const AdminAnnouncements = () => {
     start_date: '',
     end_date: '',
     attachment_url: '',
+    send_email: true,
   });
   const [attachmentUploading, setAttachmentUploading] = useState(false);
   const [attachmentFileName, setAttachmentFileName] = useState('');
+  const [attachmentLocalPreviewUrl, setAttachmentLocalPreviewUrl] = useState('');
   const attachmentInputRef = useRef(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -78,11 +84,8 @@ const AdminAnnouncements = () => {
   const [totalPages, setTotalPages] = useState(0);
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
   const highlightedRowRef = useRef(null);
-  const searchHydratedRef = useRef(false);
-
-  useEffect(() => {
-    fetchAnnouncements();
-  }, [currentPage, itemsPerPage]);
+  const prevFiltersKeyRef = useRef('');
+  const fetchRequestIdRef = useRef(0);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -134,18 +137,15 @@ const AdminAnnouncements = () => {
       if (openStatusDropdown && !event.target.closest('.status-filter-dropdown')) {
         setOpenStatusDropdown(false);
       }
-      if (openOptionsDropdown && !event.target.closest('.options-menu-container') && !event.target.closest('.options-menu-overlay')) {
-        setOpenOptionsDropdown(false);
-      }
     };
 
-    if (openMenuId || openRecipientGroupDropdown || openStatusDropdown || openOptionsDropdown) {
+    if (openMenuId || openRecipientGroupDropdown || openStatusDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => {
         document.removeEventListener('mousedown', handleClickOutside);
       };
     }
-  }, [openMenuId, openRecipientGroupDropdown, openStatusDropdown, openOptionsDropdown]);
+  }, [openMenuId, openRecipientGroupDropdown, openStatusDropdown]);
 
   const handleMenuClick = (announcementId, event) => {
     event.stopPropagation();
@@ -193,55 +193,10 @@ const AdminAnnouncements = () => {
     }
   };
 
-  const handleOptionsMenuClick = (event) => {
-    event.stopPropagation();
-    const button = event.currentTarget;
-    const rect = button.getBoundingClientRect();
-    
-    if (openOptionsDropdown) {
-      setOpenOptionsDropdown(false);
-      setOptionsMenuPosition({ top: 0, right: 0 });
-    } else {
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      const spaceBelow = viewportHeight - rect.bottom;
-      const spaceAbove = rect.top;
-      const estimatedDropdownHeight = 150;
-      
-      let top, bottom;
-      if (spaceBelow >= estimatedDropdownHeight) {
-        top = rect.bottom + 4;
-        bottom = 'auto';
-      } else if (spaceAbove >= estimatedDropdownHeight) {
-        bottom = viewportHeight - rect.top + 4;
-        top = 'auto';
-      } else {
-        if (spaceBelow > spaceAbove) {
-          top = rect.bottom + 4;
-          bottom = 'auto';
-        } else {
-          bottom = viewportHeight - rect.top + 4;
-          top = 'auto';
-        }
-      }
-      
-      let right, left;
-      right = viewportWidth - rect.right;
-      left = 'auto';
-      
-      setOptionsMenuPosition({
-        top: top !== 'auto' ? top : undefined,
-        bottom: bottom !== 'auto' ? bottom : undefined,
-        right: right !== 'auto' ? right : undefined,
-        left: left !== 'auto' ? left : undefined,
-      });
-      setOpenOptionsDropdown(true);
-    }
-  };
-
-  const fetchAnnouncements = async () => {
+  const fetchAnnouncements = useCallback(async () => {
+    const requestId = ++fetchRequestIdRef.current;
     try {
-      setLoading(true);
+      setTableLoading(true);
       const params = new URLSearchParams({
         page: currentPage.toString(),
         limit: itemsPerPage.toString(),
@@ -261,19 +216,51 @@ const AdminAnnouncements = () => {
       }
 
       const response = await apiRequest(`/announcements?${params.toString()}`);
+      if (requestId !== fetchRequestIdRef.current) return;
       setAnnouncements(response.data || []);
       setTotalItems(response.pagination?.total || 0);
       setTotalPages(response.pagination?.totalPages || 0);
     } catch (err) {
+      if (requestId !== fetchRequestIdRef.current) return;
       setError(err.message || 'Failed to fetch announcements');
       console.error('Error fetching announcements:', err);
     } finally {
-      setLoading(false);
+      if (requestId === fetchRequestIdRef.current) {
+        setTableLoading(false);
+      }
     }
+  }, [currentPage, itemsPerPage, titleSearchTerm, filterRecipientGroup, filterCreatedOn, filterStatus]);
+
+  useEffect(() => {
+    const filtersKey = `${titleSearchTerm}|${filterRecipientGroup}|${filterCreatedOn}|${filterStatus}`;
+    const isFirstLoad = prevFiltersKeyRef.current === '';
+    const filtersChanged = !isFirstLoad && prevFiltersKeyRef.current !== filtersKey;
+    prevFiltersKeyRef.current = filtersKey;
+
+    if (filtersChanged && currentPage !== 1) {
+      setCurrentPage(1);
+      return;
+    }
+
+    const delay = isFirstLoad ? 0 : (filtersChanged ? 300 : 0);
+    const timer = setTimeout(() => {
+      fetchAnnouncements();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [currentPage, titleSearchTerm, filterRecipientGroup, filterCreatedOn, filterStatus, fetchAnnouncements]);
+
+  const currentUserId = Number(userInfo?.userId ?? userInfo?.user_id);
+  const canManageAnnouncement = (announcement) => {
+    const createdBy = Number(announcement?.created_by);
+    return Number.isFinite(createdBy) && Number.isFinite(currentUserId) && createdBy === currentUserId;
   };
 
-  const handleDelete = async (announcementId) => {
+  const handleDelete = async (announcement) => {
     setOpenMenuId(null);
+    if (!canManageAnnouncement(announcement)) {
+      appAlert('You can only delete announcements that you created.');
+      return;
+    }
     if (
       !(await appConfirm({
         title: 'Delete announcement',
@@ -286,7 +273,7 @@ const AdminAnnouncements = () => {
     }
 
     try {
-      await apiRequest(`/announcements/${announcementId}`, {
+      await apiRequest(`/announcements/${announcement.announcement_id}`, {
         method: 'DELETE',
       });
       fetchAnnouncements();
@@ -295,12 +282,20 @@ const AdminAnnouncements = () => {
     }
   };
 
+  const clearAttachmentLocalPreview = () => {
+    setAttachmentLocalPreviewUrl((prev) => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return '';
+    });
+  };
+
   const openCreateModal = () => {
     setEditingAnnouncement(null);
     setError('');
     const userBranchId = userInfo?.branchId || userInfo?.branch_id;
     setFormData({
       title: '',
+      email_subject: '',
       body: '',
       recipient_groups: [],
       status: 'Active',
@@ -309,8 +304,10 @@ const AdminAnnouncements = () => {
       start_date: '',
       end_date: '',
       attachment_url: '',
+      send_email: true,
     });
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -334,13 +331,18 @@ const AdminAnnouncements = () => {
 
   const openEditModal = (announcement) => {
     setOpenMenuId(null);
+    if (!canManageAnnouncement(announcement)) {
+      appAlert('You can only edit announcements that you created.');
+      return;
+    }
     setEditingAnnouncement(announcement);
     setError('');
     const userBranchId = userInfo?.branchId || userInfo?.branch_id;
     setFormData({
       title: announcement.title || '',
+      email_subject: announcement.email_subject || '',
       body: announcement.body || '',
-      recipient_groups: announcement.recipient_groups || [],
+      recipient_groups: (announcement.recipient_groups || []).filter((group) => group !== 'All'),
       status: announcement.status || 'Active',
       priority: announcement.priority || 'Medium',
       branch_id: userBranchId ? userBranchId.toString() : '',
@@ -349,6 +351,7 @@ const AdminAnnouncements = () => {
       attachment_url: announcement.attachment_url || '',
     });
     setAttachmentFileName(announcement.attachment_url ? 'Attached file' : '');
+    clearAttachmentLocalPreview();
     setFormErrors({});
     setIsModalOpen(true);
   };
@@ -359,6 +362,7 @@ const AdminAnnouncements = () => {
     setFormErrors({});
     setFormData({
       title: '',
+      email_subject: '',
       body: '',
       recipient_groups: [],
       status: 'Active',
@@ -367,13 +371,21 @@ const AdminAnnouncements = () => {
       start_date: '',
       end_date: '',
       attachment_url: '',
+      send_email: true,
     });
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
   };
 
   const handleAttachmentChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    setAttachmentLocalPreviewUrl((prev) => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev);
+      return isAnnouncementImageFile(file) ? URL.createObjectURL(file) : '';
+    });
+
     setAttachmentUploading(true);
     setError('');
     try {
@@ -400,6 +412,7 @@ const AdminAnnouncements = () => {
   const removeAttachment = () => {
     setFormData((prev) => ({ ...prev, attachment_url: '' }));
     setAttachmentFileName('');
+    clearAttachmentLocalPreview();
     if (attachmentInputRef.current) attachmentInputRef.current.value = '';
   };
 
@@ -453,8 +466,15 @@ const AdminAnnouncements = () => {
       errors.title = 'Title is required';
     }
 
+    if (
+      (!editingAnnouncement && formData.send_email && formData.status === 'Active' && !formData.email_subject.trim()) ||
+      (editingAnnouncement && !formData.email_subject.trim())
+    ) {
+      errors.email_subject = 'Subject is required';
+    }
+
     if (!formData.body.trim()) {
-      errors.body = 'Body is required';
+      errors.body = 'Description is required';
     }
 
     if (!formData.recipient_groups || formData.recipient_groups.length === 0) {
@@ -467,14 +487,6 @@ const AdminAnnouncements = () => {
 
     if (!formData.priority) {
       errors.priority = 'Priority is required';
-    }
-
-    if (!formData.start_date || formData.start_date.trim() === '') {
-      errors.start_date = 'Start date is required';
-    }
-
-    if (!formData.end_date || formData.end_date.trim() === '') {
-      errors.end_date = 'End date is required';
     }
 
     if (formData.start_date && formData.end_date) {
@@ -501,8 +513,9 @@ const AdminAnnouncements = () => {
       const userBranchId = userInfo?.branchId || userInfo?.branch_id;
       const payload = {
         title: formData.title.trim(),
+        email_subject: formData.email_subject.trim(),
         body: formData.body.trim(),
-        recipient_groups: formData.recipient_groups,
+        recipient_groups: (formData.recipient_groups || []).filter((group) => group !== 'All'),
         status: formData.status,
         priority: formData.priority,
         branch_id: userBranchId || null,
@@ -510,6 +523,10 @@ const AdminAnnouncements = () => {
         end_date: formData.end_date && formData.end_date.trim() !== '' ? formData.end_date : null,
         attachment_url: formData.attachment_url && formData.attachment_url.trim() ? formData.attachment_url.trim() : null,
       };
+
+      if (!editingAnnouncement) {
+        payload.send_email = formData.send_email;
+      }
 
       if (editingAnnouncement) {
         await apiRequest(`/announcements/${editingAnnouncement.announcement_id}`, {
@@ -545,38 +562,6 @@ const AdminAnnouncements = () => {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleSearch = () => {
-    setCurrentPage(1);
-    fetchAnnouncements();
-  };
-
-  useEffect(() => {
-    if (!searchHydratedRef.current) {
-      searchHydratedRef.current = true;
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (currentPage !== 1) {
-        setCurrentPage(1);
-      } else {
-        fetchAnnouncements();
-      }
-    }, 300);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [titleSearchTerm]);
-
-  const handleReset = () => {
-    setTitleSearchTerm('');
-    setFilterRecipientGroup('');
-    setFilterCreatedOn('');
-    setFilterStatus('');
-    setCurrentPage(1);
-    setTimeout(() => {
-      fetchAnnouncements();
-    }, 0);
   };
 
   const getStatusBadgeColor = (status) => {
@@ -616,19 +601,18 @@ const AdminAnnouncements = () => {
     return text.substring(0, maxLength) + '...';
   };
 
-  if (loading && announcements.length === 0) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">ANNOUNCEMENTS</h1>
+        <button
+          type="button"
+          onClick={openCreateModal}
+          className="btn-primary w-full sm:w-auto flex items-center justify-center space-x-2"
+        >
+          <span>Create Announcement</span>
+        </button>
       </div>
 
       {/* Error Message */}
@@ -641,7 +625,7 @@ const AdminAnnouncements = () => {
       {/* Search Filter Section */}
       <div className="bg-white rounded-lg shadow-sm p-4">
         <h2 className="text-base font-semibold text-gray-900 mb-3">Search Filter</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
           <div>
             <label htmlFor="title-search" className="block text-xs font-medium text-gray-700 mb-1">
               Announcement Title
@@ -685,9 +669,9 @@ const AdminAnnouncements = () => {
               </button>
               {openRecipientGroupDropdown && (
                 <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                  {RECIPIENT_GROUPS.map((group) => (
+                  {FILTER_RECIPIENT_OPTIONS.map((group) => (
                     <button
-                      key={group.value}
+                      key={group.value || 'all'}
                       type="button"
                       onClick={() => {
                         setFilterRecipientGroup(group.value);
@@ -698,6 +682,65 @@ const AdminAnnouncements = () => {
                       }`}
                     >
                       {group.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="relative">
+            <label htmlFor="status-filter" className="block text-xs font-medium text-gray-700 mb-1">
+              Status
+            </label>
+            <div className="status-filter-dropdown relative">
+              <button
+                type="button"
+                onClick={() => setOpenStatusDropdown(!openStatusDropdown)}
+                className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-left flex items-center justify-between focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+              >
+                <span>{filterStatus || 'All'}</span>
+                {filterStatus && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFilterStatus('');
+                    }}
+                    className="ml-2 text-gray-400 hover:text-gray-600"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {openStatusDropdown && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterStatus('');
+                      setOpenStatusDropdown(false);
+                    }}
+                    className="w-full px-3 py-2 text-sm text-left hover:bg-primary-50"
+                  >
+                    All
+                  </button>
+                  {STATUS_OPTIONS.map((status) => (
+                    <button
+                      key={status.value}
+                      type="button"
+                      onClick={() => {
+                        setFilterStatus(status.value);
+                        setOpenStatusDropdown(false);
+                      }}
+                      className={`w-full px-3 py-2 text-sm text-left hover:bg-primary-50 ${
+                        filterStatus === status.value ? 'bg-primary-100' : ''
+                      }`}
+                    >
+                      {status.label}
                     </button>
                   ))}
                 </div>
@@ -717,167 +760,10 @@ const AdminAnnouncements = () => {
             />
           </div>
         </div>
-        <div className="mt-3 flex items-center justify-between">
-          <button
-            type="button"
-            onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-            className="text-primary-600 hover:text-primary-700 flex items-center space-x-1 text-sm"
-          >
-            <span>advanced filters</span>
-            <svg
-              className={`w-3.5 h-3.5 transform transition-transform ${showAdvancedFilters ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-          <div className="flex space-x-2">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-3 py-1.5 text-sm border border-primary-600 text-primary-600 rounded-lg hover:bg-primary-50"
-            >
-              Reset
-            </button>
-            <button
-              type="button"
-              onClick={handleSearch}
-              className="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
-            >
-              Search
-            </button>
-          </div>
-        </div>
-        {showAdvancedFilters && (
-          <div className="mt-3 pt-3 border-t border-gray-200">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="relative">
-                <label htmlFor="status-filter" className="block text-xs font-medium text-gray-700 mb-1">
-                  Status
-                </label>
-                <div className="status-filter-dropdown relative">
-                  <button
-                    type="button"
-                    onClick={() => setOpenStatusDropdown(!openStatusDropdown)}
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white text-left flex items-center justify-between focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                  >
-                    <span>{filterStatus || 'All'}</span>
-                    {filterStatus && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setFilterStatus('');
-                        }}
-                        className="ml-2 text-gray-400 hover:text-gray-600"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    )}
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </button>
-                  {openStatusDropdown && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-auto">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setFilterStatus('');
-                          setOpenStatusDropdown(false);
-                        }}
-                        className="w-full px-3 py-2 text-sm text-left hover:bg-primary-50"
-                      >
-                        All
-                      </button>
-                      {STATUS_OPTIONS.map((status) => (
-                        <button
-                          key={status.value}
-                          type="button"
-                          onClick={() => {
-                            setFilterStatus(status.value);
-                            setOpenStatusDropdown(false);
-                          }}
-                          className={`w-full px-3 py-2 text-sm text-left hover:bg-primary-50 ${
-                            filterStatus === status.value ? 'bg-primary-100' : ''
-                          }`}
-                        >
-                          {status.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Table Section */}
       <div className="bg-white rounded-lg shadow-sm p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
-          <div className="relative options-menu-container">
-            <button
-              onClick={handleOptionsMenuClick}
-              className="btn-primary flex items-center justify-center space-x-2"
-            >
-              <span>Options</span>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openOptionsDropdown && (
-              <>
-                <div
-                  className="options-menu-overlay fixed inset-0 z-40"
-                  onClick={() => setOpenOptionsDropdown(false)}
-                  onMouseDown={(e) => e.stopPropagation()}
-                />
-                {createPortal(
-                  <div
-                    className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[192px]"
-                    style={{
-                      ...(optionsMenuPosition.top !== undefined && { top: `${optionsMenuPosition.top}px` }),
-                      ...(optionsMenuPosition.bottom !== undefined && { bottom: `${optionsMenuPosition.bottom}px` }),
-                      ...(optionsMenuPosition.right !== undefined && { right: `${optionsMenuPosition.right}px` }),
-                      ...(optionsMenuPosition.left !== undefined && { left: `${optionsMenuPosition.left}px` }),
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Export functionality can be added here
-                        setOpenOptionsDropdown(false);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      Export to CSV
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Print functionality can be added here
-                        setOpenOptionsDropdown(false);
-                      }}
-                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                    >
-                      Print
-                    </button>
-                  </div>,
-                  document.body
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Table */}
         {totalItems > 0 && (
           <TablePaginationSummary
             page={currentPage}
@@ -887,14 +773,20 @@ const AdminAnnouncements = () => {
             className="px-4 pt-4 pb-2"
           />
         )}
-        <div
-          className="overflow-x-auto rounded-lg"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: '#cbd5e0 #f7fafc',
-            WebkitOverflowScrolling: 'touch',
-          }}
-        >
+        <div className="relative min-h-[200px]">
+          {tableLoading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-white/70">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
+            </div>
+          )}
+          <div
+            className="overflow-x-auto rounded-lg"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e0 #f7fafc',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
           <table
             className="divide-y divide-gray-200"
             style={{ width: '100%', minWidth: '1000px' }}
@@ -1067,6 +959,24 @@ const AdminAnnouncements = () => {
                                     >
                                       View Details
                                     </button>
+                                    {canManageAnnouncement(announcement) && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditModal(announcement)}
+                                          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDelete(announcement)}
+                                          className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                                        >
+                                          Delete
+                                        </button>
+                                      </>
+                                    )}
                                   </div>,
                                   document.body
                                 )}
@@ -1080,6 +990,7 @@ const AdminAnnouncements = () => {
               )}
             </tbody>
           </table>
+          </div>
         </div>
 
         {/* Pagination */}
@@ -1097,25 +1008,25 @@ const AdminAnnouncements = () => {
 
       {/* Create/Edit Modal (portaled so overlay covers header) */}
       {isModalOpen && createPortal(
-        <div className="fixed inset-0 z-[9999] overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeModal}></div>
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
-              <form onSubmit={handleSubmit}>
-                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">
-                    {editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}
-                  </h3>
-                  
-                  {error && (
-                    <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                      {error}
-                    </div>
-                  )}
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeModal}></div>
+          <div className="relative z-10 flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white text-left shadow-xl">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <div className="shrink-0 border-b border-gray-200 px-4 py-3">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}
+                </h3>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                {error && (
+                  <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {error}
+                  </div>
+                )}
 
-                  <div className="space-y-4">
+                <div className="space-y-3">
                     <div>
-                      <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="title" className="mb-1 block text-sm font-medium text-gray-700">
                         Title <span className="text-red-500">*</span>
                       </label>
                       <input
@@ -1125,7 +1036,7 @@ const AdminAnnouncements = () => {
                         value={formData.title}
                         onChange={handleInputChange}
                         required
-                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                           formErrors.title ? 'border-red-500' : 'border-gray-300'
                         }`}
                       />
@@ -1135,8 +1046,46 @@ const AdminAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label htmlFor="body" className="block text-sm font-medium text-gray-700 mb-2">
-                        Body <span className="text-red-500">*</span>
+                      <label htmlFor="email_subject" className="mb-1 block text-sm font-medium text-gray-700">
+                        Subject{' '}
+                        {(editingAnnouncement || (formData.send_email && formData.status === 'Active')) && (
+                          <span className="text-red-500">*</span>
+                        )}
+                      </label>
+                      <input
+                        type="text"
+                        id="email_subject"
+                        name="email_subject"
+                        value={formData.email_subject}
+                        onChange={handleInputChange}
+                        required={editingAnnouncement || (formData.send_email && formData.status === 'Active')}
+                        disabled={!editingAnnouncement && !formData.send_email}
+                        placeholder="Email subject line"
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500 ${
+                          formErrors.email_subject ? 'border-red-500' : 'border-gray-300'
+                        }`}
+                      />
+                      {formErrors.email_subject && (
+                        <p className="mt-1 text-sm text-red-600">{formErrors.email_subject}</p>
+                      )}
+                    </div>
+
+                    <AnnouncementSendEmailToggle
+                      checked={formData.send_email}
+                      onChange={(value) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          send_email: value,
+                        }))
+                      }
+                      status={formData.status}
+                      showEditHint={Boolean(editingAnnouncement)}
+                      compact
+                    />
+
+                    <div>
+                      <label htmlFor="body" className="mb-1 block text-sm font-medium text-gray-700">
+                        Description <span className="text-red-500">*</span>
                       </label>
                       <textarea
                         id="body"
@@ -1144,8 +1093,8 @@ const AdminAnnouncements = () => {
                         value={formData.body}
                         onChange={handleInputChange}
                         required
-                        rows={6}
-                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                        rows={3}
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                           formErrors.body ? 'border-red-500' : 'border-gray-300'
                         }`}
                       />
@@ -1155,7 +1104,7 @@ const AdminAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className="mb-1 block text-sm font-medium text-gray-700">
                         Attachment (optional)
                       </label>
                       <input
@@ -1163,50 +1112,67 @@ const AdminAnnouncements = () => {
                         type="file"
                         accept=".pdf,.doc,.docx,image/*,.txt,.csv"
                         onChange={handleAttachmentChange}
-                        className="w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
+                        className="w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-primary-700 hover:file:bg-primary-100"
                       />
                       {attachmentUploading && (
                         <p className="mt-1 text-sm text-gray-500">Uploading...</p>
                       )}
                       {attachmentFileName && !attachmentUploading && (
-                        <div className="mt-2 flex items-center gap-2">
-                          <span className="text-sm text-gray-600">{attachmentFileName}</span>
-                          <button
-                            type="button"
-                            onClick={removeAttachment}
-                            className="text-sm text-red-600 hover:text-red-700"
-                          >
-                            Remove
-                          </button>
+                        <div className="mt-2 space-y-1.5">
+                          {(formData.attachment_url || attachmentLocalPreviewUrl) && (
+                            <AnnouncementAttachmentPreview
+                              url={formData.attachment_url}
+                              localPreviewUrl={attachmentLocalPreviewUrl}
+                              compact
+                            />
+                          )}
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm text-gray-600">{attachmentFileName}</span>
+                            <button
+                              type="button"
+                              onClick={removeAttachment}
+                              className="shrink-0 text-sm text-red-600 hover:text-red-700"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {!attachmentFileName && attachmentLocalPreviewUrl && attachmentUploading && (
+                        <div className="mt-2">
+                          <AnnouncementAttachmentPreview localPreviewUrl={attachmentLocalPreviewUrl} compact />
                         </div>
                       )}
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className="mb-1 block text-sm font-medium text-gray-700">
                         Recipient Groups <span className="text-red-500">*</span>
                       </label>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                         {RECIPIENT_GROUPS.map((group) => (
                           <label key={group.value} className="flex items-center space-x-2">
                             <input
                               type="checkbox"
                               checked={formData.recipient_groups.includes(group.value)}
                               onChange={() => handleRecipientGroupToggle(group.value)}
-                              className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                             />
                             <span className="text-sm text-gray-700">{group.label}</span>
                           </label>
                         ))}
                       </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Branch roles apply to your branch. Superadmin and Superfinance receive it network-wide.
+                      </p>
                       {formErrors.recipient_groups && (
                         <p className="mt-1 text-sm text-red-600">{formErrors.recipient_groups}</p>
                       )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="status" className="mb-1 block text-sm font-medium text-gray-700">
                           Status <span className="text-red-500">*</span>
                         </label>
                         <select
@@ -1215,7 +1181,7 @@ const AdminAnnouncements = () => {
                           value={formData.status}
                           onChange={handleInputChange}
                           required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.status ? 'border-red-500' : 'border-gray-300'
                           }`}
                         >
@@ -1231,7 +1197,7 @@ const AdminAnnouncements = () => {
                       </div>
 
                       <div>
-                        <label htmlFor="priority" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="priority" className="mb-1 block text-sm font-medium text-gray-700">
                           Priority <span className="text-red-500">*</span>
                         </label>
                         <select
@@ -1240,7 +1206,7 @@ const AdminAnnouncements = () => {
                           value={formData.priority}
                           onChange={handleInputChange}
                           required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.priority ? 'border-red-500' : 'border-gray-300'
                           }`}
                         >
@@ -1257,7 +1223,7 @@ const AdminAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label htmlFor="branch_id" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="branch_id" className="mb-1 block text-sm font-medium text-gray-700">
                         Branch
                       </label>
                       <input
@@ -1265,14 +1231,14 @@ const AdminAnnouncements = () => {
                         id="branch_id"
                         value={userInfo?.branchName || 'Your Branch'}
                         disabled
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                        className="w-full cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-600"
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <label htmlFor="start_date" className="block text-sm font-medium text-gray-700 mb-2">
-                          Start Date <span className="text-red-500">*</span>
+                        <label htmlFor="start_date" className="mb-1 block text-sm font-medium text-gray-700">
+                          Start Date
                         </label>
                         <input
                           type="date"
@@ -1280,8 +1246,7 @@ const AdminAnnouncements = () => {
                           name="start_date"
                           value={formData.start_date}
                           onChange={handleInputChange}
-                          required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.start_date ? 'border-red-500' : 'border-gray-300'
                           }`}
                         />
@@ -1291,8 +1256,8 @@ const AdminAnnouncements = () => {
                       </div>
 
                       <div>
-                        <label htmlFor="end_date" className="block text-sm font-medium text-gray-700 mb-2">
-                          End Date <span className="text-red-500">*</span>
+                        <label htmlFor="end_date" className="mb-1 block text-sm font-medium text-gray-700">
+                          End Date
                         </label>
                         <input
                           type="date"
@@ -1300,8 +1265,7 @@ const AdminAnnouncements = () => {
                           name="end_date"
                           value={formData.end_date}
                           onChange={handleInputChange}
-                          required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.end_date ? 'border-red-500' : 'border-gray-300'
                           }`}
                         />
@@ -1310,26 +1274,25 @@ const AdminAnnouncements = () => {
                         )}
                       </div>
                     </div>
-                  </div>
                 </div>
-                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
-                  >
-                    {submitting ? 'Saving...' : editingAnnouncement ? 'Update' : 'Create'}
-                  </button>
+              </div>
+              <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end">
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="mt-3 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="inline-flex w-full justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
                   >
                     Cancel
                   </button>
-                </div>
-              </form>
-            </div>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="inline-flex w-full justify-center rounded-lg border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
+                  >
+                    {submitting ? 'Saving...' : editingAnnouncement ? 'Update' : 'Create'}
+                  </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body
@@ -1369,7 +1332,16 @@ const AdminAnnouncements = () => {
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Body
+                      Subject
+                    </label>
+                    <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
+                      {viewingAnnouncement.email_subject || viewingAnnouncement.title}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Description
                     </label>
                     <div className="text-sm text-gray-900 bg-gray-50 px-4 py-3 rounded-lg whitespace-pre-wrap max-h-96 overflow-y-auto">
                       {viewingAnnouncement.body}
@@ -1381,14 +1353,7 @@ const AdminAnnouncements = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Attachment
                       </label>
-                      <a
-                        href={viewingAnnouncement.attachment_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-primary-600 hover:underline"
-                      >
-                        Open attached file
-                      </a>
+                      <AnnouncementAttachmentPreview url={viewingAnnouncement.attachment_url} />
                     </div>
                   )}
 

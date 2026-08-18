@@ -1,7 +1,7 @@
 # Uniform merchandise helpers
 
-Shared logic for **School Uniform**, **PE Uniform**, and **LCA T-Shirt**
-(separate upper/lower stock rows via `merchandisestbl.type`).
+Shared logic for **School Uniform**, **PE Uniform**, **Shirt (LCA_SHIRT)**, and
+related stock rows via `merchandisestbl.type`.
 
 Implementation lives in `index.js`. Imports use `../../utils/uniformMerchandise`
 (resolved via `uniformMerchandise.js` re-export for Vite).
@@ -12,10 +12,10 @@ Creating / editing merchandise persists the **same vocabulary as RHET Inventory*
 
 | Field | Stored values |
 |-------|----------------|
-| Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `LCA T-Shirt`, `Backpack`, … |
+| Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `Shirt`, `Backpack`, … |
 | Gender | `Male`, `Female`, `Unisex` |
-| Size | `XS`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`, `5XL` |
-| Type / piece | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants` |
+| Size | `XS`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`, `5XL`, `Teen` |
+| Type / piece | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `Set` |
 
 Legacy values (`LCA Uniform`, `Men`, `Extra Small`, …) are still **recognized on
 read** and **normalized on write** via `normalizeMerchandiseAttributes()`.
@@ -24,17 +24,26 @@ read** and **normalized on write** via `normalizeMerchandiseAttributes()`.
 
 | Category | Gender | Pieces |
 |----------|--------|--------|
-| School Uniform | Male | Polo, Short |
-| School Uniform | Female | Blouse, Skirt |
-| PE Uniform | any | Shirt, Pants |
-| LCA T-Shirt | any | Shirt |
+| School Uniform | Male | Polo, Short, Set |
+| School Uniform | Female | Blouse, Skirt, Set |
+| PE Uniform | any | Shirt, Pants, Set |
+| Shirt (LCA_SHIRT) | any | Logo 1, Logo 2 |
 
-Enrollment/package matching still uses Top/Bottom **roles**:
-`Polo`/`Shirt`/`Blouse` → Top, `Short`/`Pants`/`Skirt` → Bottom.
+Enrollment / Configure Merchandise roles (`getUniformCategory`):
 
-## Locked product model
+- `Polo` / `Shirt` / `Blouse` / `Logo *` → **Top**
+- `Short` / `Pants` / `Skirt` → **Bottom**
+- `Set` → **Set** (full uniform in one SKU)
 
-Always **separate upper and lower SKUs** (no `Complete Set` type).
+Sizing is complete when the student picks **Set**, or every piece role that
+exists in branch stock (Top and/or Bottom). See
+`isStudentUniformSelectionComplete`.
+
+## Product model
+
+Prefer separate upper/lower SKUs when RHET stocks them that way. RHET may also
+stock type **`Set`** (one row = full uniform). Enrollment shows a **Set** tab
+whenever Set stock exists for that category.
 
 Canonical type names (also accept legacy):
 
@@ -47,7 +56,8 @@ Keep in sync with backend `PACKAGE_UNIFORM_TYPE_NAMES`.
 
 - `normalizeMerchandiseAttributes` / `normalizeMerchandiseGender` / `normalizeMerchandiseSize`
 - `getUniformGenderOptions(name)` — Male/Female (School) or + Unisex
-- `getUniformPieceOptions(name, gender)` — gender-filtered pieces
+- `getUniformPieceOptions(name, gender)` — gender-filtered pieces (includes Set)
+- `getUniformCategory` / `listUniformStockCategories` / `isStudentUniformSelectionComplete`
 - `isSchoolUniformMerchandiseName` / `isPeUniformMerchandiseName` / `isUniformMerchandiseName`
 - `UNIFORM_SIZE_OPTIONS` — RHET sizes
 - `formatUniformSizeDisplayLabel(size)` — optional friendly label

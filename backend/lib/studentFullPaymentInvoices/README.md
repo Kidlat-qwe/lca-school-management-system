@@ -23,6 +23,6 @@ Zero-balance conversions **without** a conversion invoice stay on the Installmen
 
 ## Settlement card fields
 
-Package, class, program, branch, level, phase coverage, invoice ID / AR#, issued / due / paid on, amount / paid / remaining, line items (credits as discounts), payments, compact enrollment phases, merchandise pending or release log.
+Enrollment chips: first phase of the class track displays as **new** (even if `classstudentstbl` stored `re_enrolled` because the student had another class). Later phases stay re-enrolled; last stays completed. **Student status** is Active when any phase is new / re_enrolled / upsell / rejoin, otherwise Inactive.
 
 PDF: existing `GET /invoices/:id/pdf` and `?doc_type=ar`.

@@ -1,49 +1,40 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
-import { apiRequest } from '../../config/api';
-import { useAuth } from '../../contexts/AuthContext';
 import { formatDateManila, formatDateTimeManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
+import AnnouncementAttachmentPreview from '../../components/announcementAttachment';
+import {
+  AnnouncementBoardFilters,
+  AnnouncementTableLoadingShell,
+  useAnnouncementBoardList,
+} from '../../components/announcementBoardFilters';
 
 const StudentAnnouncements = () => {
-  const { userInfo } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [announcements, setAnnouncements] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [titleSearchTerm, setTitleSearchTerm] = useState('');
-  const [debouncedTitleSearchTerm, setDebouncedTitleSearchTerm] = useState('');
-  const [filterRecipientGroup, setFilterRecipientGroup] = useState('');
-  const [filterCreatedOn, setFilterCreatedOn] = useState('');
-  const [openRecipientGroupDropdown, setOpenRecipientGroupDropdown] = useState(false);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(10);
-  const [totalItems, setTotalItems] = useState(0);
-  const [totalPages, setTotalPages] = useState(0);
+  const {
+    announcements,
+    tableLoading,
+    error,
+    titleSearchTerm,
+    setTitleSearchTerm,
+    filterRecipientGroup,
+    setFilterRecipientGroup,
+    filterCreatedOn,
+    setFilterCreatedOn,
+    currentPage,
+    setCurrentPage,
+    itemsPerPage,
+    totalItems,
+    totalPages,
+  } = useAnnouncementBoardList({
+    lockStatus: 'Active',
+    defaultRecipientGroup: 'Students',
+  });
   const [highlightedAnnouncementId, setHighlightedAnnouncementId] = useState(null);
   const highlightedRowRef = useRef(null);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [viewingAnnouncement, setViewingAnnouncement] = useState(null);
-
-  const RECIPIENT_GROUPS = [
-    { value: 'All', label: 'All' },
-    { value: 'Students', label: 'Students' },
-    { value: 'Teachers', label: 'Teachers' },
-    { value: 'Admin', label: 'Admin' },
-    { value: 'Finance', label: 'Finance' },
-  ];
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedTitleSearchTerm(titleSearchTerm.trim());
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [titleSearchTerm]);
-
-  useEffect(() => {
-    fetchAnnouncements();
-  }, [currentPage, itemsPerPage, debouncedTitleSearchTerm, filterRecipientGroup, filterCreatedOn]);
 
   // Handle highlighting announcement from notification click
   useEffect(() => {
@@ -82,22 +73,6 @@ const StudentAnnouncements = () => {
       }
     }
   }, [searchParams, announcements]);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (openRecipientGroupDropdown && !event.target.closest('.recipient-group-filter-dropdown')) {
-        setOpenRecipientGroupDropdown(false);
-      }
-    };
-
-    if (openRecipientGroupDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [openRecipientGroupDropdown]);
 
   const openViewModal = (announcement) => {
     setViewingAnnouncement(announcement);
@@ -140,38 +115,6 @@ const StudentAnnouncements = () => {
     return groups.join(', ');
   };
 
-  const fetchAnnouncements = async () => {
-    try {
-      setLoading(true);
-      const params = new URLSearchParams({
-        page: currentPage.toString(),
-        limit: itemsPerPage.toString(),
-        status: 'Active', // Only show active announcements
-      });
-
-      // Filter by recipient group - default to user's role, or use selected filter
-      const recipientGroupFilter = filterRecipientGroup || (userInfo?.user_type || 'Students');
-      params.append('recipient_group', recipientGroupFilter);
-
-      if (debouncedTitleSearchTerm) {
-        params.append('title', debouncedTitleSearchTerm);
-      }
-      if (filterCreatedOn) {
-        params.append('created_on', filterCreatedOn);
-      }
-
-      const response = await apiRequest(`/announcements?${params.toString()}`);
-      setAnnouncements(response.data || []);
-      setTotalItems(response.pagination?.total || 0);
-      setTotalPages(response.pagination?.totalPages || 0);
-    } catch (err) {
-      setError(err.message || 'Failed to fetch announcements');
-      console.error('Error fetching announcements:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   /** Format date in Philippines time (UTC+8) */
   const formatDate = (dateString) => {
     if (!dateString) return '-';
@@ -209,14 +152,6 @@ const StudentAnnouncements = () => {
   // Announcements are already filtered by the API
   const filteredAnnouncements = announcements;
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -230,94 +165,15 @@ const StudentAnnouncements = () => {
         </div>
       )}
 
-      {/* Search and Filters */}
-      <div className="bg-white rounded-lg shadow p-4 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* Title Search */}
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Search by title..."
-              value={titleSearchTerm}
-              onChange={(e) => {
-                setTitleSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent text-sm"
-            />
-            {titleSearchTerm && (
-              <button
-                onClick={() => {
-                  setTitleSearchTerm('');
-                  setCurrentPage(1);
-                }}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-          </div>
-
-          {/* Recipient Group Filter */}
-          <div className="relative recipient-group-filter-dropdown">
-            <button
-              onClick={() => setOpenRecipientGroupDropdown(!openRecipientGroupDropdown)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent text-sm text-left flex items-center justify-between bg-white"
-            >
-              <span className={filterRecipientGroup ? 'text-gray-900' : 'text-gray-500'}>
-                {filterRecipientGroup 
-                  ? RECIPIENT_GROUPS.find(rg => rg.value === filterRecipientGroup)?.label || filterRecipientGroup
-                  : 'All Recipient Groups'}
-              </span>
-              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-            {openRecipientGroupDropdown && (
-              <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                <button
-                  onClick={() => {
-                    setFilterRecipientGroup('');
-                    setOpenRecipientGroupDropdown(false);
-                    setCurrentPage(1);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                >
-                  All Recipient Groups
-                </button>
-                {RECIPIENT_GROUPS.map((group) => (
-                  <button
-                    key={group.value}
-                    onClick={() => {
-                      setFilterRecipientGroup(group.value);
-                      setOpenRecipientGroupDropdown(false);
-                      setCurrentPage(1);
-                    }}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
-                  >
-                    {group.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Created On Filter */}
-          <div>
-            <input
-              type="date"
-              value={filterCreatedOn}
-              onChange={(e) => {
-                setFilterCreatedOn(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-transparent text-sm"
-            />
-          </div>
-        </div>
-      </div>
+      <AnnouncementBoardFilters
+        titleSearchTerm={titleSearchTerm}
+        onTitleChange={setTitleSearchTerm}
+        filterRecipientGroup={filterRecipientGroup}
+        onRecipientGroupChange={setFilterRecipientGroup}
+        filterCreatedOn={filterCreatedOn}
+        onCreatedOnChange={setFilterCreatedOn}
+        showStatus={false}
+      />
 
       {/* Announcements Table */}
       <div className="bg-white rounded-lg shadow">
@@ -330,6 +186,7 @@ const StudentAnnouncements = () => {
             className="px-4 pt-4 pb-2"
           />
         )}
+        <AnnouncementTableLoadingShell loading={tableLoading}>
         <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
           <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '800px' }}>
             <thead className="bg-gray-50">
@@ -442,6 +299,7 @@ const StudentAnnouncements = () => {
             </tbody>
           </table>
         </div>
+        </AnnouncementTableLoadingShell>
 
         {/* Pagination */}
         <FixedTablePagination
@@ -486,9 +344,20 @@ const StudentAnnouncements = () => {
                     </div>
                   </div>
 
+                  {viewingAnnouncement.email_subject && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Subject
+                      </label>
+                      <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
+                        {viewingAnnouncement.email_subject}
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Body
+                      Description
                     </label>
                     <div className="text-sm text-gray-900 bg-gray-50 px-4 py-3 rounded-lg whitespace-pre-wrap max-h-96 overflow-y-auto">
                       {viewingAnnouncement.body}
@@ -500,14 +369,7 @@ const StudentAnnouncements = () => {
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Attachment
                       </label>
-                      <a
-                        href={viewingAnnouncement.attachment_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm text-primary-600 hover:underline"
-                      >
-                        Open attached file
-                      </a>
+                      <AnnouncementAttachmentPreview url={viewingAnnouncement.attachment_url} />
                     </div>
                   )}
 

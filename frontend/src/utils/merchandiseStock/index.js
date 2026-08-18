@@ -8,6 +8,48 @@
 import { isUniformMerchandiseName } from '../uniformMerchandise';
 import { isLearningKitMerchandiseName } from '../merchandiseRequests/learningKit';
 import { isUniformLikeCategory } from '../merchandiseRequests/catalogOptions';
+import { isMerchandiseTypeShellRow } from '../merchandiseRequests/createTypeCategory';
+
+export function parseMerchandiseQuantity(item) {
+  if (!item || item.quantity == null || item.quantity === '') return null;
+  const n = parseInt(item.quantity, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function formatStockCountLabel(qty) {
+  if (qty === null || qty === undefined) return null;
+  const n = Number(qty);
+  if (!Number.isFinite(n)) return null;
+  return `${n} in stock`;
+}
+
+/** Sum real stock rows for a merchandise type (excludes type-shell placeholders). */
+export function sumMerchandiseTypeStock(merchandiseList, typeName) {
+  const name = String(typeName || '').trim().toLowerCase();
+  if (!name) return null;
+  let total = 0;
+  let tracked = false;
+  let foundType = false;
+  for (const item of merchandiseList || []) {
+    if (String(item.merchandise_name || '').trim().toLowerCase() !== name) continue;
+    foundType = true;
+    if (isMerchandiseTypeShellRow(item)) continue;
+    const qty = parseMerchandiseQuantity(item);
+    if (qty === null) continue;
+    tracked = true;
+    total += qty;
+  }
+  if (!foundType) return null;
+  return tracked ? total : 0;
+}
+
+export function lookupMerchandiseQuantity(merchandiseList, merchandiseId) {
+  if (merchandiseId == null || merchandiseId === '') return null;
+  const item = (merchandiseList || []).find(
+    (m) => String(m.merchandise_id) === String(merchandiseId)
+  );
+  return parseMerchandiseQuantity(item);
+}
 
 /** True when quantity is untracked or strictly greater than zero. */
 export function merchandiseHasAvailableStock(item) {

@@ -4,6 +4,10 @@ Shared helpers for branch **Stocks** tables and enrollment stock picks.
 
 | Export | Purpose |
 |---|---|
+| `parseMerchandiseQuantity` | Numeric qty or `null` if untracked |
+| `formatStockCountLabel` | `"12 in stock"` |
+| `sumMerchandiseTypeStock` | Total qty for a type (Backpack, ID Lace, …), excluding type-shell rows |
+| `lookupMerchandiseQuantity` | Qty for one `merchandise_id` |
 | `merchandiseHasAvailableStock` | Quantity > 0 (or untracked) |
 | `pickFirstInStockMerchandiseItem` | Prefer an in-stock variant |
 | `isUniformStockCategory` / `isItemNamedStockCategory` | Column layout: Gender/Type/Size vs Item name |

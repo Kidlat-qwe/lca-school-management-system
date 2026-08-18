@@ -459,7 +459,9 @@ Inventory matches using:
 categoryName + gender + type + size
 ```
 
-School uniforms use `Polo` / `Short`. PE uniforms use `Shirt` / `Pants`.
+School uniforms use `Polo` / `Short` (and `Blouse` / `Skirt`). PE uniforms use
+`Shirt` / `Pants`. Some RHET rows use type `Set` (full set) — CMS CHECK constraints
+allow `Set` via migration **137**.
 
 This maps to inventory variation:
 

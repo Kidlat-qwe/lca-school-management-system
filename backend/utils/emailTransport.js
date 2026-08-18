@@ -1,6 +1,7 @@
 /**
- * Email transport layer: SMTP (nodemailer) or SendGrid HTTP API (port 443).
- * Use SendGrid on VPS hosts (e.g. Linode) that block outbound SMTP ports 25/465/587.
+ * Email transport layer: SMTP (nodemailer) or Brevo HTTP API (port 443).
+ * Use Brevo on VPS hosts (e.g. Linode) that block outbound SMTP ports 25/465/587.
+ * Docs: https://developers.brevo.com/docs/send-a-transactional-email
  */
 import nodemailer from 'nodemailer';
 import { readFileSync } from 'fs';
@@ -11,7 +12,7 @@ const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASSWORD = process.env.SMTP_PASSWORD;
 
-const SENDGRID_API_KEY = (process.env.SENDGRID_API_KEY || '').trim();
+const BREVO_API_KEY = (process.env.BREVO_API_KEY || '').trim();
 const EMAIL_PROVIDER_RAW = (process.env.EMAIL_PROVIDER || 'auto').trim().toLowerCase();
 
 const rawSmtpFrom = (process.env.SMTP_FROM || '').trim();
@@ -23,17 +24,21 @@ if (rawSmtpUser && rawSmtpFrom && rawSmtpFrom.toLowerCase() !== rawSmtpUser.toLo
   smtpFromEmail = rawSmtpUser || rawSmtpFrom;
 }
 
-const SENDGRID_FROM_EMAIL = (
-  process.env.SENDGRID_FROM_EMAIL ||
+const BREVO_FROM_EMAIL = (
+  process.env.BREVO_FROM_EMAIL ||
   process.env.SMTP_FROM ||
   smtpFromEmail ||
   ''
 ).trim();
 
+const BREVO_FROM_NAME =
+  (process.env.BREVO_FROM_NAME || 'Little Champions Academy Inc.').trim() ||
+  'Little Champions Academy Inc.';
+
 export const getEmailProvider = () => {
-  if (EMAIL_PROVIDER_RAW === 'sendgrid') return SENDGRID_API_KEY ? 'sendgrid' : null;
+  if (EMAIL_PROVIDER_RAW === 'brevo') return BREVO_API_KEY ? 'brevo' : null;
   if (EMAIL_PROVIDER_RAW === 'smtp') return isSmtpEnvConfigured() ? 'smtp' : null;
-  if (SENDGRID_API_KEY) return 'sendgrid';
+  if (BREVO_API_KEY) return 'brevo';
   if (isSmtpEnvConfigured()) return 'smtp';
   return null;
 };
@@ -60,9 +65,10 @@ export const getEmailConfigSummary = () => {
       user: SMTP_USER || null,
       from: smtpFromEmail || null,
     },
-    sendgrid: {
-      configured: Boolean(SENDGRID_API_KEY),
-      from: SENDGRID_FROM_EMAIL || null,
+    brevo: {
+      configured: Boolean(BREVO_API_KEY),
+      from: BREVO_FROM_EMAIL || null,
+      fromName: BREVO_FROM_NAME,
     },
   };
 };
@@ -77,7 +83,7 @@ export const getSmtpConfigSummary = () => {
     port: s.smtp.port,
     secure: s.smtp.secure,
     user: s.smtp.user,
-    from: s.provider === 'sendgrid' ? s.sendgrid.from : s.smtp.from,
+    from: s.provider === 'brevo' ? s.brevo.from : s.smtp.from,
   };
 };
 
@@ -98,11 +104,11 @@ const smtpTransporter = isSmtpEnvConfigured()
 
 function getFromAddress() {
   const provider = getEmailProvider();
-  if (provider === 'sendgrid') {
-    if (!SENDGRID_FROM_EMAIL) {
-      throw new Error('SENDGRID_FROM_EMAIL (or SMTP_FROM) is required when using SendGrid');
+  if (provider === 'brevo') {
+    if (!BREVO_FROM_EMAIL) {
+      throw new Error('BREVO_FROM_EMAIL (or SMTP_FROM) is required when using Brevo');
     }
-    return SENDGRID_FROM_EMAIL;
+    return BREVO_FROM_EMAIL;
   }
   if (!smtpFromEmail) {
     throw new Error('SMTP_FROM or SMTP_USER is required when using SMTP');
@@ -110,63 +116,84 @@ function getFromAddress() {
   return smtpFromEmail;
 }
 
-function getFromHeader() {
-  const email = getFromAddress();
-  return `Little Champions Academy <${email}>`;
+function getFromName() {
+  return getEmailProvider() === 'brevo' ? BREVO_FROM_NAME : 'Little Champions Academy Inc.';
 }
 
-async function sendViaSendGrid({ to, subject, html, attachments = [] }) {
-  if (!SENDGRID_API_KEY) {
-    throw new Error('SENDGRID_API_KEY is not set');
+function getFromHeader() {
+  const email = getFromAddress();
+  return `${getFromName()} <${email}>`;
+}
+
+function toBase64Content(att) {
+  let contentBuf = att.content;
+  if (!contentBuf && att.path) {
+    contentBuf = readFileSync(att.path);
+  }
+  return Buffer.isBuffer(contentBuf)
+    ? contentBuf.toString('base64')
+    : Buffer.from(contentBuf || '').toString('base64');
+}
+
+async function sendViaBrevo({ to, subject, html, attachments = [] }) {
+  if (!BREVO_API_KEY) {
+    throw new Error('BREVO_API_KEY is not set');
   }
 
-  const recipients = Array.isArray(to) ? to : [to];
-  const personalizations = recipients.map((email) => ({
-    to: [{ email }],
-  }));
+  const recipients = (Array.isArray(to) ? to : [to])
+    .map((email) => String(email || '').trim())
+    .filter(Boolean)
+    .map((email) => ({ email }));
+
+  if (recipients.length === 0) {
+    throw new Error('Brevo send requires at least one recipient');
+  }
 
   const body = {
-    personalizations,
-    from: { email: getFromAddress(), name: 'Little Champions Academy' },
+    sender: {
+      name: getFromName(),
+      email: getFromAddress(),
+    },
+    to: recipients,
     subject,
-    content: [{ type: 'text/html', value: html }],
+    htmlContent: html,
   };
 
-  if (attachments.length > 0) {
-    body.attachments = attachments.map((att) => {
-      let contentBuf = att.content;
-      if (!contentBuf && att.path) {
-        contentBuf = readFileSync(att.path);
-      }
-      const payload = {
-        content: Buffer.isBuffer(contentBuf)
-          ? contentBuf.toString('base64')
-          : Buffer.from(contentBuf || '').toString('base64'),
-        filename: att.filename || 'attachment',
-        type: att.contentType || att.type || 'application/octet-stream',
-        disposition: att.cid ? 'inline' : 'attachment',
-      };
-      if (att.cid) payload.content_id = att.cid;
-      return payload;
-    });
+  const brevoAttachments = (attachments || [])
+    .filter((att) => att && (att.content || att.path))
+    .map((att) => ({
+      name: att.filename || 'attachment',
+      content: toBase64Content(att),
+    }));
+
+  if (brevoAttachments.length > 0) {
+    body.attachment = brevoAttachments;
   }
 
-  const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${SENDGRID_API_KEY}`,
-      'Content-Type': 'application/json',
+      accept: 'application/json',
+      'api-key': BREVO_API_KEY,
+      'content-type': 'application/json',
     },
     body: JSON.stringify(body),
   });
 
+  const responseText = await res.text().catch(() => '');
   if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`SendGrid API ${res.status}: ${errText || res.statusText}`);
+    throw new Error(`Brevo API ${res.status}: ${responseText || res.statusText}`);
   }
 
-  const messageId = res.headers.get('x-message-id') || `sendgrid-${Date.now()}`;
-  return { success: true, messageId, provider: 'sendgrid' };
+  let parsed = {};
+  try {
+    parsed = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    parsed = {};
+  }
+
+  const messageId = parsed.messageId || parsed.messageIds?.[0] || `brevo-${Date.now()}`;
+  return { success: true, messageId, provider: 'brevo' };
 }
 
 async function sendViaSmtp({ to, subject, html, attachments = [] }) {
@@ -186,18 +213,18 @@ async function sendViaSmtp({ to, subject, html, attachments = [] }) {
 }
 
 /**
- * Send email using the active provider (SendGrid API or SMTP).
+ * Send email using the active provider (Brevo API or SMTP).
  */
 export async function sendMail({ to, subject, html, attachments = [] }) {
   const provider = getEmailProvider();
   if (!provider) {
     throw new Error(
-      'Email is not configured. Set SENDGRID_API_KEY (recommended on Linode) or SMTP_HOST/SMTP_USER/SMTP_PASSWORD.'
+      'Email is not configured. Set BREVO_API_KEY (recommended on Linode) or SMTP_HOST/SMTP_USER/SMTP_PASSWORD.'
     );
   }
 
-  if (provider === 'sendgrid') {
-    return sendViaSendGrid({ to, subject, html, attachments });
+  if (provider === 'brevo') {
+    return sendViaBrevo({ to, subject, html, attachments });
   }
   return sendViaSmtp({ to, subject, html, attachments });
 }
@@ -205,23 +232,26 @@ export async function sendMail({ to, subject, html, attachments = [] }) {
 export async function verifyEmailConnection() {
   const provider = getEmailProvider();
   if (!provider) {
-    console.error('❌ Email not configured (no SendGrid API key or SMTP settings)');
+    console.error('❌ Email not configured (no Brevo API key or SMTP settings)');
     return false;
   }
 
-  if (provider === 'sendgrid') {
+  if (provider === 'brevo') {
     try {
-      const res = await fetch('https://api.sendgrid.com/v3/scopes', {
-        headers: { Authorization: `Bearer ${SENDGRID_API_KEY}` },
+      const res = await fetch('https://api.brevo.com/v3/account', {
+        headers: {
+          accept: 'application/json',
+          'api-key': BREVO_API_KEY,
+        },
       });
       if (res.ok) {
-        console.log('✅ SendGrid API key is valid (HTTPS — works when SMTP ports are blocked)');
+        console.log('✅ Brevo API key is valid (HTTPS — works when SMTP ports are blocked)');
         return true;
       }
-      console.error('❌ SendGrid API key rejected:', res.status, await res.text().catch(() => ''));
+      console.error('❌ Brevo API key rejected:', res.status, await res.text().catch(() => ''));
       return false;
     } catch (err) {
-      console.error('❌ SendGrid verify error:', err?.message || err);
+      console.error('❌ Brevo verify error:', err?.message || err);
       return false;
     }
   }

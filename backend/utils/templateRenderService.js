@@ -8,6 +8,12 @@ import { getEffectiveSettings, getSettingDefinition } from './settingsService.js
 
 export const DEFAULT_SCHOOL_NAME = 'Little Champions Academy, Inc.';
 const MANILA_TZ = 'Asia/Manila';
+const DEFAULT_EMAIL_LOGO_URL = 'https://cms.little-champion.com/LCA%20Icon.png';
+
+export function getEmailBrandLogoUrl() {
+  const fromEnv = String(process.env.EMAIL_LOGO_URL || '').trim();
+  return fromEnv || DEFAULT_EMAIL_LOGO_URL;
+}
 
 export function escapeHtml(value) {
   return String(value ?? '')
@@ -77,13 +83,34 @@ export function wrapBrandedEmailHtml(innerHtml, { includeFooter = true } = {}) {
        </div>`
     : '';
 
+  const logoUrl = escapeHtml(getEmailBrandLogoUrl());
+
   return `<!DOCTYPE html>
 <html>
   <head><meta charset="UTF-8"></head>
   <body style="font-family:Arial,sans-serif;line-height:1.6;color:#333;max-width:600px;margin:0 auto;padding:20px;">
-    <div style="background-color:#F7C844;padding:20px;text-align:center;border-radius:5px 5px 0 0;">
-      <h1 style="color:#000;margin:0;font-size:20px;">LITTLE CHAMPIONS ACADEMY INC.</h1>
-    </div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#F7C844;border-radius:5px 5px 0 0;">
+      <tr>
+        <td align="center" style="padding:14px 16px;">
+          <table role="presentation" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="vertical-align:middle;padding-right:12px;">
+                <img
+                  src="${logoUrl}"
+                  alt="Little Champions Academy"
+                  width="48"
+                  height="48"
+                  style="display:block;width:48px;height:48px;border:0;border-radius:50%;object-fit:cover;"
+                />
+              </td>
+              <td style="vertical-align:middle;">
+                <h1 style="color:#000;margin:0;font-size:18px;line-height:1.2;font-family:Arial,sans-serif;">LITTLE CHAMPIONS ACADEMY INC.</h1>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
     <div style="background-color:#ffffff;padding:30px;border:1px solid #e0e0e0;border-top:none;">
       ${innerHtml}
     </div>

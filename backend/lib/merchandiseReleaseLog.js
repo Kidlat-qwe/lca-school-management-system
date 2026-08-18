@@ -75,36 +75,89 @@ export async function hasPackageMerchandiseBeenIssued(client, { studentId, packa
  */
 const packageMerchLineScore = (line) => {
   let score = 0;
-  if (line?.category === 'Top' || line?.category === 'Bottom') score += 20;
+  if (line?.category === 'Top' || line?.category === 'Bottom' || line?.category === 'Set') {
+    score += 20;
+  }
   if (line?.size) score += 5;
   return score;
 };
 
 /**
  * True when configured selections already satisfy a package-included merchandise type.
- * Uniforms need both Top and Bottom; other types match by merchandise_name.
+ * Uniforms need Set, or Top/Bottom pieces; other types match by merchandise_name
+ * or waive/swap via original_type_name.
  */
 export function isPackageMerchTypeCovered(merchName, merchandiseToDeduct) {
   const name = String(merchName || '').trim();
   if (!name || !merchandiseToDeduct?.size) return false;
 
   if (PACKAGE_UNIFORM_TYPE_NAMES.includes(name)) {
+    let hasTop = false;
+    let hasBottom = false;
+    let hasSet = false;
     for (const info of merchandiseToDeduct.values()) {
       if (info.merchandise_name !== name) continue;
-      if (info.category === 'Top' || info.category === 'Bottom') return true;
+      if (info.category === 'Set') hasSet = true;
+      if (info.category === 'Top') hasTop = true;
+      if (info.category === 'Bottom') hasBottom = true;
     }
-    return false;
+    return hasSet || hasTop || hasBottom;
   }
 
+  const nameLower = name.toLowerCase();
   for (const info of merchandiseToDeduct.values()) {
-    if (info.merchandise_name === name) return true;
+    const original = String(info.original_type_name || '').trim().toLowerCase();
+    if (original && original === nameLower) return true;
+    if (String(info.merchandise_name || '').trim().toLowerCase() === nameLower) {
+      return true;
+    }
   }
   return false;
+}
+
+const MERCHANDISE_RESOLVE_COLUMNS = `merchandise_id, merchandise_name, size, price, quantity, branch_id, type, gender, item_name, sku`;
+
+function isBlankMerchAttr(value) {
+  return !String(value ?? '').trim();
+}
+
+/** CMS type-shell (category + image only) — not a concrete stock SKU. */
+export function isCmsMerchandiseTypeShellRow(row) {
+  if (!row) return false;
+  const size = String(row.size ?? '').trim();
+  const sizeBlank = !size || ['n/a', 'na'].includes(size.toLowerCase());
+  const qtyRaw = row.quantity;
+  const qty =
+    qtyRaw == null || qtyRaw === ''
+      ? 0
+      : Number.isFinite(Number(qtyRaw))
+        ? Number(qtyRaw)
+        : 0;
+  return (
+    isBlankMerchAttr(row.gender) &&
+    isBlankMerchAttr(row.type) &&
+    sizeBlank &&
+    isBlankMerchAttr(row.item_name) &&
+    isBlankMerchAttr(row.sku) &&
+    qty <= 0
+  );
+}
+
+function merchNamesMatch(a, b) {
+  const stripWaived = (value) =>
+    String(value || '')
+      .trim()
+      .replace(/\s*\(waived\)\s*$/i, '')
+      .toLowerCase();
+  const na = stripWaived(a);
+  const nb = stripWaived(b);
+  return Boolean(na && nb && na === nb);
 }
 
 /**
  * Resolve a branch merchandise row with enough stock for enrollment/validation.
  * Falls back to same name (and size/category when provided) when the configured id is out of stock.
+ * `allowZeroStock` returns a concrete SKU even at qty 0 (package backorder / pending issue).
  *
  * @param {import('pg').PoolClient} client
  * @param {{
@@ -114,6 +167,7 @@ export function isPackageMerchTypeCovered(merchName, merchandiseToDeduct) {
  *   quantityNeeded?: number,
  *   size?: string|null,
  *   category?: string|null,
+ *   allowZeroStock?: boolean,
  * }} params
  * @returns {Promise<object|null>}
  */
@@ -126,6 +180,7 @@ export async function resolveMerchandiseWithAvailableStock(
     quantityNeeded = 1,
     size = null,
     category = null,
+    allowZeroStock = false,
   }
 ) {
   const needed = Math.max(1, parseInt(String(quantityNeeded), 10) || 1);
@@ -133,42 +188,70 @@ export async function resolveMerchandiseWithAvailableStock(
   const rowHasStock = (row) => {
     if (!row) return false;
     if (Number(branchId) !== Number(row.branch_id)) return false;
+    if (isCmsMerchandiseTypeShellRow(row)) return false;
     if (row.quantity === null || row.quantity === undefined) return true;
     return (parseInt(row.quantity, 10) || 0) >= needed;
   };
 
+  const pickZeroStockRow = (rows, fallback) => {
+    if (!allowZeroStock) return null;
+    for (const row of rows || []) {
+      if (!row || Number(branchId) !== Number(row.branch_id)) continue;
+      if (isCmsMerchandiseTypeShellRow(row)) continue;
+      return row;
+    }
+    if (
+      fallback &&
+      Number(branchId) === Number(fallback.branch_id) &&
+      !isCmsMerchandiseTypeShellRow(fallback)
+    ) {
+      return fallback;
+    }
+    return null;
+  };
+
+  let byIdRow = null;
   if (merchandiseId) {
     const byId = await client.query(
-      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+      `SELECT ${MERCHANDISE_RESOLVE_COLUMNS}
        FROM merchandisestbl WHERE merchandise_id = $1`,
       [merchandiseId]
     );
-    if (rowHasStock(byId.rows[0])) {
-      return byId.rows[0];
+    byIdRow = byId.rows[0] || null;
+    if (rowHasStock(byIdRow)) {
+      return byIdRow;
     }
   }
 
   const name = String(merchandiseName || '').trim();
-  if (!name || !branchId) return null;
+  if (!name || !branchId) {
+    return pickZeroStockRow(byIdRow ? [byIdRow] : [], byIdRow);
+  }
 
-  const isUniformTopBottom =
+  const isUniformPiece =
     PACKAGE_UNIFORM_TYPE_NAMES.includes(name) &&
     category &&
-    (category === 'Top' || category === 'Bottom');
+    (category === 'Top' || category === 'Bottom' || category === 'Set');
 
   let candidatesRes;
-  if (isUniformTopBottom && size) {
+  if (isUniformPiece && size) {
+    const typeAliases =
+      category === 'Set'
+        ? ['Set', 'Complete Set']
+        : category === 'Top'
+          ? ['Top', 'Polo', 'Shirt', 'Blouse', 'Logo 1', 'Logo 2']
+          : ['Bottom', 'Short', 'Pants', 'Shorts', 'Skirt'];
     candidatesRes = await client.query(
-      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+      `SELECT ${MERCHANDISE_RESOLVE_COLUMNS}
        FROM merchandisestbl
        WHERE merchandise_name = $1 AND branch_id = $2 AND size = $3
-         AND LOWER(COALESCE(type, '')) = LOWER($4)
+         AND LOWER(COALESCE(type, '')) = ANY($4::text[])
        ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
-      [name, branchId, size, category]
+      [name, branchId, size, typeAliases.map((t) => t.toLowerCase())]
     );
   } else if (size) {
     candidatesRes = await client.query(
-      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+      `SELECT ${MERCHANDISE_RESOLVE_COLUMNS}
        FROM merchandisestbl
        WHERE merchandise_name = $1 AND branch_id = $2 AND size = $3
        ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
@@ -176,7 +259,7 @@ export async function resolveMerchandiseWithAvailableStock(
     );
   } else {
     candidatesRes = await client.query(
-      `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, type
+      `SELECT ${MERCHANDISE_RESOLVE_COLUMNS}
        FROM merchandisestbl
        WHERE merchandise_name = $1 AND branch_id = $2
        ORDER BY quantity DESC NULLS LAST, merchandise_id ASC`,
@@ -188,7 +271,81 @@ export async function resolveMerchandiseWithAvailableStock(
     if (rowHasStock(row)) return row;
   }
 
-  return null;
+  return pickZeroStockRow(candidatesRes.rows, byIdRow);
+}
+
+/**
+ * @param {import('pg').PoolClient} client
+ * @param {{ studentId: number, packageId: number, classId: number }} keys
+ */
+export async function loadIssuedPackageMerchRows(client, { studentId, packageId, classId }) {
+  if (!(await merchandiseReleaseLogTableExists(client))) return [];
+  const sid = Number(studentId);
+  const pid = Number(packageId);
+  const cid = Number(classId);
+  if (!sid || !pid || !cid) return [];
+  const r = await runQuery(
+    client,
+    `SELECT merchandise_id, merchandise_name, size, category, quantity
+     FROM merchandise_release_logtbl
+     WHERE source = $1
+       AND student_id = $2
+       AND package_id = $3
+       AND class_id = $4`,
+    [MERCH_RELEASE_SOURCE.PACKAGE_ENROLL, sid, pid, cid]
+  );
+  return r.rows;
+}
+
+export function isPackageMerchLineIssued(line, issuedRows) {
+  if (!line || !issuedRows?.length) return false;
+  const action = String(line.action || 'issue').trim().toLowerCase() || 'issue';
+  const lineName = line.original_type_name || line.merchandise_name;
+  if (action === 'waive') {
+    return issuedRows.some(
+      (row) =>
+        String(row.category || '') === 'Waived' &&
+        merchNamesMatch(lineName, row.merchandise_name)
+    );
+  }
+  const mid = Number(line.merchandise_id);
+  const size = String(line.size || '').trim().toLowerCase();
+  const cat = String(line.category || '').trim().toLowerCase();
+  return issuedRows.some((row) => {
+    if (String(row.category || '') === 'Waived') return false;
+    if (Number.isFinite(mid) && mid > 0 && Number(row.merchandise_id) === mid) {
+      return true;
+    }
+    const nameOk =
+      merchNamesMatch(line.merchandise_name, row.merchandise_name) ||
+      merchNamesMatch(line.original_type_name, row.merchandise_name);
+    if (!nameOk) return false;
+    const rowSize = String(row.size || '').trim().toLowerCase();
+    const rowCat = String(row.category || '').trim().toLowerCase();
+    const sizeOk = !size || !rowSize || size === rowSize;
+    const catOk = !cat || !rowCat || cat === rowCat;
+    return sizeOk && catOk;
+  });
+}
+
+/** Non-waive lines not yet in the release log (physical items still owed). */
+export function remainingIssuablePackageMerchLines(lines, issuedRows) {
+  return normalizePackageMerchLines(lines).filter((line) => {
+    const action = String(line.action || 'issue').trim().toLowerCase() || 'issue';
+    if (action === 'waive') return false;
+    return !isPackageMerchLineIssued(line, issuedRows);
+  });
+}
+
+export function packageMerchLineKey(line) {
+  const action = String(line?.action || 'issue').trim().toLowerCase() || 'issue';
+  const name = String(line?.original_type_name || line?.merchandise_name || '')
+    .trim()
+    .toLowerCase();
+  const cat = String(line?.category || '').trim().toLowerCase();
+  const size = String(line?.size || '').trim().toLowerCase();
+  const mid = Number(line?.merchandise_id) || '';
+  return `${action}|${name}|${cat}|${size}|${mid}`;
 }
 
 /**
@@ -201,22 +358,35 @@ export function normalizePackageMerchLines(lines) {
   const byKey = new Map();
 
   for (const raw of lines) {
+    const action = String(raw.action || 'issue').trim().toLowerCase() || 'issue';
     const mid = Number(raw.merchandise_id);
-    if (!Number.isFinite(mid) || mid <= 0) continue;
+    if (action !== 'waive' && (!Number.isFinite(mid) || mid <= 0)) continue;
     const name = String(raw.merchandise_name || '').trim();
-    if (!name) continue;
+    const originalType = String(raw.original_type_name || '').trim();
+    if (!name && !originalType) continue;
 
     const line = {
-      merchandise_id: mid,
+      merchandise_id: Number.isFinite(mid) && mid > 0 ? mid : null,
       quantity: Math.max(1, parseInt(String(raw.quantity ?? 1), 10) || 1),
       size: raw.size || null,
-      merchandise_name: name,
+      merchandise_name: name || originalType || null,
       category: raw.category || null,
+      action,
+      original_type_name: originalType || null,
+      reason: raw.reason || null,
     };
 
+    const coverageName = originalType || name;
     const isUniform = PACKAGE_UNIFORM_TYPE_NAMES.includes(name);
     let key;
-    if (isUniform && (line.category === 'Top' || line.category === 'Bottom')) {
+    if (action === 'waive') {
+      key = `${coverageName}|waive`;
+    } else if (action === 'swap') {
+      key = `${coverageName}|swap|${line.merchandise_id}`;
+    } else if (
+      isUniform &&
+      (line.category === 'Top' || line.category === 'Bottom' || line.category === 'Set')
+    ) {
       key = `${name}|${line.category}`;
     } else if (isUniform) {
       key = `${name}|placeholder|${line.merchandise_id}|${line.size || ''}`;
@@ -231,7 +401,8 @@ export function normalizePackageMerchLines(lines) {
   }
 
   const hasConfiguredUniform = (name) =>
-    byKey.has(`${name}|Top`) && byKey.has(`${name}|Bottom`);
+    byKey.has(`${name}|Set`) ||
+    (byKey.has(`${name}|Top`) && byKey.has(`${name}|Bottom`));
 
   const out = [];
   for (const line of byKey.values()) {
@@ -239,7 +410,16 @@ export function normalizePackageMerchLines(lines) {
       PACKAGE_UNIFORM_TYPE_NAMES.includes(line.merchandise_name) &&
       hasConfiguredUniform(line.merchandise_name) &&
       line.category !== 'Top' &&
-      line.category !== 'Bottom'
+      line.category !== 'Bottom' &&
+      line.category !== 'Set'
+    ) {
+      continue;
+    }
+    // Prefer Set over Top/Bottom when both were somehow selected
+    if (
+      PACKAGE_UNIFORM_TYPE_NAMES.includes(line.merchandise_name) &&
+      byKey.has(`${line.merchandise_name}|Set`) &&
+      (line.category === 'Top' || line.category === 'Bottom')
     ) {
       continue;
     }
@@ -249,9 +429,9 @@ export function normalizePackageMerchLines(lines) {
 }
 
 /**
- * Resolve Top/Bottom uniform SKU for package issue (1:1 with configured category + size).
- * Package lines still use category Top/Bottom; stock rows may use Polo/Shirt (upper)
- * or Short/Pants (lower), plus legacy Top/Bottom.
+ * Resolve Top/Bottom/Set uniform SKU for package issue (1:1 with configured category + size).
+ * Package lines still use category Top/Bottom/Set; stock rows may use Polo/Shirt (upper)
+ * or Short/Pants (lower), Set, plus legacy Top/Bottom.
  * @param {import('pg').PoolClient} client
  */
 export async function resolvePackageUniformMerchandiseId(
@@ -261,11 +441,15 @@ export async function resolvePackageUniformMerchandiseId(
   const name = String(merchandiseName || '').trim();
   const cat = String(category || '').trim();
   if (!PACKAGE_UNIFORM_TYPE_NAMES.includes(name)) return null;
-  if (cat !== 'Top' && cat !== 'Bottom') return null;
+  if (cat !== 'Top' && cat !== 'Bottom' && cat !== 'Set') return null;
   if (!size || !branchId) return null;
 
   const typeAliases =
-    cat === 'Top' ? ['Top', 'Polo', 'Shirt'] : ['Bottom', 'Short', 'Pants', 'Shorts'];
+    cat === 'Set'
+      ? ['Set', 'Complete Set']
+      : cat === 'Top'
+        ? ['Top', 'Polo', 'Shirt', 'Blouse', 'Logo 1', 'Logo 2']
+        : ['Bottom', 'Short', 'Pants', 'Shorts', 'Skirt'];
 
   const r = await client.query(
     `SELECT merchandise_id
@@ -285,14 +469,19 @@ export function linesFromMerchandiseToDeduct(merchandiseToDeduct) {
   if (!merchandiseToDeduct || merchandiseToDeduct.size === 0) return [];
   const lines = [];
   for (const [, info] of merchandiseToDeduct.entries()) {
+    const action = String(info.action || 'issue').trim().toLowerCase() || 'issue';
     const mid = Number(info.merchandise_id);
-    if (!Number.isFinite(mid) || mid <= 0) continue;
+    // Waive may keep the catalog id for audit; still allow mid when waive.
+    if (action !== 'waive' && (!Number.isFinite(mid) || mid <= 0)) continue;
     lines.push({
-      merchandise_id: mid,
+      merchandise_id: Number.isFinite(mid) && mid > 0 ? mid : null,
       quantity: Math.max(1, parseInt(String(info.count ?? 1), 10) || 1),
       size: info.size || null,
       merchandise_name: info.merchandise_name || null,
       category: info.category || null,
+      action,
+      original_type_name: info.original_type_name || null,
+      reason: info.reason || null,
     });
   }
   return normalizePackageMerchLines(lines);
@@ -426,9 +615,11 @@ function manilaNoonFromIssueDate(issueDateYmd) {
 }
 
 /**
- * Deduct stock and write release log (package included merchandise, once per student/package/class).
+ * Deduct stock and write release log for package included merchandise.
+ * Issues in-stock lines only; out-of-stock lines are skipped (backorder) so payment can complete.
+ * Already-logged lines are skipped (per-line idempotency).
  *
- * @returns {Promise<{ issued: boolean, reason?: string, quantity?: number }>}
+ * @returns {Promise<{ issued: boolean, reason?: string, quantity?: number, pending_count?: number }>}
  */
 export async function issuePackageMerchandiseLines(client, params) {
   const {
@@ -455,8 +646,22 @@ export async function issuePackageMerchandiseLines(client, params) {
     return { issued: false, reason: 'no_lines' };
   }
 
-  if (await hasPackageMerchandiseBeenIssued(client, { studentId: sid, packageId: pid, classId: cid })) {
-    return { issued: false, reason: 'already_issued' };
+  const issuedRows = await loadIssuedPackageMerchRows(client, {
+    studentId: sid,
+    packageId: pid,
+    classId: cid,
+  });
+  const remaining = remainingIssuablePackageMerchLines(normalizedLines, issuedRows);
+  const waiveOnly = normalizedLines.filter(
+    (line) => String(line.action || '').toLowerCase() === 'waive'
+  );
+
+  if (!remaining.length && !(waiveOnly.length > 0 && issuedRows.length === 0)) {
+    return {
+      issued: false,
+      reason: issuedRows.length > 0 ? 'already_issued' : 'no_lines',
+      pending_count: 0,
+    };
   }
 
   const releaseBatchId = paymentId
@@ -464,16 +669,18 @@ export async function issuePackageMerchandiseLines(client, params) {
     : buildPackageEnrollReleaseBatchId(cid, sid);
   const releasedAt = manilaNoonFromIssueDate(paymentIssueDate);
   let totalQty = 0;
+  let pendingCount = 0;
 
-  for (const line of normalizedLines) {
+  for (const line of remaining) {
+    const action = String(line.action || 'issue').trim().toLowerCase() || 'issue';
+    if (action === 'waive') continue;
+
     let merchId = Number(line.merchandise_id);
     const qty = Math.max(1, parseInt(String(line.quantity ?? 1), 10) || 1);
-    if (!Number.isFinite(merchId) || merchId <= 0) continue;
-
     const uniformName = String(line.merchandise_name || '').trim();
     if (
       PACKAGE_UNIFORM_TYPE_NAMES.includes(uniformName) &&
-      (line.category === 'Top' || line.category === 'Bottom') &&
+      (line.category === 'Top' || line.category === 'Bottom' || line.category === 'Set') &&
       line.size
     ) {
       const resolvedId = await resolvePackageUniformMerchandiseId(client, {
@@ -485,21 +692,39 @@ export async function issuePackageMerchandiseLines(client, params) {
       if (resolvedId) merchId = Number(resolvedId);
     }
 
+    const resolved = await resolveMerchandiseWithAvailableStock(client, {
+      merchandiseId: Number.isFinite(merchId) && merchId > 0 ? merchId : null,
+      merchandiseName: line.merchandise_name || line.original_type_name,
+      branchId: bid,
+      quantityNeeded: qty,
+      size: line.size,
+      category: line.category,
+      allowZeroStock: false,
+    });
+
+    if (!resolved) {
+      pendingCount += qty;
+      continue;
+    }
+    merchId = Number(resolved.merchandise_id);
+
     const stockRes = await client.query(
       `SELECT merchandise_id, merchandise_name, size, type, quantity
        FROM merchandisestbl
-       WHERE merchandise_id = $1`,
+       WHERE merchandise_id = $1
+       FOR UPDATE`,
       [merchId]
     );
-    if (stockRes.rows.length === 0) continue;
+    if (stockRes.rows.length === 0) {
+      pendingCount += qty;
+      continue;
+    }
     const row = stockRes.rows[0];
     if (row.quantity !== null && row.quantity !== undefined) {
       const available = parseInt(row.quantity, 10) || 0;
       if (available < qty) {
-        throw new Error(
-          `Insufficient inventory for ${row.merchandise_name || 'Merchandise'}${row.size ? ` (${row.size})` : ''}. ` +
-            `Available: ${available}, Needed: ${qty}`
-        );
+        pendingCount += qty;
+        continue;
       }
       const newQuantity = Math.max(0, available - qty);
       await client.query(`UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`, [
@@ -527,14 +752,46 @@ export async function issuePackageMerchandiseLines(client, params) {
     totalQty += qty;
   }
 
-  if (totalQty <= 0) {
-    return { issued: false, reason: 'no_lines' };
+  if (totalQty > 0) {
+    console.log(
+      `✅ Package merchandise issued (${totalQty} unit(s), ${pendingCount} pending) for student ${sid} class ${cid} package ${pid} on payment ${paymentId ?? 'n/a'}`
+    );
+    return { issued: true, quantity: totalQty, pending_count: pendingCount };
   }
 
-  console.log(
-    `✅ Package merchandise issued (${totalQty} unit(s)) for student ${sid} class ${cid} package ${pid} on payment ${paymentId ?? 'n/a'}`
-  );
-  return { issued: true, quantity: totalQty };
+  if (pendingCount > 0) {
+    return { issued: false, reason: 'backordered', pending_count: pendingCount };
+  }
+
+  // All lines waived (or nothing to issue): record a marker release so re-enroll does not re-issue.
+  if (waiveOnly.length > 0 && issuedRows.length === 0) {
+    const first = waiveOnly[0];
+    const markerId = Number(first.merchandise_id);
+    if (Number.isFinite(markerId) && markerId > 0) {
+      await insertMerchandiseReleaseLog(client, {
+        releaseBatchId,
+        source: MERCH_RELEASE_SOURCE.PACKAGE_ENROLL,
+        merchandiseId: markerId,
+        quantity: 1,
+        branchId: bid,
+        merchandiseName: `${first.original_type_name || first.merchandise_name || 'Merchandise'} (waived)`,
+        size: first.size || null,
+        category: 'Waived',
+        studentId: sid,
+        classId: cid,
+        packageId: pid,
+        paymentId: paymentId != null ? Number(paymentId) : null,
+        createdBy,
+        releasedAt,
+      });
+      console.log(
+        `✅ Package merchandise all waived for student ${sid} class ${cid} package ${pid} (marker logged, no stock deduct)`
+      );
+      return { issued: true, reason: 'all_waived', quantity: 0, pending_count: 0 };
+    }
+  }
+
+  return { issued: false, reason: 'no_lines' };
 }
 
 /**

@@ -4,7 +4,11 @@
  */
 
 import assert from 'node:assert/strict';
-import { isStudentFullPaymentInvoiceCandidate } from '../lib/studentFullPaymentInvoices/index.js';
+import {
+  isStudentFullPaymentInvoiceCandidate,
+  normalizeFullPaymentEnrollmentPhases,
+  resolveFullPaymentStudentStatus,
+} from '../lib/studentFullPaymentInvoices/index.js';
 
 function testNativeFullPaymentPackage() {
   assert.equal(
@@ -72,4 +76,32 @@ testConversionRemarks();
 testInstallmentPhaseExcluded();
 testDownpaymentExcluded();
 testCancelledExcluded();
+
+function testFirstPhaseReEnrolledDisplaysAsNew() {
+  const normalized = normalizeFullPaymentEnrollmentPhases([
+    { phase_number: 1, status: 're_enrolled' },
+    { phase_number: 2, status: 're_enrolled' },
+    { phase_number: 10, status: 'completed' },
+  ]);
+  assert.equal(normalized[0].status, 'new');
+  assert.equal(normalized[1].status, 're_enrolled');
+  assert.equal(normalized[2].status, 'completed');
+}
+
+function testStudentStatusActiveWhenEnrolled() {
+  assert.equal(
+    resolveFullPaymentStudentStatus([
+      { phase_number: 1, status: 'new' },
+      { phase_number: 10, status: 'completed' },
+    ]),
+    'active'
+  );
+  assert.equal(
+    resolveFullPaymentStudentStatus([{ phase_number: 10, status: 'completed' }]),
+    'inactive'
+  );
+}
+
+testFirstPhaseReEnrolledDisplaysAsNew();
+testStudentStatusActiveWhenEnrolled();
 console.log('studentFullPaymentInvoices tests passed');

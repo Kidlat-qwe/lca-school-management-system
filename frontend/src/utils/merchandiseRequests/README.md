@@ -7,7 +7,7 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 |---|---|
 | `approvedBy.js` | Display label for who approved/rejected a request. |
 | `learningKit.js` | Learning Kit detection, CMS kit recipes, component validation/serialize for Request Stock. |
-| `catalogOptions.js` | RHET catalog unwrap, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
+| `catalogOptions.js` | RHET catalog unwrap, stale-cache warning vs blocking error, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
 | `requestActionMenu.js` | Ellipsis menu items: terminal statuses → View details only; Pending/Shipped → Track + actions. Return Stock pending has no Cancel / Confirm received. |
@@ -24,6 +24,8 @@ My Requests: **Pending** until `stock_return.accepted`, then **Returned**.
 
 1. Load categories + items from CMS proxy `GET /merchandise-requests/inventory/catalog` (never call RHET from the browser).
    CMS may return a short-lived / stale cached catalog (`meta.cached` / `meta.stale`) when RHET `/catalog` is briefly down.
+   Treat that as a **warning**, not a blocking error: `describeInventoryCatalogLoad` keeps Submit enabled when categories loaded.
+   Real failures (empty catalog, 401, no cache) still block Request Stock.
 2. **Create Merchandise Type** and **Request Stock** category dropdowns use
    `getCreateMerchandiseCategoryOptions(catalog)` — exact RHET `categoryName` values only.
 3. Prefer `categories[].categoryKind` for form mode:
@@ -84,6 +86,8 @@ RHET kits are virtual (category-slot BOM). CMS recipes live in
 ```js
 import {
   unwrapCatalogPayload,
+  describeInventoryCatalogLoad,
+  isStaleOrCachedCatalog,
   isUniformLikeCategory,
   buildCatalogRequestPayload,
 } from '../utils/merchandiseRequests/catalogOptions';

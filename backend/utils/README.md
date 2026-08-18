@@ -1,5 +1,19 @@
 # Backend utilities
 
+## `dateUtils.js`
+
+Asia/Manila (`UTC+8`) helpers for business dates and JSON timestamps.
+
+| Export | Purpose |
+|--------|---------|
+| `formatYmdLocal` / `todayYmdManila` / `coerceToManilaYmd` | Calendar dates (`YYYY-MM-DD`) in Philippines time |
+| `toManilaOffsetIso` | Absolute instant → `YYYY-MM-DDTHH:mm:ss+08:00` |
+| `mapRowTimestampsToManila` | Rewrite `created_at` / `updated_at` / `reviewed_at` / `inventory_synced_at` on merchandise request rows |
+
+Coolify/Neon stores `timestamp without time zone` as UTC wall clock (`05:47:47` when the PC clock is 1:47 PM). List/get queries select `created_at_manila` via `AT TIME ZONE 'UTC' … Asia/Manila` (`13:47:47`). `mapRowTimestampsToManila` copies that onto `created_at` so My Requests matches RHET.
+
+Used by: `routes/merchandiserequests.js`, enrollment/invoice date coercion.
+
 ## `acknowledgementReceiptStatus.js`
 
 Shared AR status constants and list-filter SQL helpers for `routes/acknowledgementreceipts.js`.

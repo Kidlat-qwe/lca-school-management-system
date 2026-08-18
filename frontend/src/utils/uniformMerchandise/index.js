@@ -147,6 +147,7 @@ export const UNIFORM_SCHOOL_FEMALE_PIECE_OPTIONS = [
 export const UNIFORM_PE_PIECE_OPTIONS = [
   { value: 'Shirt', label: 'Shirt' },
   { value: 'Pants', label: 'Pants' },
+  { value: 'Set', label: 'Set' },
 ];
 
 export const UNIFORM_TSHIRT_PIECE_OPTIONS = [{ value: 'Shirt', label: 'Shirt' }];
@@ -156,6 +157,8 @@ export const UNIFORM_LCA_SHIRT_PIECE_OPTIONS = [
   { value: 'Logo 1', label: 'Logo 1' },
   { value: 'Logo 2', label: 'Logo 2' },
 ];
+
+export const UNIFORM_SET_PIECE_OPTION = { value: 'Set', label: 'Set' };
 
 /**
  * All known piece values (new + legacy Top/Bottom) for filters.
@@ -167,6 +170,7 @@ export const UNIFORM_PIECE_OPTIONS = [
   ...UNIFORM_LCA_SHIRT_PIECE_OPTIONS,
   { value: 'Top', label: 'Top' },
   { value: 'Bottom', label: 'Bottom' },
+  UNIFORM_SET_PIECE_OPTION,
 ];
 
 /** Normalize merchandise category/type name to RHET-aligned value when known. */
@@ -288,10 +292,10 @@ export function getUniformPieceOptions(merchandiseName, gender = null) {
     return UNIFORM_PE_PIECE_OPTIONS;
   }
   const g = normalizeMerchandiseGender(gender);
-  if (g === 'Male') return UNIFORM_SCHOOL_MALE_PIECE_OPTIONS;
-  if (g === 'Female') return UNIFORM_SCHOOL_FEMALE_PIECE_OPTIONS;
+  if (g === 'Male') return [...UNIFORM_SCHOOL_MALE_PIECE_OPTIONS, UNIFORM_SET_PIECE_OPTION];
+  if (g === 'Female') return [...UNIFORM_SCHOOL_FEMALE_PIECE_OPTIONS, UNIFORM_SET_PIECE_OPTION];
   // No gender yet — show all school pieces so the dropdown is usable
-  return UNIFORM_SCHOOL_PIECE_OPTIONS;
+  return [...UNIFORM_SCHOOL_PIECE_OPTIONS, UNIFORM_SET_PIECE_OPTION];
 }
 
 /** Human labels for upper/lower badges (Polo/Short or Shirt/Pants). */
@@ -328,6 +332,83 @@ export function isLowerUniformPiece(type) {
     t === 'shorts' ||
     t === 'pants' ||
     t.includes('skirt')
+  );
+}
+
+/** RHET full-set SKU (one row covers Top+Bottom). */
+export function isUniformSetPiece(type) {
+  const t = String(type || '')
+    .trim()
+    .toLowerCase();
+  return t === 'set' || t === 'complete set';
+}
+
+/**
+ * Enroll / package role for a stock row's `type`.
+ * Polo/Shirt/Blouse/Logo → Top; Short/Pants/Skirt → Bottom; Set → Set.
+ * @param {object|string|null|undefined} itemOrType
+ * @returns {'Top'|'Bottom'|'Set'|'General'}
+ */
+export function getUniformCategory(itemOrType) {
+  if (!itemOrType) return 'General';
+  const typeValue =
+    typeof itemOrType === 'string' ? itemOrType : itemOrType.type || '';
+  if (isUniformSetPiece(typeValue)) return 'Set';
+  if (isUpperUniformPiece(typeValue)) return 'Top';
+  if (isLowerUniformPiece(typeValue)) return 'Bottom';
+  return 'General';
+}
+
+/**
+ * Distinct non-General roles present in branch stock for a uniform type.
+ * @param {object[]} itemsForType
+ * @param {(item: object) => string} [getCategory]
+ * @returns {Array<'Top'|'Bottom'|'Set'>}
+ */
+export function listUniformStockCategories(itemsForType, getCategory = getUniformCategory) {
+  if (!Array.isArray(itemsForType)) return [];
+  const order = ['Set', 'Top', 'Bottom'];
+  const found = new Set(
+    itemsForType
+      .map((item) => getCategory(item))
+      .filter((category) => category && category !== 'General')
+  );
+  return order.filter((c) => found.has(c));
+}
+
+/**
+ * Package / enroll sizing is complete when the student picked a Set,
+ * or every piece role that exists in stock (Top/Bottom) excluding Set.
+ */
+export function isStudentUniformSelectionComplete(
+  selections,
+  typeName,
+  itemsForType,
+  getCategory = getUniformCategory
+) {
+  const sels = Array.isArray(selections) ? selections : [];
+  const categories = listUniformStockCategories(itemsForType, getCategory);
+
+  const sized = (m) =>
+    m?.merchandise_name === typeName &&
+    m?.merchandise_id &&
+    m?.size &&
+    String(m.size).trim() !== '';
+
+  if (categories.length === 0) {
+    return sels.some(sized);
+  }
+
+  if (sels.some((m) => sized(m) && m.category === 'Set')) {
+    return true;
+  }
+
+  const pieceCats = categories.filter((c) => c !== 'Set');
+  if (pieceCats.length === 0) {
+    return false;
+  }
+  return pieceCats.every((category) =>
+    sels.some((m) => sized(m) && m.category === category)
   );
 }
 
@@ -369,10 +450,12 @@ export function formatUniformSizeDisplayLabel(size) {
  * @returns {{ top: number, bottom: number, upper: number, lower: number, unspecified: number }}
  */
 export function countUniformPiecesByType(stocks) {
-  const result = { top: 0, bottom: 0, upper: 0, lower: 0, unspecified: 0 };
+  const result = { top: 0, bottom: 0, upper: 0, lower: 0, set: 0, unspecified: 0 };
   if (!Array.isArray(stocks)) return result;
   for (const item of stocks) {
-    if (isUpperUniformPiece(item?.type)) {
+    if (isUniformSetPiece(item?.type)) {
+      result.set += 1;
+    } else if (isUpperUniformPiece(item?.type)) {
       result.top += 1;
       result.upper += 1;
     } else if (isLowerUniformPiece(item?.type)) {
@@ -606,7 +689,7 @@ export function formatUniformSameSizePairOptionLabel(
  * @param {Array} merchandiseList — branch merchandise catalog
  * @param {string} merchandiseName
  * @param {string} size
- * @param {string|null} category — 'Top' | 'Bottom' | null
+ * @param {string|null} category — 'Top' | 'Bottom' | 'Set' | null
  * @param {(item: object) => string} getCategory — e.g. component getUniformCategory
  * @param {string|null} [preferredGender] — student gender (Male/Female)
  */
@@ -620,13 +703,16 @@ export function findUniformStockByNameSizeCategory(
 ) {
   if (!merchandiseName || !size || !Array.isArray(merchandiseList)) return null;
 
+  const resolveCategory =
+    typeof getCategory === 'function' ? getCategory : getUniformCategory;
+
   let candidates;
   if (isUniformTopBottomType(merchandiseName) && category && category !== 'General') {
     candidates = merchandiseList.filter(
       (item) =>
         item.merchandise_name === merchandiseName &&
         item.size === size &&
-        getCategory(item) === category
+        resolveCategory(item) === category
     );
   } else {
     candidates = merchandiseList.filter(

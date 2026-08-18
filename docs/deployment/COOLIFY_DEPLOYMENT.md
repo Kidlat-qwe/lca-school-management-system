@@ -40,7 +40,7 @@ The PostgreSQL database is **external (Neon)** and is not deployed on Coolify.
 - Credentials ready:
   - Neon PostgreSQL (`DB_*_PRODUCTION`)
   - Firebase Admin (prefer `FIREBASE_PRIVATE_KEY_BASE64`)
-  - AWS S3, SendGrid, Semaphore SMS
+  - AWS S3, Brevo, Semaphore SMS
   - RHET Inventory key (optional — see `PSMS_API_INTEGRATION.md`)
 
 DNS / tunnel for `*.lca-app.com` is managed by IT (Cloudflare Tunnel). Escalate
@@ -121,9 +121,10 @@ env are correct.
   AWS_S3_BUCKET_NAME=your-bucket
 
   # Email
-  EMAIL_PROVIDER=auto
-  SENDGRID_API_KEY=your-sendgrid-key
-  SENDGRID_FROM_EMAIL=lca@little-champion.com
+  EMAIL_PROVIDER=brevo
+  BREVO_API_KEY=your-brevo-key
+  BREVO_FROM_EMAIL=no-reply@little-champion.com
+  BREVO_FROM_NAME=Little Champions Academy Inc.
 
   # SMS
   SMS_NOTIFICATIONS_ENABLED=true

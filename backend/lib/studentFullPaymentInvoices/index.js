@@ -28,6 +28,45 @@ const formatEnrollmentStatusLabel = (status) => {
   return ENROLLMENT_STATUS_LABELS[key] || (status ? String(status) : null);
 };
 
+const ACTIVE_STUDENT_ENROLLMENT_STATUSES = new Set([
+  'new',
+  're_enrolled',
+  'upsell',
+  'rejoin',
+]);
+
+/**
+ * First enrolled phase on a class track displays as New (same as the month matrix),
+ * even when classstudentstbl stored re_enrolled because the student had another class.
+ */
+export function normalizeFullPaymentEnrollmentPhases(phases = []) {
+  const rows = Array.isArray(phases) ? phases : [];
+  const enrolledNums = rows
+    .map((p) => Number(p.phase_number))
+    .filter((n) => Number.isFinite(n));
+  const firstPhase = enrolledNums.length ? Math.min(...enrolledNums) : null;
+
+  return rows.map((phase) => {
+    const n = Number(phase.phase_number);
+    const status = String(phase.status || '').trim().toLowerCase();
+    if (firstPhase != null && n === firstPhase && status === 're_enrolled') {
+      return {
+        ...phase,
+        status: 'new',
+        status_label: ENROLLMENT_STATUS_LABELS.new,
+      };
+    }
+    return phase;
+  });
+}
+
+export function resolveFullPaymentStudentStatus(phases = []) {
+  const active = (Array.isArray(phases) ? phases : []).some((phase) =>
+    ACTIVE_STUDENT_ENROLLMENT_STATUSES.has(String(phase.status || '').trim().toLowerCase())
+  );
+  return active ? 'active' : 'inactive';
+}
+
 const pickInt = (text, key) => {
   const match = String(text || '').match(new RegExp(`${key}:(\\d+)`, 'i'));
   return match ? parseInt(match[1], 10) : null;
@@ -186,6 +225,7 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
     const classRes = await runQuery(
       db,
       `SELECT c.class_id, c.class_name, c.level_tag, c.branch_id,
+              TO_CHAR(c.start_date, 'YYYY-MM-DD') AS class_start_date,
               p.program_name, b.branch_name
        FROM classestbl c
        LEFT JOIN programstbl p ON p.program_id = c.program_id
@@ -212,14 +252,24 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
   if (classIds.length) {
     const enrRes = await runQuery(
       db,
-      `SELECT class_id, phase_number, program_enrollment_status AS status,
-              TO_CHAR(TIMEZONE('Asia/Manila', enrolled_at), 'YYYY-MM-DD') AS enrolled
-       FROM classstudentstbl
-       WHERE student_id = $1
-         AND class_id = ANY($2::int[])
-         AND removed_at IS NULL
-         AND COALESCE(enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
-       ORDER BY class_id, phase_number, classstudent_id`,
+      `SELECT cs.class_id, cs.phase_number, cs.program_enrollment_status AS status,
+              TO_CHAR(TIMEZONE('Asia/Manila', cs.enrolled_at), 'YYYY-MM-DD') AS enrolled,
+              TO_CHAR(ps.phase_start_date, 'YYYY-MM-DD') AS phase_start_date
+       FROM classstudentstbl cs
+       LEFT JOIN (
+         SELECT class_id, phase_number, MIN(scheduled_date)::date AS phase_start_date
+         FROM classsessionstbl
+         WHERE class_id = ANY($2::int[])
+           AND phase_number IS NOT NULL
+         GROUP BY class_id, phase_number
+       ) ps
+         ON ps.class_id = cs.class_id
+        AND ps.phase_number = cs.phase_number
+       WHERE cs.student_id = $1
+         AND cs.class_id = ANY($2::int[])
+         AND cs.removed_at IS NULL
+         AND COALESCE(cs.enrolled_by, '') NOT ILIKE '%Rejoin gap marker%'
+       ORDER BY cs.class_id, cs.phase_number, cs.classstudent_id`,
       [sid, classIds]
     );
     for (const row of enrRes.rows || []) {
@@ -230,6 +280,7 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
         status: row.status || null,
         status_label: formatEnrollmentStatusLabel(row.status),
         enrolled: row.enrolled || null,
+        phase_start_date: row.phase_start_date || null,
       });
     }
   }
@@ -346,8 +397,11 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
     const releasedMerch = classId ? merchByClass.get(Number(classId)) || [] : [];
     const merchandise = releasedMerch.length ? releasedMerch : pendingMerch;
 
-    const enrollments = classId ? enrollmentsByClass.get(Number(classId)) || [] : [];
+    const enrollments = normalizeFullPaymentEnrollmentPhases(
+      classId ? enrollmentsByClass.get(Number(classId)) || [] : []
+    );
     const enrolledDates = enrollments.map((e) => e.enrolled).filter(Boolean).sort();
+    const studentStatus = resolveFullPaymentStudentStatus(enrollments);
 
     settlements.push({
       invoice_id: invoiceId,
@@ -384,6 +438,7 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
         : null,
       class_id: classId || null,
       class_name: klass?.class_name || null,
+      class_start_date: klass?.class_start_date || null,
       program_name: klass?.program_name || null,
       level_tag: klass?.level_tag || null,
       branch_id:
@@ -399,7 +454,9 @@ export async function loadStudentFullPaymentSettlements(db, studentId) {
         phases: enrollments,
         enrolled_count: enrollments.length,
         first_enrolled: enrolledDates[0] || null,
+        student_status: studentStatus,
       },
+      student_status: studentStatus,
       items: itemsByInvoice.get(invoiceId) || [],
       payments,
       merchandise,

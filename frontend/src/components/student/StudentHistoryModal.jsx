@@ -454,7 +454,12 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
   const focusClassId =
     student?.focus_class_id != null ? Number(student.focus_class_id) : null;
   const focusClassName = String(student?.focus_class_name || '').trim();
-  const openInitialTab = student?.initial_tab || student?.initialTab || null;
+  const openInitialTab = useMemo(() => {
+    const requested = student?.initial_tab || student?.initialTab || null;
+    if (requested) return requested;
+    if (student?.is_full_payment) return 'full-payment';
+    return null;
+  }, [student?.initial_tab, student?.initialTab, student?.is_full_payment]);
 
   const visibleTabs = useMemo(
     () => (isFinanceLimitedView ? TABS.filter((tab) => FINANCE_LIMITED_TAB_IDS.has(tab.id)) : TABS),
@@ -580,7 +585,15 @@ const StudentHistoryModal = ({ isOpen, student, onClose, onUpdated }) => {
       setSaving(false);
       setSavingMessage('');
     }
-  }, [isOpen, studentId, loadData, isFinanceLimitedView, openInitialTab, visibleTabs]);
+  }, [
+    isOpen,
+    studentId,
+    focusClassId,
+    loadData,
+    isFinanceLimitedView,
+    openInitialTab,
+    visibleTabs,
+  ]);
 
   useEffect(() => {
     if (!isOpen || activeTab !== 'invoices' || focusClassId == null || loading) return;

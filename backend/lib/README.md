@@ -177,9 +177,20 @@ Records each physical merchandise stock deduction in `merchandise_release_logtbl
 
 Package included merchandise (e.g. PE uniform top + bottom):
 
-- Stored on invoice remarks as `MERCH_PENDING:{json}` at enroll (validation only; stock not deducted yet).
-- Stock deduct + log on **first payment** only, keyed by `(student_id, package_id, class_id)`.
-- **Re-enrollment** with the same package/class does not issue or count again.
+- Stored on invoice remarks as `MERCH_PENDING:{json}` at enroll (no stock deduct).
+- Enroll and first payment **allow 0 stock** (backorder). In-stock lines deduct on first payment.
+- Remaining lines stay pending until staff **Issue** from Merchandise → Pending issue
+  after restock (`GET/POST /merchandise/package-pending`).
+- Idempotency is **per line** against `merchandise_release_logtbl`
+  `(student_id, package_id, class_id)`.
+- Re-enrollment with the same package/class does not re-issue already logged lines.
+
+See `backend/lib/packageMerchFulfillment/`.
+
+## `packageMerchFulfillment/`
+
+Staff queue for package merch owed after enroll/pay at 0 stock. Remaining lines =
+`MERCH_PENDING` minus release-log rows. APIs on `/merchandise/package-pending`.
 
 Dashboard daily/monthly metrics read from this table (quantity = sum of `quantity`; events = distinct `release_batch_id`).
 
@@ -224,6 +235,10 @@ Invoice **Download Acknowledgement Receipt** (`GET /invoices/:id/pdf?doc_type=ar
 Staff Student History **Full payment** tab. See `studentFullPaymentInvoices/README.md`.
 
 `GET /api/sms/invoices/student/:studentId/full-payment` returns one settlement card per native full-payment invoice or installment→full-payment conversion (not installment phase rows).
+
+## `announcementRecipientEmails/`
+
+Resolves emails for announcement recipient groups and sends branded notification emails when a board announcement is created with **Active** status. Guardians receive mail at `guardianstbl.email`. See `announcementRecipientEmails/README.md`.
 
 ## `arAttachInstallmentFollowUp.js`
 

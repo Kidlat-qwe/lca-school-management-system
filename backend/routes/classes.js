@@ -45,8 +45,9 @@ import {
 import {
   MERCH_RELEASE_SOURCE,
   appendMerchPendingToRemarks,
-  hasPackageMerchandiseBeenIssued,
   insertMerchandiseReleaseLog,
+  loadIssuedPackageMerchRows,
+  remainingIssuablePackageMerchLines,
   isPackageMerchTypeCovered,
   linesFromMerchandiseToDeduct,
   PACKAGE_UNIFORM_TYPE_NAMES,
@@ -4640,6 +4641,22 @@ router.post(
         return typeof value === 'string';
       })
       .withMessage('Size must be a string'),
+    body('selected_merchandise.*.action')
+      .optional({ nullable: true, checkFalsy: true })
+      .isIn(['issue', 'waive', 'swap'])
+      .withMessage('Merchandise action must be issue, waive, or swap'),
+    body('selected_merchandise.*.original_type_name')
+      .optional({ nullable: true, checkFalsy: true })
+      .trim(),
+    body('selected_merchandise.*.reason')
+      .optional({ nullable: true, checkFalsy: true })
+      .trim(),
+    body('selected_merchandise.*.merchandise_name')
+      .optional({ nullable: true, checkFalsy: true })
+      .trim(),
+    body('selected_merchandise.*.category')
+      .optional({ nullable: true, checkFalsy: true })
+      .trim(),
     body('installment_settings').optional().isObject().withMessage('Installment settings must be an object'),
     body('installment_settings.invoice_issue_date').optional().isISO8601().withMessage('Invoice issue date must be a valid date'),
     body('installment_settings.billing_month').optional().isString().withMessage('Billing month must be a string'),
@@ -5386,25 +5403,43 @@ router.post(
           const merchSize = typeof selectedMerch === 'object' ? (selectedMerch.size || null) : null;
           const merchName = typeof selectedMerch === 'object' ? (selectedMerch.merchandise_name || null) : null;
           const merchCategory = typeof selectedMerch === 'object' ? (selectedMerch.category || null) : null;
+          const merchAction =
+            typeof selectedMerch === 'object'
+              ? String(selectedMerch.action || 'issue').trim().toLowerCase() || 'issue'
+              : 'issue';
+          const merchOriginalType =
+            typeof selectedMerch === 'object'
+              ? String(selectedMerch.original_type_name || '').trim() || null
+              : null;
+          const merchReason =
+            typeof selectedMerch === 'object'
+              ? String(selectedMerch.reason || '').trim() || null
+              : null;
           
           let actualMerchId = merchId || null;
-          if (merchId) {
+          if (merchId || merchAction === 'waive') {
             // For items with sizes, we need to find the actual merchandise_id by size
-            if (merchSize && merchName) {
+            if (merchId && merchSize && merchName && merchAction !== 'waive') {
               const isUniformTopBottom =
                 PACKAGE_UNIFORM_TYPE_NAMES.includes(String(merchName).trim()) &&
                 merchCategory &&
-                (merchCategory === 'Top' || merchCategory === 'Bottom');
+                (merchCategory === 'Top' || merchCategory === 'Bottom' || merchCategory === 'Set');
 
               if (isUniformTopBottom) {
+                const typeAliases =
+                  merchCategory === 'Set'
+                    ? ['set', 'complete set']
+                    : merchCategory === 'Top'
+                      ? ['top', 'polo', 'shirt', 'blouse', 'logo 1', 'logo 2']
+                      : ['bottom', 'short', 'pants', 'shorts', 'skirt'];
                 const merchByCategoryResult = await client.query(
                   `SELECT merchandise_id, merchandise_name, size, price, quantity, branch_id, gender, type
                    FROM merchandisestbl
                    WHERE merchandise_name = $1 AND size = $2 AND branch_id = $3
-                     AND LOWER(COALESCE(type, '')) = LOWER($4)
+                     AND LOWER(COALESCE(type, '')) = ANY($4::text[])
                    ORDER BY merchandise_id ASC
                    LIMIT 1`,
-                  [merchName, merchSize, branch_id, merchCategory]
+                  [merchName, merchSize, branch_id, typeAliases]
                 );
                 if (merchByCategoryResult.rows.length > 0) {
                   actualMerchId = merchByCategoryResult.rows[0].merchandise_id;
@@ -5426,13 +5461,16 @@ router.post(
             
             // Track by merchandise_id, size, and category combination
             // This ensures Top and Bottom uniforms are tracked separately
-            const key = `${actualMerchId}_${merchSize || 'no_size'}_${merchCategory || 'no_category'}`;
+            const key = `${actualMerchId || merchOriginalType || merchName}_${merchSize || 'no_size'}_${merchCategory || 'no_category'}_${merchAction}`;
             const existing = merchandiseToDeduct.get(key);
             merchandiseToDeduct.set(key, {
               merchandise_id: actualMerchId,
               size: merchSize,
               merchandise_name: merchName,
               category: merchCategory,
+              action: merchAction,
+              original_type_name: merchOriginalType || merchName,
+              reason: merchReason,
               count: existing ? existing.count + 1 : 1
             });
           }
@@ -5469,21 +5507,25 @@ router.post(
 
       // Package merchandise: issue once on first payment (downpayment or Phase 1), not on re-enroll.
       if (package_id) {
-        const packageMerchAlreadyIssued = await hasPackageMerchandiseBeenIssued(client, {
+        const issuedRows = await loadIssuedPackageMerchRows(client, {
           studentId: student_id,
           packageId: package_id,
           classId: class_id,
         });
-        if (packageMerchAlreadyIssued) {
+        const pendingSnapshot = linesFromMerchandiseToDeduct(merchandiseToDeduct);
+        const remainingIssuable = remainingIssuablePackageMerchLines(
+          pendingSnapshot,
+          issuedRows
+        );
+        if (remainingIssuable.length === 0 && issuedRows.length > 0) {
           merchandiseToDeduct.clear();
           console.log(
             `[Merchandise] Already issued for student ${student_id} package ${package_id} class ${class_id} — skip on re-enroll`
           );
         } else {
           deferPackageMerchToFirstPayment = true;
-          packageMerchPendingLines = linesFromMerchandiseToDeduct(merchandiseToDeduct);
           console.log(
-            `[Merchandise] ${packageMerchPendingLines.length} line(s) pending until first payment (downpayment or Phase 1)`
+            `[Merchandise] ${pendingSnapshot.length} line(s) pending until first payment / restock fulfill (downpayment or Phase 1)`
           );
         }
       }
@@ -5494,6 +5536,15 @@ router.post(
       for (const [key, merchInfo] of merchandiseToDeduct.entries()) {
         const quantityNeeded = merchInfo.count;
         const merchName = merchInfo.merchandise_name;
+        const merchAction = String(merchInfo.action || 'issue').trim().toLowerCase() || 'issue';
+
+        // Waive: no stock required for the original package freebie
+        if (merchAction === 'waive') {
+          console.log(
+            `[Inventory Validation] Skipping stock check for waived ${merchInfo.original_type_name || merchName}`
+          );
+          continue;
+        }
 
         const resolved = await resolveMerchandiseWithAvailableStock(client, {
           merchandiseId: merchInfo.merchandise_id,
@@ -5502,9 +5553,16 @@ router.post(
           quantityNeeded,
           size: merchInfo.size,
           category: merchInfo.category,
+          allowZeroStock: deferPackageMerchToFirstPayment,
         });
 
         if (!resolved) {
+          if (deferPackageMerchToFirstPayment) {
+            console.log(
+              `[Inventory Validation] Backorder ${merchName || merchInfo.merchandise_id} (issue after restock)`
+            );
+            continue;
+          }
           console.log(
             `[Inventory Validation] No in-stock SKU for ${merchName || merchInfo.merchandise_id}, needed ${quantityNeeded}`
           );
@@ -5524,16 +5582,30 @@ router.post(
             size: resolved.size || merchInfo.size,
           });
           console.log(
-            `[Inventory Validation] Resolved ${merchName} to in-stock merchandise_id ${resolved.merchandise_id}`
+            `[Inventory Validation] Resolved ${merchName} to merchandise_id ${resolved.merchandise_id}`
           );
         }
 
-        console.log(
-          `[Inventory Validation] ✓ Inventory check passed for merchandise ID ${resolved.merchandise_id}`
-        );
+        const resolvedQty =
+          resolved.quantity == null || resolved.quantity === undefined
+            ? null
+            : parseInt(resolved.quantity, 10) || 0;
+        if (deferPackageMerchToFirstPayment && resolvedQty !== null && resolvedQty < quantityNeeded) {
+          console.log(
+            `[Inventory Validation] Backorder ${merchName} (available ${resolvedQty}, needed ${quantityNeeded})`
+          );
+        } else {
+          console.log(
+            `[Inventory Validation] ✓ Inventory check passed for merchandise ID ${resolved.merchandise_id}`
+          );
+        }
       }
       
       console.log(`[Inventory Validation] Validation complete. Errors found: ${inventoryValidationErrors.length}`);
+
+      if (deferPackageMerchToFirstPayment) {
+        packageMerchPendingLines = linesFromMerchandiseToDeduct(merchandiseToDeduct);
+      }
       
       // If inventory validation fails, rollback and return error
       if (inventoryValidationErrors.length > 0) {

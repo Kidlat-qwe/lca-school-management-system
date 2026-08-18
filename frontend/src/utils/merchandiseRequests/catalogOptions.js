@@ -5,6 +5,7 @@
  * Prefer categories[].categoryKind for uniform vs non-uniform form mode.
  * Never invent category names — only use exact RHET categoryName / itemName / sku
  * and uniform gender · type · size values that exist on catalog items.
+ * Stale/cached catalog (`meta.stale`) is a warning, not a submit-blocking error.
  */
 
 import {
@@ -182,6 +183,31 @@ export function unwrapCatalogPayload(payload) {
   };
 }
 
+/** CMS served the last successful RHET catalog after a live `/catalog` failure. */
+export const STALE_RHET_CATALOG_WARNING =
+  'Loaded a recent cached RHET catalog (inventory is slow right now). You can continue, or tap Retry.';
+
+export function isStaleOrCachedCatalog(catalog) {
+  return Boolean(catalog?.meta?.stale || catalog?.meta?.cached);
+}
+
+/**
+ * Split blocking catalog failures from non-blocking stale-cache notices.
+ * A cached catalog with categories must not disable Request Stock submit.
+ */
+export function describeInventoryCatalogLoad(catalog) {
+  if (!catalog?.categories?.length) {
+    return {
+      error: 'No RHET Inventory categories returned. Check inventory integration or try again.',
+      warning: '',
+    };
+  }
+  if (isStaleOrCachedCatalog(catalog)) {
+    return { error: '', warning: STALE_RHET_CATALOG_WARNING };
+  }
+  return { error: '', warning: '' };
+}
+
 export function getCatalogItemsForCategory(items, categoryName) {
   const key = String(categoryName || '').trim().toLowerCase();
   if (!key) return [];
@@ -229,6 +255,7 @@ export function getUniformTypeOptions(items, categoryName, gender) {
     'Skirt',
     'Shirt',
     'Pants',
+    'Set',
   ]);
 }
 

@@ -3,6 +3,7 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import { sendAnnouncementCreatedEmails } from '../lib/announcementRecipientEmails/index.js';
 
 const router = express.Router();
 
@@ -11,7 +12,40 @@ router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
 // Valid recipient groups
-const VALID_RECIPIENT_GROUPS = ['All', 'Students', 'Teachers', 'Admin', 'Finance'];
+const VALID_RECIPIENT_GROUPS = [
+  'All',
+  'Students',
+  'Teachers',
+  'Admin',
+  'Finance',
+  'Superadmin',
+  'Superfinance',
+  'Guardians',
+];
+
+/**
+ * Board posts created from the Announcements page (`POST /announcements`).
+ * System alerts (stock, payments, AR, daily summary, …) set navigation_key
+ * and/or target_user_id. Start/end dates are optional. Skip known system titles.
+ * GET /notifications is not filtered this way.
+ */
+const BOARD_ANNOUNCEMENT_ONLY_SQL = `
+  AND (a.navigation_key IS NULL OR BTRIM(a.navigation_key) = '')
+  AND a.target_user_id IS NULL
+  AND NOT (
+    LOWER(a.title) LIKE '%payment returned%'
+    OR LOWER(a.title) LIKE '%payment rejected%'
+    OR LOWER(a.title) LIKE '%payment resubmitted%'
+    OR LOWER(a.title) LIKE '%merchandise request%'
+    OR LOWER(a.title) LIKE '%stock request%'
+    OR LOWER(a.title) LIKE '%stock added%'
+    OR LOWER(a.title) LIKE '%cash deposit summary%'
+    OR LOWER(a.title) LIKE '%end of shift%'
+    OR LOWER(a.title) LIKE '%end of day%'
+    OR LOWER(a.title) LIKE '%acknowledgement receipt%'
+    OR LOWER(a.title) LIKE 'class suspension:%'
+  )
+`;
 
 /**
  * Map user types to recipient groups
@@ -29,8 +63,8 @@ const mapUserTypeToRecipientGroup = (userType, userBranchId) => {
     'Teacher': 'Teachers',
     'Admin': 'Admin',
     'Finance': 'Finance',
-    'Superadmin': 'Admin', // Superadmin maps to Admin for recipient group matching
-    'Superfinance': 'Finance', // Superfinance maps to Finance
+    'Superadmin': 'Superadmin',
+    'Superfinance': 'Superfinance',
   };
   
   return mapping[userType] || userType; // Fallback to original if no mapping found
@@ -38,7 +72,8 @@ const mapUserTypeToRecipientGroup = (userType, userBranchId) => {
 
 /**
  * GET /api/sms/announcements
- * Get all announcements with optional filters
+ * Announcements page catalog: posts created from Create Announcement only.
+ * System alerts are excluded (they use GET /announcements/notifications).
  * Access: All authenticated users (filtered by role and branch)
  */
 router.get(
@@ -64,6 +99,7 @@ router.get(
         SELECT 
           a.announcement_id,
           a.title,
+          a.email_subject,
           a.body,
           a.recipient_groups,
           a.navigation_key,
@@ -83,6 +119,7 @@ router.get(
         LEFT JOIN userstbl u ON a.created_by = u.user_id
         LEFT JOIN branchestbl b ON a.branch_id = b.branch_id
         WHERE 1=1
+        ${BOARD_ANNOUNCEMENT_ONLY_SQL}
       `;
       const params = [];
       let paramCount = 0;
@@ -144,6 +181,7 @@ router.get(
         SELECT COUNT(*) as total
         FROM announcementstbl a
         WHERE 1=1
+        ${BOARD_ANNOUNCEMENT_ONLY_SQL}
       `;
       const countParams = [];
       let countParamCount = 0;
@@ -191,6 +229,7 @@ router.get(
         FROM announcementstbl a
         LEFT JOIN branchestbl b ON a.branch_id = b.branch_id
         WHERE b.branch_id IS NOT NULL
+        ${BOARD_ANNOUNCEMENT_ONLY_SQL}
         ORDER BY b.branch_name
       `);
 
@@ -247,6 +286,7 @@ router.get(
         SELECT 
           a.announcement_id,
           a.title,
+          a.email_subject,
           a.body,
           a.navigation_key,
           a.navigation_query,
@@ -429,6 +469,7 @@ router.get(
         SELECT 
           a.announcement_id,
           a.title,
+          a.email_subject,
           a.body,
           a.recipient_groups,
           a.status,
@@ -476,7 +517,7 @@ router.post(
   '/',
   [
     body('title').notEmpty().trim().withMessage('Title is required'),
-    body('body').notEmpty().trim().withMessage('Body is required'),
+    body('body').notEmpty().trim().withMessage('Description is required'),
     body('recipient_groups')
       .isArray({ min: 1 })
       .withMessage('At least one recipient group is required'),
@@ -498,7 +539,17 @@ router.post(
       if (value === null || value === undefined || value === '') return true;
       return /^\d{4}-\d{2}-\d{2}/.test(value);
     }).withMessage('End date must be a valid date in YYYY-MM-DD format'),
-    body('attachment_url').optional().isString().trim().withMessage('Attachment URL must be a string'),
+    body('attachment_url').custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      return typeof value === 'string';
+    }).withMessage('Attachment URL must be a string'),
+    body('email_subject')
+      .optional({ values: 'falsy' })
+      .isString()
+      .trim()
+      .isLength({ max: 255 })
+      .withMessage('Subject must be at most 255 characters'),
+    body('send_email').optional().isBoolean().withMessage('send_email must be true or false'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -509,6 +560,7 @@ router.post(
 
       const {
         title,
+        email_subject,
         body,
         recipient_groups,
         status = 'Active',
@@ -517,6 +569,7 @@ router.post(
         start_date,
         end_date,
         attachment_url,
+        send_email = true,
       } = req.body;
 
       // Validate date range
@@ -547,14 +600,15 @@ router.post(
       const result = await client.query(
         `
         INSERT INTO announcementstbl (
-          title, body, recipient_groups, status, priority, branch_id, 
+          title, email_subject, body, recipient_groups, status, priority, branch_id,
           created_by, start_date, end_date, attachment_url
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         `,
         [
           title.trim(),
+          email_subject && String(email_subject).trim() ? String(email_subject).trim() : null,
           body.trim(),
           recipient_groups,
           status,
@@ -563,16 +617,37 @@ router.post(
           createdByUserId,
           start_date || null,
           end_date || null,
-          attachment_url && attachment_url.trim() ? attachment_url.trim() : null,
+          attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null,
         ]
       );
 
       await client.query('COMMIT');
 
+      const createdAnnouncement = result.rows[0];
+      let branchName = '';
+      if (createdAnnouncement.branch_id) {
+        const branchResult = await query(
+          'SELECT branch_name FROM branchestbl WHERE branch_id = $1 LIMIT 1',
+          [createdAnnouncement.branch_id]
+        );
+        branchName = branchResult.rows[0]?.branch_name || '';
+      }
+
+      if (send_email !== false && String(createdAnnouncement.status || '') === 'Active') {
+        setImmediate(() => {
+          sendAnnouncementCreatedEmails({
+            announcement: createdAnnouncement,
+            branchName,
+          }).catch((emailErr) => {
+            console.error('[announcements] Failed to send announcement emails:', emailErr);
+          });
+        });
+      }
+
       res.status(201).json({
         success: true,
         message: 'Announcement created successfully',
-        data: result.rows[0],
+        data: createdAnnouncement,
       });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -617,7 +692,7 @@ router.put(
   [
     param('id').isInt().withMessage('Announcement ID must be an integer'),
     body('title').optional().notEmpty().trim().withMessage('Title cannot be empty'),
-    body('body').optional().notEmpty().trim().withMessage('Body cannot be empty'),
+    body('body').optional().notEmpty().trim().withMessage('Description cannot be empty'),
     body('recipient_groups')
       .optional()
       .isArray({ min: 1 })
@@ -641,7 +716,16 @@ router.put(
       if (value === null || value === undefined || value === '') return true;
       return /^\d{4}-\d{2}-\d{2}/.test(value);
     }).withMessage('End date must be a valid date in YYYY-MM-DD format'),
-    body('attachment_url').optional().isString().trim().withMessage('Attachment URL must be a string'),
+    body('attachment_url').custom((value) => {
+      if (value === null || value === undefined || value === '') return true;
+      return typeof value === 'string';
+    }).withMessage('Attachment URL must be a string'),
+    body('email_subject')
+      .optional({ values: 'falsy' })
+      .isString()
+      .trim()
+      .isLength({ max: 255 })
+      .withMessage('Subject must be at most 255 characters'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -653,6 +737,7 @@ router.put(
       const { id } = req.params;
       const {
         title,
+        email_subject,
         body,
         recipient_groups,
         status,
@@ -682,7 +767,7 @@ router.put(
       
       // Check if user is the creator (Superadmin can edit any announcement)
       if (req.user.userType !== 'Superadmin') {
-        if (announcement.created_by !== currentUserId) {
+        if (Number(announcement.created_by) !== Number(currentUserId)) {
           await client.query('ROLLBACK');
           return res.status(403).json({
             success: false,
@@ -731,6 +816,12 @@ router.put(
         params.push(body.trim());
       }
 
+      if (email_subject !== undefined) {
+        paramCount++;
+        updates.push(`email_subject = $${paramCount}`);
+        params.push(email_subject && String(email_subject).trim() ? String(email_subject).trim() : null);
+      }
+
       if (recipient_groups !== undefined) {
         paramCount++;
         updates.push(`recipient_groups = $${paramCount}`);
@@ -774,7 +865,7 @@ router.put(
       if (attachment_url !== undefined) {
         paramCount++;
         updates.push(`attachment_url = $${paramCount}`);
-        params.push(attachment_url && attachment_url.trim() ? attachment_url.trim() : null);
+        params.push(attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null);
       }
 
       if (updates.length === 0) {
@@ -879,7 +970,7 @@ router.delete(
       
       // Check if user is the creator (Superadmin can delete any announcement)
       if (req.user.userType !== 'Superadmin') {
-        if (announcement.created_by !== currentUserId) {
+        if (Number(announcement.created_by) !== Number(currentUserId)) {
           await client.query('ROLLBACK');
           return res.status(403).json({
             success: false,

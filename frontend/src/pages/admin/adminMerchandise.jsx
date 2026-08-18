@@ -18,6 +18,7 @@ import {
   formatUniformSizeDisplayLabel,
 } from '../../utils/uniformMerchandise';
 import MerchandiseReleaseLogsPanel from '../../components/merchandise/MerchandiseReleaseLogsPanel';
+import PackageMerchPendingQueue from '../../components/packageMerch/PackageMerchPendingQueue';
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
@@ -40,6 +41,7 @@ import { buildMerchandiseRequestActionItems } from '../../utils/merchandiseReque
 import {
   createEmptyCatalogRequestLine,
   unwrapCatalogPayload,
+  describeInventoryCatalogLoad,
   isUniformLikeCategory,
   isLcaShirtCategory,
   resolveRequestStockFormMode,
@@ -87,7 +89,7 @@ import {
 } from '../../utils/merchandiseReturns';
 
 /** Branch Admin "Request Stock" control. Set true to re-enable. */
-const REQUEST_STOCK_ENABLED = false;
+const REQUEST_STOCK_ENABLED = true;
 
 const createEmptyBulkLine = createEmptyCatalogRequestLine;
 
@@ -133,6 +135,7 @@ const AdminMerchandise = () => {
   const [inventoryCatalog, setInventoryCatalog] = useState({ categories: [], items: [] });
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  const [catalogWarning, setCatalogWarning] = useState('');
   const [inventoryIntegrationEnabled, setInventoryIntegrationEnabled] = useState(true);
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
   const [formErrors, setFormErrors] = useState({});
@@ -144,7 +147,7 @@ const AdminMerchandise = () => {
   const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
-  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'logs'
+  const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'pending' | 'logs'
   const [requestStatusModule, setRequestStatusModule] = useState(DEFAULT_REQUEST_STATUS_MODULE);
   /** Page number per status module so switching tabs keeps each module's page. */
   const [requestModulePageByStatus, setRequestModulePageByStatus] = useState({});
@@ -233,6 +236,7 @@ const AdminMerchandise = () => {
     const tab = params.get('notificationTab') || params.get('tab');
     if (tab === 'requests') setActiveTab('requests');
     if (tab === 'logs') setActiveTab('logs');
+    if (tab === 'pending') setActiveTab('pending');
   }, [location.search]);
 
   // Auto-set branch_id from adminBranchId when available
@@ -443,12 +447,14 @@ const AdminMerchandise = () => {
     setRequestFormData({ request_reason: '' });
     setRequestFormErrors({});
     setCatalogError('');
+    setCatalogWarning('');
     void loadInventoryCatalog();
   };
 
   const loadInventoryCatalog = async () => {
     setCatalogLoading(true);
     setCatalogError('');
+    setCatalogWarning('');
     const attempt = async () => {
       const response = await apiRequest('/merchandise-requests/inventory/catalog');
       return unwrapCatalogPayload(response);
@@ -462,6 +468,7 @@ const AdminMerchandise = () => {
           setInventoryIntegrationEnabled(false);
           setInventoryCatalog({ categories: [], items: [] });
           setCatalogError('');
+          setCatalogWarning('');
           return;
         }
         const msg = String(firstErr?.message || '').toLowerCase();
@@ -480,23 +487,19 @@ const AdminMerchandise = () => {
       }
       setInventoryIntegrationEnabled(true);
       setInventoryCatalog(catalog);
-      if (!catalog.categories.length) {
-        setCatalogError(
-          'No RHET Inventory categories returned. Check inventory integration or try again.'
-        );
-      } else if (catalog?.meta?.stale || catalog?.meta?.cached) {
-        setCatalogError(
-          'Loaded a recent cached RHET catalog (inventory is slow right now). You can continue, or tap Reload catalog.'
-        );
-      }
+      const outcome = describeInventoryCatalogLoad(catalog);
+      setCatalogError(outcome.error);
+      setCatalogWarning(outcome.warning);
     } catch (err) {
       if (isInventoryIntegrationDisabledError(err)) {
         setInventoryIntegrationEnabled(false);
         setInventoryCatalog({ categories: [], items: [] });
         setCatalogError('');
+        setCatalogWarning('');
       } else {
         setInventoryIntegrationEnabled(true);
         setInventoryCatalog({ categories: [], items: [] });
+        setCatalogWarning('');
         setCatalogError(
           err.message ||
             'Could not load RHET Inventory catalog. Request Stock requires a live catalog.'
@@ -515,6 +518,7 @@ const AdminMerchandise = () => {
     setRequestFormData({ request_reason: '' });
     setRequestFormErrors({});
     setCatalogError('');
+    setCatalogWarning('');
   };
 
   const addBulkRequestLine = () => {
@@ -1535,8 +1539,8 @@ const AdminMerchandise = () => {
                                   }
                                   className={formErrors.merchandise_name ? 'border-red-500' : ''}
                                 />
-                                {catalogError && createTypeCategoryOptions.length > 0 && (
-                                  <p className="mt-1 text-xs text-amber-700">{catalogError}</p>
+                                {catalogWarning && createTypeCategoryOptions.length > 0 && (
+                                  <p className="mt-1 text-xs text-amber-700">{catalogWarning}</p>
                                 )}
                               </>
                             ) : (
@@ -1942,16 +1946,22 @@ const AdminMerchandise = () => {
 
 
 
-                {(catalogLoading || catalogError) && (
+                {(catalogLoading || catalogError || catalogWarning) && (
                   <div
                     className={`flex-shrink-0 rounded-lg border px-3 py-2 text-sm flex items-start justify-between gap-3 ${
-                      catalogError
-                        ? 'border-red-200 bg-red-50 text-red-800'
-                        : 'border-blue-100 bg-blue-50 text-blue-800'
+                      catalogLoading
+                        ? 'border-blue-100 bg-blue-50 text-blue-800'
+                        : catalogError
+                          ? 'border-red-200 bg-red-50 text-red-800'
+                          : 'border-amber-200 bg-amber-50 text-amber-900'
                     }`}
                   >
-                    <span>{catalogLoading ? 'Loading RHET Inventory catalog…' : catalogError}</span>
-                    {catalogError && !catalogLoading && (
+                    <span>
+                      {catalogLoading
+                        ? 'Loading RHET Inventory catalog…'
+                        : catalogError || catalogWarning}
+                    </span>
+                    {!catalogLoading && (catalogError || catalogWarning) && (
                       <button
                         type="button"
                         onClick={loadInventoryCatalog}
@@ -2800,6 +2810,17 @@ const AdminMerchandise = () => {
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('pending')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'pending'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Pending issue
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('logs')}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'logs'
@@ -2878,6 +2899,12 @@ const AdminMerchandise = () => {
         </div>
       )}
         </>
+      ) : activeTab === 'pending' ? (
+        <PackageMerchPendingQueue
+          branchId={adminBranchId || null}
+          showBranchColumn={false}
+          active={activeTab === 'pending'}
+        />
       ) : activeTab === 'logs' ? (
         <MerchandiseReleaseLogsPanel
           branchId={adminBranchId || ''}
@@ -3037,7 +3064,7 @@ const AdminMerchandise = () => {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatDateTimeManila(request.created_at)}
+                          {formatDateTimeManila(request.created_at, { hour12: true })}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <RequestActionsMenu

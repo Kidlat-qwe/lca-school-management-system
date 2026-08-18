@@ -466,7 +466,8 @@ router.get(
                 b.branch_name,
                 c.class_id AS class_id,
                 c.class_name AS class_name,
-                c.level_tag AS level_tag
+                c.level_tag AS level_tag,
+                TO_CHAR(c.start_date, 'YYYY-MM-DD') AS class_start_date
          FROM installmentinvoiceprofilestbl ip
          LEFT JOIN userstbl u ON ip.student_id = u.user_id
          LEFT JOIN classestbl c ON ip.class_id = c.class_id
@@ -947,6 +948,7 @@ router.get(
             branch_name: profile.branch_name || null,
             class_id: profile.class_id != null ? Number(profile.class_id) : null,
             class_name: profile.class_name || null,
+            class_start_date: profile.class_start_date || null,
             level_tag: profile.level_tag || null,
             amount: profile.amount != null ? Number(profile.amount) : null,
             frequency: profile.frequency || null,

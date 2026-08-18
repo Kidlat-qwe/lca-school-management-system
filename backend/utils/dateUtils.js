@@ -3,6 +3,60 @@ const MANILA_TZ = 'Asia/Manila';
 /** Business timezone for all calendar dates (Philippines, UTC+8). */
 export { MANILA_TZ };
 
+const MERCH_REQUEST_TIME_FIELDS = [
+  'created_at',
+  'updated_at',
+  'reviewed_at',
+  'inventory_synced_at',
+];
+
+/** Philippines has no DST — always UTC+8. */
+const MANILA_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+const pad2 = (value) => String(value).padStart(2, '0');
+
+/**
+ * Format an absolute instant as ISO-8601 in Asia/Manila (`...+08:00`).
+ * Uses UTC+8 arithmetic (not Intl) so Coolify UTC `Date` values become 05:24Z → 13:24+08:00.
+ */
+export const toManilaOffsetIso = (dateInput) => {
+  if (dateInput == null || dateInput === '') return dateInput;
+  const d = dateInput instanceof Date ? dateInput : new Date(dateInput);
+  if (Number.isNaN(d.getTime())) return dateInput;
+  const manila = new Date(d.getTime() + MANILA_OFFSET_MS);
+  return `${manila.getUTCFullYear()}-${pad2(manila.getUTCMonth() + 1)}-${pad2(manila.getUTCDate())}T${pad2(manila.getUTCHours())}:${pad2(manila.getUTCMinutes())}:${pad2(manila.getUTCSeconds())}+08:00`;
+};
+
+/**
+ * Neon/Coolify `timestamp without time zone` is UTC wall clock.
+ * Convert to Manila digits so even an older frontend (naive = Manila) shows 13:47 not 05:47.
+ */
+export const timestampUtcToManilaSelectSql = (columnSql, alias) =>
+  `TO_CHAR((${columnSql} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD HH24:MI:SS') AS ${alias}`;
+
+export const MERCH_REQUEST_MANILA_TIMESTAMP_SQL = [
+  timestampUtcToManilaSelectSql('mr.created_at', 'created_at_manila'),
+  timestampUtcToManilaSelectSql('mr.updated_at', 'updated_at_manila'),
+  timestampUtcToManilaSelectSql('mr.reviewed_at', 'reviewed_at_manila'),
+  timestampUtcToManilaSelectSql('mr.inventory_synced_at', 'inventory_synced_at_manila'),
+].join(',\n          ');
+
+/** Rewrite timestamp fields on an API row to Manila wall-clock strings. */
+export const mapRowTimestampsToManila = (row, fields = MERCH_REQUEST_TIME_FIELDS) => {
+  if (!row || typeof row !== 'object') return row;
+  const next = { ...row };
+  for (const field of fields) {
+    const manilaKey = `${field}_manila`;
+    if (next[manilaKey]) {
+      next[field] = String(next[manilaKey]).trim();
+      delete next[manilaKey];
+    } else if (next[field] != null && next[field] !== '') {
+      next[field] = toManilaOffsetIso(next[field]);
+    }
+  }
+  return next;
+};
+
 /**
  * Format a timestamp as YYYY-MM-DD in Asia/Manila (Philippines business calendar).
  * Use this for issue dates, due dates, "today", and invoice month filters.

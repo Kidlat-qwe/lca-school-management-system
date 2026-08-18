@@ -34,6 +34,7 @@
   `InstallmentPlanDetails`. Renders:
 
   1. Plan header — student name, program/package, frequency,
+     class enrolled, **class started date** (`classestbl.start_date`),
      **phase progress** (paid count / total · generated count / total
      plus a payment progress bar that turns green when the plan is
      complete), branch, and **Status** (Active / Inactive). Status

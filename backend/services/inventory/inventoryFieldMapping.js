@@ -88,6 +88,7 @@ const PE_UNIFORM_TYPE_MAP = {
   Bottom: 'Pants',
   Shirt: 'Shirt',
   Pants: 'Pants',
+  Set: 'Set',
 };
 
 const SIZE_MAP = {
@@ -541,9 +542,17 @@ export function mapTypeToInventory(type, merchandiseName = '') {
   // Exact RHET types pass through — never Polo → Shirt.
   // LCA_SHIRT uses Logo 1 / Logo 2 (not piece type "Shirt").
   if (
-    ['Polo', 'Short', 'Blouse', 'Skirt', 'Shirt', 'Pants', 'Logo 1', 'Logo 2'].includes(
-      key
-    )
+    [
+      'Polo',
+      'Short',
+      'Blouse',
+      'Skirt',
+      'Shirt',
+      'Pants',
+      'Logo 1',
+      'Logo 2',
+      'Set',
+    ].includes(key)
   ) {
     return key;
   }

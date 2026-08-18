@@ -600,7 +600,8 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
     if (isUniform && (msg.includes('check_type') || msg.includes('check_request_type'))) {
       throw new Error(
         `Cannot save uniform type "${merchandiseType}" on branch stock. ` +
-          'Apply migration 134_allow_lca_shirt_logo_types.sql (allows Logo 1 / Logo 2), then retry fulfill. ' +
+          'Apply migration 134_allow_lca_shirt_logo_types.sql (Logo 1 / Logo 2) and ' +
+          '137_allow_uniform_set_type.sql (Set), then retry fulfill. ' +
           `Original: ${msg}`
       );
     }

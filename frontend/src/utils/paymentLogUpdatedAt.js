@@ -1,6 +1,20 @@
-import { formatDateTimeManila, parseDateForDisplay, DISPLAY_DATE_OPTIONS } from './dateUtils';
+import { formatDateTimeManila, parseDateForDisplay, getManilaDateTimeParts } from './dateUtils';
 
-const MANILA_TZ = 'Asia/Manila';
+const pad2 = (value) => String(value).padStart(2, '0');
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 /** When the payment row was first encoded in the system (`paymenttbl.created_at`). */
 export function getPaymentLogCreatedAtRaw(payment) {
@@ -16,15 +30,10 @@ export function getPaymentLogUpdatedAtRaw(payment) {
 export function getPaymentLogCreatedAtDisplayParts(raw) {
   const d = parseDateForDisplay(raw);
   if (!d) return null;
+  const p = getManilaDateTimeParts(d);
   return {
-    dateLine: `${d.toLocaleDateString('en-US', DISPLAY_DATE_OPTIONS)},`,
-    timeLine: d.toLocaleTimeString('en-US', {
-      timeZone: MANILA_TZ,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }),
+    dateLine: `${MONTH_NAMES[p.month - 1]} ${pad2(p.day)}, ${p.year},`,
+    timeLine: `${pad2(p.hour)}:${pad2(p.minute)}:${pad2(p.second)}`,
   };
 }
 

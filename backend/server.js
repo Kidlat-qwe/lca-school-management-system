@@ -220,14 +220,14 @@ app.listen(PORT, HOST, () => {
   const emailSummary = getEmailConfigSummary();
   if (!emailSummary.configured) {
     console.warn(
-      '⚠️  Email not configured. Set SENDGRID_API_KEY (HTTPS, works on Linode) or SMTP_* in backend/.env.'
+      '⚠️  Email not configured. Set BREVO_API_KEY (HTTPS, works on Linode) or SMTP_* in backend/.env.'
     );
   } else {
     verifyEmailConnection()
       .then((ok) => {
         if (!ok && emailSummary.provider === 'smtp') {
           console.warn(
-            '⚠️  SMTP verify failed. On Linode, ports 465/587 are often blocked — use SendGrid: set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env.'
+            '⚠️  SMTP verify failed. On Linode, ports 465/587 are often blocked — use Brevo: set BREVO_API_KEY and BREVO_FROM_EMAIL in .env.'
           );
         }
       })

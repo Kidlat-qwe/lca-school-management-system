@@ -45,6 +45,19 @@ export const errorHandler = (err, req, res, next) => {
           message: 'Required field is missing.',
           error: err.column,
         });
+      case '23514': // Check constraint violation
+        return res.status(400).json({
+          success: false,
+          message:
+            err.constraint === 'check_request_type' || err.constraint === 'check_type'
+              ? 'This uniform type is not allowed by the database yet. Apply migration 137_allow_uniform_set_type.sql (allows Set), then retry.'
+              : 'A database check constraint was violated. Please verify the submitted values.',
+          error:
+            process.env.NODE_ENV === 'development'
+              ? `${err.message}${err.constraint ? ` [${err.constraint}]` : ''}`
+              : err.constraint || 'check_violation',
+          code: err.code,
+        });
       case '42P01': // Undefined table
         return res.status(500).json({
           success: false,

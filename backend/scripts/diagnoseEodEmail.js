@@ -52,15 +52,15 @@ async function main() {
     if (!p465 && !p587) {
       console.warn(
         '\n⚠️  Both SMTP ports are blocked from this VPS (common on Linode).\n' +
-          '    Use SendGrid instead (HTTPS port 443):\n' +
-          '      1. Create free account at https://sendgrid.com\n' +
-          '      2. Verify sender: lca@little-champion.com (Single Sender Verification)\n' +
-          '      3. Create API key with Mail Send permission\n' +
-          '      4. Add to backend/.env on Linode:\n' +
-          '           SENDGRID_API_KEY=SG.xxxxx\n' +
-          '           SENDGRID_FROM_EMAIL=lca@little-champion.com\n' +
-          '           EMAIL_PROVIDER=sendgrid\n' +
-          '      5. Restart API and re-run this script\n'
+          '    Use Brevo instead (HTTPS port 443):\n' +
+          '      1. Verify sender in Brevo: no-reply@little-champion.com\n' +
+          '      2. Create a transactional API key\n' +
+          '      3. Add to backend/.env on Linode:\n' +
+          '           BREVO_API_KEY=xkeysib-xxxxx\n' +
+          '           BREVO_FROM_EMAIL=no-reply@little-champion.com\n' +
+          '           BREVO_FROM_NAME=Little Champions Academy Inc.\n' +
+          '           EMAIL_PROVIDER=brevo\n' +
+          '      4. Restart API and re-run this script\n'
       );
     }
   }
