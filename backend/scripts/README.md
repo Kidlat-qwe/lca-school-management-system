@@ -4,6 +4,19 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `listPendingPackageMerchFromDate.js`
+
+Read-only dump of Merchandise → **Pending Issue** (same logic as
+`GET /merchandise/package-pending`), filtered to Manila dates **on or after**
+`--from=` (default **2026-08-21**).
+
+```bash
+node backend/scripts/listPendingPackageMerchFromDate.js
+node backend/scripts/listPendingPackageMerchFromDate.js --from=2026-08-21
+node backend/scripts/listPendingPackageMerchFromDate.js --from=2026-08-21 --branch-id=6
+node backend/scripts/listPendingPackageMerchFromDate.js --oos-only
+```
+
 ### `repairPampangaUniformTypesToRhet.js`
 
 Normalize School Uniform + PE Uniform piece labels to RHET values for one branch.
@@ -186,6 +199,24 @@ node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --prod
 ```bash
 node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production
 node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production --apply
+```
+
+### `repairPsalmDavidAwoyemiInstallmentDescription.js`
+
+**Psalm-David E. Awoyemi** (`lindauwagbale@yahoo.com`, user **610**, profile **427**, Cavite).
+Acknowledgement receipt **No. 261955** (INV-2290) PDF DESCRIPTION showed
+`Installment plan for Psalm Daniel Awoyemi - Nursery` while the student header was correct.
+Replaces **Psalm Daniel Awoyemi** → **Psalm-David E. Awoyemi** on:
+
+- installment profile description (future phases)
+- related `invoiceitemstbl.description` (AR/PDF line text)
+- related `invoicestbl` description / remarks copies
+
+Default is dry-run; pass `--apply` to write.
+
+```bash
+node backend/scripts/repairPsalmDavidAwoyemiInstallmentDescription.js
+node backend/scripts/repairPsalmDavidAwoyemiInstallmentDescription.js --apply
 ```
 
 ### `repairLucretiusManuelPhase5Balance4606.js`

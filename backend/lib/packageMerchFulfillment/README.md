@@ -15,9 +15,9 @@ No schema change. Remaining lines = `MERCH_PENDING` minus release-log rows for
 `(student_id, package_id, class_id)`. Students enrolled with 0 stock remain on
 this list until stock is available and staff issues.
 
-**Cutoff:** only enrollments / invoices on or after **2026-08-17**
+**Cutoff:** only enrollments / invoices on or after **2026-08-21**
 (`PACKAGE_MERCH_PENDING_ISSUE_CUTOFF_YMD`) appear. Earlier MERCH_PENDING rows
-are from the previous stock-required flow and are hidden.
+are hidden from this tab.
 
 ## API
 

@@ -18,7 +18,7 @@ when branch stock has **more than one** variant: choose `itemName · SKU`
 
 ## PackageMerchPendingQueue
 
-Merchandise tab **Pending issue**: out-of-stock enrollments from **2026-08-17**
+Merchandise tab **Pending issue**: out-of-stock enrollments from **2026-08-21**
 onward only (latest enrolled student on row 1), then ready-to-issue. Paginated
 (10 / page). **Issue** deducts 1 unit when first payment exists and branch stock > 0.
 

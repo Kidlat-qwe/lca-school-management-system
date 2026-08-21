@@ -20,7 +20,7 @@ const PAID_INVOICE_STATUSES = new Set(['paid', 'partially paid']);
  * Pending issue feature go-live (Manila). Older MERCH_PENDING enrollments used the
  * previous stock-required flow and must not appear on this tab.
  */
-export const PACKAGE_MERCH_PENDING_ISSUE_CUTOFF_YMD = '2026-08-17';
+export const PACKAGE_MERCH_PENDING_ISSUE_CUTOFF_YMD = '2026-08-21';
 
 function toManilaYmd(value) {
   if (!value) return null;
@@ -219,7 +219,7 @@ export async function listPendingPackageMerch(db, { branchId } = {}) {
     const bid = Number(row.branch_id);
     if (!classId || !packageId || !studentId) continue;
 
-    // Hide legacy enrollments from before Pending issue launched (2026-08-17).
+    // Hide enrollments from before Pending issue cutoff (2026-08-21).
     if (!isOnOrAfterPendingIssueCutoff(row.enrolled_at, row.issue_date)) {
       continue;
     }
