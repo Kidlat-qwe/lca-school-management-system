@@ -3,6 +3,7 @@
  * from RHET Inventory catalog (exact categoryName), not free text / hard-coded lists.
  *
  * Create-type UX is category + image only. Stock attrs come from Request Stock.
+ * Edit-type may realign category when the current CMS name is not in the RHET catalog.
  *
  * Source of truth: GET /merchandise-requests/inventory/catalog (CMS → RHET proxy).
  */
@@ -120,6 +121,66 @@ export function isInventoryIntegrationDisabledError(err) {
   if (code === 'INTEGRATION_DISABLED') return true;
   const msg = String(err?.message || err?.response?.data?.message || '').toLowerCase();
   return msg.includes('integration is not configured') || msg.includes('integration_disabled');
+}
+
+/**
+ * True when merchandise_name matches an exact RHET Inventory categoryName
+ * (case-insensitive). Misaligned CMS-only names (e.g. "Toga Set" vs "Toga") return false.
+ * Also checks item.categoryName when the categories[] list is sparse.
+ *
+ * @param {string} categoryName
+ * @param {{
+ *   categories?: Array<{ categoryName?: string, category_name?: string }>,
+ *   items?: Array<{ categoryName?: string, category_name?: string }>,
+ * }} catalog
+ */
+export function isMerchandiseCategoryInInventoryCatalog(categoryName, catalog) {
+  const key = String(categoryName || '').trim().toLowerCase();
+  if (!key) return false;
+
+  const names = new Set();
+  for (const c of catalog?.categories || []) {
+    const name = String(c?.categoryName || c?.category_name || '').trim().toLowerCase();
+    if (name) names.add(name);
+  }
+  for (const item of catalog?.items || []) {
+    const name = String(item?.categoryName || item?.category_name || '').trim().toLowerCase();
+    if (name) names.add(name);
+  }
+  return names.has(key);
+}
+
+/**
+ * Edit Merchandise Type may change category only when the current CMS name is
+ * not aligned with RHET Inventory — then Superadmin picks a real catalog category.
+ * Already-aligned types stay locked (fulfill matching uses exact categoryName).
+ *
+ * @param {string} currentCategoryName
+ * @param {{
+ *   inventoryIntegrationEnabled?: boolean,
+ *   catalog?: object,
+ *   catalogLoading?: boolean,
+ * }} [opts]
+ * @returns {boolean}
+ */
+export function canEditMerchandiseTypeCategory(currentCategoryName, opts = {}) {
+  const integrationOn = opts.inventoryIntegrationEnabled !== false;
+  if (!integrationOn) {
+    // Legacy free-text mode: allow rename when no catalog to lock against.
+    return true;
+  }
+  // While loading (or catalog unavailable), show the edit control — never false-lock
+  // with "already matches RHET". The select stays disabled until options arrive.
+  if (opts.catalogLoading) return true;
+
+  const hasCatalogSignal =
+    (opts.catalog?.categories || []).length > 0 ||
+    (opts.catalog?.items || []).length > 0;
+  if (!hasCatalogSignal) {
+    return Boolean(String(currentCategoryName || '').trim());
+  }
+
+  return !isMerchandiseCategoryInInventoryCatalog(currentCategoryName, opts.catalog);
 }
 
 /**

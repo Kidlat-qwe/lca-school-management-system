@@ -22,10 +22,10 @@ import PackageMerchPendingQueue from '../../components/packageMerch/PackageMerch
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
-import ConfirmDeliveryLoadingOverlay from '../../components/merchandise/ConfirmDeliveryLoadingOverlay';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
+import { useConfirmDelivery } from '../../contexts/confirmDelivery';
 import FixedTablePagination, {
   TablePaginationSummary,
 } from '../../components/table/FixedTablePagination';
@@ -37,7 +37,7 @@ import {
   paginateRequestList,
   REQUEST_STATUS_MODULE_PAGE_SIZE,
 } from '../../utils/merchandiseRequests/requestStatusModules';
-import { buildMerchandiseRequestActionItems } from '../../utils/merchandiseRequests/requestActionMenu';
+import { buildMerchandiseRequestActionItems, canConfirmReceived } from '../../utils/merchandiseRequests/requestActionMenu';
 import {
   createEmptyCatalogRequestLine,
   unwrapCatalogPayload,
@@ -46,7 +46,7 @@ import {
   isLcaShirtCategory,
   resolveRequestStockFormMode,
   findCatalogCategoryKind,
-  getCatalogItemsForCategory,
+  getRequestStockCatalogItemsForCategory,
   getUniformGenderOptions,
   getUniformTypeOptions,
   getUniformSizeOptions,
@@ -56,7 +56,6 @@ import {
   catalogItemSelectKey,
 } from '../../utils/merchandiseRequests/catalogOptions';
 import {
-  isLearningKitMerchandiseName,
   getLearningKitRecipe,
   buildKitComponentsFromRecipe,
   validateKitLineComponents,
@@ -69,9 +68,6 @@ import {
   isMerchandiseTypeShellRow,
 } from '../../utils/merchandiseRequests/createTypeCategory';
 import {
-  filterUnselectedCartCategories,
-  hasUnusedCartCategory,
-  isCategoryTakenOnOtherRow,
 } from '../../utils/merchandiseRequests/uniqueCartCategory';
 import { useMerchandiseLiveRefresh } from '../../hooks/useMerchandiseLiveRefresh';
 import {
@@ -88,17 +84,23 @@ import {
   getReturnHqInspectionLabel,
 } from '../../utils/merchandiseReturns';
 
-/** Branch Admin "Request Stock" control. Set true to re-enable. */
-const REQUEST_STOCK_ENABLED = false;
+/** Branch Admin "Request Stock" control. Set false to disable. */
+const REQUEST_STOCK_ENABLED = true;
 
-/** Branch Admin "Return Stock" control. Set true to re-enable. */
-const RETURN_STOCK_ENABLED = false;
+/** Branch Admin "Return Stock" control. Set false to disable. */
+const RETURN_STOCK_ENABLED = true;
 
 const createEmptyBulkLine = createEmptyCatalogRequestLine;
 
 const AdminMerchandise = () => {
   const location = useLocation();
   const { userInfo } = useAuth();
+  const {
+    isBusy: confirmDeliveryBusy,
+    isRequestInFlight,
+    confirmDelivery,
+    confirmDeliveryBulk,
+  } = useConfirmDelivery();
   // Get admin's branch_id from userInfo
   const adminBranchId = userInfo?.branch_id || userInfo?.branchId;
   // Removed branches state - admin only sees their branch
@@ -144,7 +146,8 @@ const AdminMerchandise = () => {
   const [formErrors, setFormErrors] = useState({});
   const [requestFormErrors, setRequestFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
-  const [confirmingDeliveryId, setConfirmingDeliveryId] = useState(null);
+  /** Selected Shipped request IDs for bulk Confirm received. */
+  const [selectedShippedIds, setSelectedShippedIds] = useState(() => new Set());
   const [requiresSizing, setRequiresSizing] = useState(false); // Toggle for uniform/sizing
   /** Stocks list filters (uniforms): gender, piece type, size */
   const [stockFilters, setStockFilters] = useState({ gender: '', type: '', size: '' });
@@ -310,6 +313,24 @@ const AdminMerchandise = () => {
       );
       if (paged.page === current) return prev;
       return { ...prev, [requestStatusModule]: paged.page };
+    });
+  }, [requests, requestStatusModule]);
+
+  // Clear / prune bulk selection when leaving Shipped or when rows leave the list
+  useEffect(() => {
+    if (requestStatusModule !== 'Shipped') {
+      setSelectedShippedIds(new Set());
+      return;
+    }
+    setSelectedShippedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const confirmable = new Set(
+        filterRequestsByStatusModule(requests, 'Shipped')
+          .filter((r) => canConfirmReceived(r))
+          .map((r) => r.request_id)
+      );
+      const next = new Set([...prev].filter((id) => confirmable.has(id)));
+      return next.size === prev.size ? prev : next;
     });
   }, [requests, requestStatusModule]);
 
@@ -547,9 +568,6 @@ const AdminMerchandise = () => {
         const updated = { ...line, [field]: value };
 
         if (field === 'category_name') {
-          if (value && isCategoryTakenOnOtherRow(prev, value, lineId)) {
-            return line;
-          }
           updated.category_kind =
             findCatalogCategoryKind(inventoryCatalog.categories, value) || '';
           updated.gender = '';
@@ -569,26 +587,43 @@ const AdminMerchandise = () => {
           updated.size = '';
         }
         if (field === 'catalog_item_key') {
-          const items = getCatalogItemsForCategory(inventoryCatalog.items, line.category_name);
+          const items = getRequestStockCatalogItemsForCategory(
+            inventoryCatalog.items,
+            line.category_name
+          );
           const selected = findCatalogItemByKey(items, value);
           updated.item_name = selected?.itemName || '';
           updated.sku = selected?.sku || '';
           updated.inventory_id = selected?.inventoryId || '';
           updated.catalog_item_key = selected ? catalogItemSelectKey(selected) : value;
-          if (isLearningKitMerchandiseName(line.category_name)) {
+          if (
+            resolveRequestStockFormMode({
+              categoryName: line.category_name,
+              categoryKind: line.category_kind,
+            }) === 'kit'
+          ) {
             const recipe = getLearningKitRecipe({
               itemName: updated.item_name,
               sku: updated.sku,
               catalogItem: selected,
+              catalogCategories: inventoryCatalog.categories,
             });
             updated.catalog_kit_item = selected || null;
+            updated.catalog_categories = inventoryCatalog.categories;
             const kitQty = Math.max(1, parseInt(updated.quantity, 10) || 1);
+            // Pass catalogItems so SUPPLIES slots get auto-filled immediately
             updated.components = recipe
-              ? buildKitComponentsFromRecipe(recipe, kitQty)
+              ? buildKitComponentsFromRecipe(recipe, kitQty, inventoryCatalog.items)
               : [];
           }
         }
-        if (field === 'quantity' && isLearningKitMerchandiseName(line.category_name)) {
+        if (
+          field === 'quantity' &&
+          resolveRequestStockFormMode({
+            categoryName: line.category_name,
+            categoryKind: line.category_kind,
+          }) === 'kit'
+        ) {
           const kitQty = Math.max(1, parseInt(value, 10) || 1);
           updated.components = (updated.components || []).map((c) => ({
             ...c,
@@ -635,7 +670,7 @@ const AdminMerchandise = () => {
             updated.size = '';
           }
           if (field === 'catalog_item_key') {
-            const items = getCatalogItemsForCategory(
+            const items = getRequestStockCatalogItemsForCategory(
               inventoryCatalog.items,
               comp.category_name
             );
@@ -648,16 +683,6 @@ const AdminMerchandise = () => {
         });
         return { ...line, components };
       })
-    );
-  };
-
-  const handleAddKitComponent = (lineId, component) => {
-    setBulkRequestLines((prev) =>
-      prev.map((line) =>
-        line.id === lineId
-          ? { ...line, components: [...(line.components || []), component] }
-          : line
-      )
     );
   };
 
@@ -952,22 +977,23 @@ const AdminMerchandise = () => {
         !branchCategoryNames.has(categoryName.toLowerCase())
       ) {
         row.category_name = 'Select a category already added for this branch';
-      } else if (isCategoryTakenOnOtherRow(bulkRequestLines, categoryName, line.id)) {
-        row.category_name = 'This category is already selected on another row';
       }
 
-      if (categoryName && isLearningKitMerchandiseName(categoryName)) {
-        const kitErr = validateKitLineComponents(line);
+      const lineCategoryKind =
+        line.category_kind ||
+        findCatalogCategoryKind(inventoryCatalog.categories, categoryName);
+      const lineFormMode = resolveRequestStockFormMode({
+        categoryName,
+        categoryKind: lineCategoryKind,
+      });
+
+      if (categoryName && lineFormMode === 'kit') {
+        const kitErr = validateKitLineComponents({
+          ...line,
+          catalog_categories: inventoryCatalog.categories,
+        });
         if (kitErr) row.item_name = kitErr;
-      } else if (
-        categoryName &&
-        resolveRequestStockFormMode({
-          categoryName,
-          categoryKind:
-            line.category_kind ||
-            findCatalogCategoryKind(inventoryCatalog.categories, categoryName),
-        }) === 'uniform'
-      ) {
+      } else if (categoryName && lineFormMode === 'uniform') {
         const lcaShirt = isLcaShirtCategory(
           categoryName,
           line.category_kind ||
@@ -1237,7 +1263,12 @@ const AdminMerchandise = () => {
       // validated in CMS; RHET still validates on POST /stock-requests.
       for (let i = 0; i < payloads.length; i += 1) {
         const payload = payloads[i];
-        if (isLearningKitMerchandiseName(payload.category_name)) {
+        if (
+          resolveRequestStockFormMode({
+            categoryName: payload.category_name,
+            categoryKind: payload.category_kind,
+          }) === 'kit'
+        ) {
           continue;
         }
         try {
@@ -1362,7 +1393,9 @@ const AdminMerchandise = () => {
   };
 
   const handleConfirmDelivery = async (request) => {
-    if (!request?.request_id || confirmingDeliveryId) return;
+    if (!request?.request_id || confirmDeliveryBusy || isRequestInFlight(request.request_id)) {
+      return;
+    }
     if (
       !(await appConfirm({
         title: 'Confirm received',
@@ -1374,30 +1407,46 @@ const AdminMerchandise = () => {
       return;
     }
 
-    try {
-      setConfirmingDeliveryId(request.request_id);
-      setSubmitting(true);
-      const response = await apiRequest(
-        `/merchandise-requests/${request.request_id}/confirm-delivery`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            notes: 'Branch admin confirmed physical receipt in CMS',
-          }),
-        }
-      );
+    setSelectedShippedIds((prev) => {
+      if (!prev.has(request.request_id)) return prev;
+      const next = new Set(prev);
+      next.delete(request.request_id);
+      return next;
+    });
+    setTrackingRequest(null);
+
+    const result = await confirmDelivery(request);
+    if (result?.ok) {
       await fetchMerchandiseRequests();
-      setTrackingRequest(null);
-      appAlert(
-        response?.message ||
-          'Receipt confirmed. Stock was added to your branch and RHET Inventory is now Delivered.'
-      );
-    } catch (err) {
-      appAlert(err.message || 'Failed to confirm delivery. Please try again.');
-    } finally {
-      setConfirmingDeliveryId(null);
-      setSubmitting(false);
     }
+  };
+
+  const handleBulkConfirmDelivery = async (selectedRequests) => {
+    const eligible = (selectedRequests || []).filter(
+      (r) => r?.request_id && !isRequestInFlight(r.request_id)
+    );
+    if (!eligible.length || confirmDeliveryBusy) return;
+    const count = eligible.length;
+    if (
+      !(await appConfirm({
+        title: 'Confirm received',
+        message: `Confirm that all ${count} selected shipment${count === 1 ? '' : 's'} arrived at your branch? Each will be marked Delivered in RHET Inventory and stock will be added.`,
+        confirmLabel: `Confirm ${count} received`,
+      }))
+    ) {
+      return;
+    }
+
+    const ids = new Set(eligible.map((r) => r.request_id));
+    setSelectedShippedIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+    setTrackingRequest(null);
+
+    await confirmDeliveryBulk(eligible);
+    await fetchMerchandiseRequests();
   };
 
   // Removed formatBranchName - admin only sees their branch
@@ -2005,7 +2054,7 @@ const AdminMerchandise = () => {
                         catalogLoading ||
                         !!catalogError ||
                         requestStockCategoryOptions.length === 0 ||
-                        !hasUnusedCartCategory(requestStockCategoryOptions, bulkRequestLines)
+                        false
                       }
                       className="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 text-xs font-medium text-gray-800 bg-[#F7C844] hover:bg-[#f0c033] rounded-lg transition-colors disabled:opacity-50"
                     >
@@ -2080,7 +2129,7 @@ const AdminMerchandise = () => {
                             line.gender,
                             line.type
                           );
-                          const nonUniformItems = getCatalogItemsForCategory(
+                          const nonUniformItems = getRequestStockCatalogItemsForCategory(
                             inventoryCatalog.items,
                             line.category_name
                           );
@@ -2089,11 +2138,7 @@ const AdminMerchandise = () => {
                             (line.sku || line.item_name
                               ? `${line.sku}|${line.item_name}|${line.inventory_id || ''}`
                               : '');
-                          const categoryOptions = filterUnselectedCartCategories(
-                            requestStockCategoryOptions,
-                            bulkRequestLines,
-                            line.id
-                          );
+                          const categoryOptions = requestStockCategoryOptions;
 
                           return (
                             <tr key={line.id}>
@@ -2137,6 +2182,7 @@ const AdminMerchandise = () => {
                                   <LearningKitRequestFields
                                     line={line}
                                     catalogItems={inventoryCatalog.items}
+                                    catalogCategories={inventoryCatalog.categories}
                                     lineError={lineErr}
                                     disabled={catalogLoading}
                                     onKitSelect={(value) =>
@@ -2144,9 +2190,6 @@ const AdminMerchandise = () => {
                                     }
                                     onComponentChange={(componentId, field, value) =>
                                       handleKitComponentChange(line.id, componentId, field, value)
-                                    }
-                                    onAddComponent={(component) =>
-                                      handleAddKitComponent(line.id, component)
                                     }
                                     onRemoveComponent={(componentId) =>
                                       handleRemoveKitComponent(line.id, componentId)
@@ -2954,6 +2997,43 @@ const AdminMerchandise = () => {
                 [requestStatusModule]: nextPage,
               }));
             };
+            const showBulkConfirm = requestStatusModule === 'Shipped';
+            const pageConfirmable = showBulkConfirm
+              ? paged.items.filter(
+                  (r) => canConfirmReceived(r) && !isRequestInFlight(r.request_id)
+                )
+              : [];
+            const pageConfirmableIds = pageConfirmable.map((r) => r.request_id);
+            const allPageSelected =
+              pageConfirmableIds.length > 0 &&
+              pageConfirmableIds.every((id) => selectedShippedIds.has(id));
+            const somePageSelected = pageConfirmableIds.some((id) =>
+              selectedShippedIds.has(id)
+            );
+            const selectedCount = selectedShippedIds.size;
+
+            const toggleSelectAllPage = () => {
+              setSelectedShippedIds((prev) => {
+                const next = new Set(prev);
+                if (allPageSelected) {
+                  pageConfirmableIds.forEach((id) => next.delete(id));
+                } else {
+                  pageConfirmableIds.forEach((id) => next.add(id));
+                }
+                return next;
+              });
+            };
+
+            const toggleSelectOne = (requestId) => {
+              if (isRequestInFlight(requestId)) return;
+              setSelectedShippedIds((prev) => {
+                const next = new Set(prev);
+                if (next.has(requestId)) next.delete(requestId);
+                else next.add(requestId);
+                return next;
+              });
+            };
+
             if (filteredRequests.length === 0) {
               return (
                 <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-10 sm:p-12 text-center">
@@ -2968,17 +3048,63 @@ const AdminMerchandise = () => {
             }
             return (
             <div className="bg-white rounded-lg shadow border border-gray-200">
-              <TablePaginationSummary
-                page={paged.page}
-                totalItems={paged.total}
-                itemsPerPage={REQUEST_STATUS_MODULE_PAGE_SIZE}
-                itemLabel="requests"
-                className="px-4 pt-4 pb-2"
-              />
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 px-4 pt-4 pb-2">
+                <TablePaginationSummary
+                  page={paged.page}
+                  totalItems={paged.total}
+                  itemsPerPage={REQUEST_STATUS_MODULE_PAGE_SIZE}
+                  itemLabel="requests"
+                  className="!px-0 !pt-0 !pb-0"
+                />
+                {showBulkConfirm && selectedCount > 0 && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm text-gray-600">
+                      {selectedCount} selected
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleBulkConfirmDelivery(
+                          filteredRequests.filter((r) => selectedShippedIds.has(r.request_id))
+                        )
+                      }
+                      disabled={confirmDeliveryBusy}
+                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Confirm received ({selectedCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedShippedIds(new Set())}
+                      disabled={confirmDeliveryBusy}
+                      className="text-sm text-gray-600 hover:text-gray-900 underline disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                )}
+              </div>
               <div className="overflow-x-auto rounded-lg" style={{ scrollbarWidth: 'thin', scrollbarColor: '#cbd5e0 #f7fafc', WebkitOverflowScrolling: 'touch' }}>
-                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: '1320px' }}>
+                <table className="divide-y divide-gray-200" style={{ width: '100%', minWidth: showBulkConfirm ? '1360px' : '1320px' }}>
                   <thead className="bg-white">
                     <tr>
+                      {showBulkConfirm && (
+                        <th className="px-3 py-3 text-left" style={{ width: '44px' }}>
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            checked={allPageSelected}
+                            ref={(el) => {
+                              if (el) el.indeterminate = somePageSelected && !allPageSelected;
+                            }}
+                            onChange={toggleSelectAllPage}
+                            disabled={
+                              pageConfirmableIds.length === 0
+                            }
+                            aria-label="Select all shipped requests on this page"
+                          />
+                        </th>
+                      )}
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Merchandise
                       </th>
@@ -3014,6 +3140,34 @@ const AdminMerchandise = () => {
                   <tbody className="bg-[#ffffff] divide-y divide-gray-200">
                     {paged.items.map((request) => (
                       <tr key={request.request_id}>
+                        {showBulkConfirm && (
+                          <td className="px-3 py-4 whitespace-nowrap">
+                            {canConfirmReceived(request) ? (
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                                checked={
+                                  selectedShippedIds.has(request.request_id) &&
+                                  !isRequestInFlight(request.request_id)
+                                }
+                                onChange={() => toggleSelectOne(request.request_id)}
+                                disabled={isRequestInFlight(request.request_id)}
+                                title={
+                                  isRequestInFlight(request.request_id)
+                                    ? 'Receipt confirmation in progress'
+                                    : undefined
+                                }
+                                aria-label={
+                                  isRequestInFlight(request.request_id)
+                                    ? `Request ${request.request_id} confirmation in progress`
+                                    : `Select request ${request.request_id}`
+                                }
+                              />
+                            ) : (
+                              <span className="inline-block w-4" aria-hidden="true" />
+                            )}
+                          </td>
+                        )}
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900">
                             {request.inventory_category_name || request.merchandise_name}
@@ -3063,6 +3217,15 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex flex-col gap-1">
                             {getStatusBadge(request.status)}
+                            {isRequestInFlight(request.request_id) && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium w-fit bg-amber-50 text-amber-900">
+                                <span
+                                  className="h-2.5 w-2.5 rounded-full border border-amber-300 border-t-amber-600 animate-spin"
+                                  aria-hidden="true"
+                                />
+                                Confirming…
+                              </span>
+                            )}
                             {isStockReturnRequest(request) && getReturnHqInspectionLabel(request) && (
                               <span
                                 className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium w-fit ${
@@ -3087,7 +3250,7 @@ const AdminMerchandise = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                           <RequestActionsMenu
                             requestId={request.request_id}
-                            disabled={Boolean(confirmingDeliveryId)}
+                            disabled={isRequestInFlight(request.request_id)}
                             items={buildMerchandiseRequestActionItems(request, {
                               role: 'admin',
                               onTrack: setTrackingRequest,
@@ -3122,16 +3285,25 @@ const AdminMerchandise = () => {
         open={Boolean(trackingRequest)}
         request={trackingRequest}
         onClose={() => {
-          if (confirmingDeliveryId) return;
+          if (
+            trackingRequest?.request_id &&
+            isRequestInFlight(trackingRequest.request_id)
+          ) {
+            return;
+          }
           setTrackingRequest(null);
         }}
         canConfirmDelivery={
-          trackingRequest?.status === 'Shipped' && Boolean(trackingRequest?.inventory_request_id)
+          trackingRequest?.status === 'Shipped' &&
+          Boolean(trackingRequest?.inventory_request_id) &&
+          !isRequestInFlight(trackingRequest?.request_id)
         }
-        confirming={Boolean(confirmingDeliveryId)}
+        confirming={
+          Boolean(trackingRequest?.request_id) &&
+          isRequestInFlight(trackingRequest.request_id)
+        }
         onConfirmDelivery={() => handleConfirmDelivery(trackingRequest)}
       />
-      <ConfirmDeliveryLoadingOverlay open={Boolean(confirmingDeliveryId)} />
     </div>
   );
 };

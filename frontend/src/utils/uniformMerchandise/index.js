@@ -318,6 +318,7 @@ export function isUpperUniformPiece(type) {
   return (
     t === 'top' ||
     t === 'polo' ||
+    t === 'shirt' || // PE Uniform upper piece (not LCA_SHIRT category name)
     t.includes('blouse') ||
     t.startsWith('logo') ||
     t === 'acc' ||
@@ -481,7 +482,7 @@ export function countUniformPiecesByType(stocks) {
 }
 
 /**
- * Resolve Top and Bottom stock rows that share the same size (enroll same-size helper).
+ * Resolve Top and Bottom stock rows that share the same size (pair lookup).
  * Uses findUniformStockByNameSizeCategory with optional student gender preference.
  *
  * @param {object[]} merchandiseList
@@ -520,7 +521,7 @@ export function findMatchingTopBottomBySize(
 
 /**
  * Sizes that exist for both Top and Bottom (after student gender filter).
- * Used by “Use same size for Top & Bottom” enroll control.
+ * Used when applying a shared Top+Bottom size from Set / pair stock.
  *
  * @param {object[]} itemsForType
  * @param {string|null|undefined} studentGender

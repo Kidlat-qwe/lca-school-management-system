@@ -21,6 +21,14 @@ function isTerminalRequestStatus(status) {
   );
 }
 
+/** True when Admin can Confirm received (Shipped stock request, not a return). */
+export function canConfirmReceived(request) {
+  if (!request) return false;
+  if (String(request.status || '').trim() !== 'Shipped') return false;
+  if (isStockReturnRow(request)) return false;
+  return Boolean(request.inventory_request_id);
+}
+
 /**
  * @param {object} request
  * @param {{
@@ -65,7 +73,7 @@ export function buildMerchandiseRequestActionItems(request, handlers = {}) {
   if (
     status === 'Shipped' &&
     typeof onConfirmDelivery === 'function' &&
-    !isStockReturnRow(request)
+    canConfirmReceived(request)
   ) {
     items.push({
       key: 'confirm',

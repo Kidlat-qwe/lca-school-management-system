@@ -1,7 +1,16 @@
 /**
- * Learning Kit helpers for Request Stock.
- * Mirror of backend learningKitRecipes.js — keep BOM slots in sync.
+ * Learning Kit / bundle helpers for Request Stock.
+ * Mirror of backend learningKitRecipes.js — prefer live catalog BOM.
  */
+
+import {
+  catalogCategoryByName,
+  getCatalogBomComponents,
+  isBundleRequestCategory,
+} from './bundleBom';
+import { getRequestStockCatalogItemsForCategory } from './catalogOptions';
+
+export { isBundleRequestCategory };
 
 export const LEARNING_KIT_CATEGORY = 'Learning Kit';
 
@@ -34,14 +43,29 @@ function isUniformBomCategory(categoryName) {
   return name.endsWith(' uniform');
 }
 
+/**
+ * Slot kinds:
+ * - 'uniform'   = MERCHANDISE uniform (gender + type + size pickers)
+ * - 'other'     = MERCHANDISE item (catalog item picker)
+ * - 'supplies'  = SUPPLIES item (auto-filled from catalog; no picker needed)
+ */
+function resolveSlotKind(categoryName, catalogCategories) {
+  const cat = catalogCategoryByName(catalogCategories, categoryName);
+  const categoryType = String(cat?.categoryType || cat?.category_type || '').toUpperCase();
+  if (categoryType === 'SUPPLIES') return 'supplies';
+  if (isUniformBomCategory(categoryName)) return 'uniform';
+  return 'other';
+}
+
 /** Build recipe slots from RHET catalog kit item.components[] (live BOM). */
-export function recipeFromCatalogKitItem(catalogItem) {
-  if (!catalogItem || !Array.isArray(catalogItem.components) || !catalogItem.components.length) {
+export function recipeFromCatalogKitItem(catalogItem, catalogCategories = []) {
+  const bomRows = getCatalogBomComponents(catalogItem);
+  if (!catalogItem || !bomRows.length) {
     return null;
   }
   const itemName = String(catalogItem.itemName || catalogItem.item_name || '').trim();
   const sku = String(catalogItem.sku || '').trim();
-  const slots = catalogItem.components
+  const slots = bomRows
     .map((component) => {
       const categoryName = String(
         component.categoryName || component.category_name || ''
@@ -49,7 +73,7 @@ export function recipeFromCatalogKitItem(catalogItem) {
       if (!categoryName) return null;
       return {
         categoryName,
-        kind: isUniformBomCategory(categoryName) ? 'uniform' : 'other',
+        kind: resolveSlotKind(categoryName, catalogCategories),
         minCount: Math.max(1, Number(component.quantity) || 1),
       };
     })
@@ -135,8 +159,10 @@ function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-export function getLearningKitRecipe({ itemName, sku, catalogItem } = {}) {
-  const fromCatalog = catalogItem ? recipeFromCatalogKitItem(catalogItem) : null;
+export function getLearningKitRecipe({ itemName, sku, catalogItem, catalogCategories } = {}) {
+  const fromCatalog = catalogItem
+    ? recipeFromCatalogKitItem(catalogItem, catalogCategories || [])
+    : null;
   if (fromCatalog) return fromCatalog;
   const index = {};
   for (const recipe of Object.values(BUILTIN_RECIPES)) {
@@ -150,7 +176,7 @@ export function createEmptyKitComponent(slot, kitQuantity = 1) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
     category_name: slot.categoryName,
-    kind: slot.kind,
+    kind: slot.kind || 'other',
     gender: '',
     type: '',
     size: '',
@@ -161,13 +187,44 @@ export function createEmptyKitComponent(slot, kitQuantity = 1) {
   };
 }
 
-export function buildKitComponentsFromRecipe(recipe, kitQuantity = 1) {
+/**
+ * Auto-fill a SUPPLIES slot component using the first available catalog item.
+ * @param {object} slot - recipe slot with kind === 'supplies'
+ * @param {object[]} catalogItems - full catalog items list
+ * @param {number} kitQuantity
+ */
+export function createAutoFilledSuppliesComponent(slot, catalogItems, kitQuantity = 1) {
+  const base = createEmptyKitComponent(slot, kitQuantity);
+  const available = getRequestStockCatalogItemsForCategory(catalogItems, slot.categoryName);
+  if (available.length > 0) {
+    const first = available[0];
+    base.item_name = first.itemName || '';
+    base.sku = first.sku || '';
+    base.catalog_item_key = first.sku && first.itemName
+      ? `${first.sku}|${first.itemName}|${first.inventoryId || ''}`
+      : '';
+    base.auto_filled = true;
+  }
+  return base;
+}
+
+/**
+ * Build components array from recipe.
+ * @param {object} recipe
+ * @param {number} kitQuantity
+ * @param {object[]} [catalogItems] - provide to auto-fill SUPPLIES slots
+ */
+export function buildKitComponentsFromRecipe(recipe, kitQuantity = 1, catalogItems = []) {
   if (!recipe?.slots?.length) return [];
   const components = [];
   for (const slot of recipe.slots) {
     const count = Math.max(1, Number(slot.minCount) || 1);
     for (let i = 0; i < count; i += 1) {
-      components.push(createEmptyKitComponent(slot, kitQuantity));
+      if (slot.kind === 'supplies' && catalogItems.length > 0) {
+        components.push(createAutoFilledSuppliesComponent(slot, catalogItems, kitQuantity));
+      } else {
+        components.push(createEmptyKitComponent(slot, kitQuantity));
+      }
     }
   }
   return components;
@@ -177,14 +234,22 @@ export function validateKitLineComponents(line) {
   const itemName = String(line.item_name || '').trim();
   const sku = String(line.sku || '').trim();
   if (!itemName && !sku) {
-    return 'Select a Learning Kit from the catalog';
+    return 'Select a bundle kit from the catalog';
   }
-  const recipe = getLearningKitRecipe({ itemName, sku, catalogItem: line.catalog_kit_item });
+  const recipe = getLearningKitRecipe({
+    itemName,
+    sku,
+    catalogItem: line.catalog_kit_item,
+    catalogCategories: line.catalog_categories,
+  });
   if (!recipe) {
-    return 'Kit recipe not configured in CMS for this Learning Kit';
+    return 'Kit recipe not configured for this bundle';
   }
   const components = Array.isArray(line.components) ? line.components : [];
   for (const slot of recipe.slots) {
+    // SUPPLIES slots are auto-filled — skip user-input validation
+    if (slot.kind === 'supplies') continue;
+
     const rows = components.filter(
       (c) =>
         String(c.category_name || '').trim().toLowerCase() ===
@@ -211,7 +276,8 @@ export function serializeKitComponentsForApi(line) {
   return (line.components || []).map((c) => {
     const categoryName = String(c.category_name || '').trim();
     const componentQty = Math.max(1, parseInt(c.quantity, 10) || qty);
-    if (String(c.kind || '').toLowerCase() === 'uniform') {
+    const kind = String(c.kind || '').toLowerCase();
+    if (kind === 'uniform') {
       return {
         categoryName,
         gender: String(c.gender || '').trim(),
@@ -220,6 +286,7 @@ export function serializeKitComponentsForApi(line) {
         quantity: componentQty,
       };
     }
+    // Both 'supplies' (auto-filled) and 'other' (user-picked) — include itemName/sku
     const out = { categoryName, quantity: componentQty };
     const itemName = String(c.item_name || '').trim();
     const sku = String(c.sku || '').trim();

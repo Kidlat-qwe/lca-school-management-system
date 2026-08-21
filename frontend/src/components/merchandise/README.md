@@ -27,6 +27,10 @@ Package items still owed after 0-stock enroll/pay are on **Pending issue**
 Dropdown of exact RHET Inventory `categoryName` values for **Add Merchandise Type**
 (category + image shell only — no local Uniform/Other taxonomy on create).
 
+Also used on Superadmin **Edit Merchandise Type** when the current CMS category is
+misaligned with RHET (`canEditMerchandiseTypeCategory`) so ops can realign to a
+catalog category in one update.
+
 Data from `GET /merchandise-requests/inventory/catalog` (CMS proxy) — not a hard-coded
 CMS category list. Supports `onRetry` when RHET catalog fails temporarily.
 A stale/cached catalog is a warning (`describeInventoryCatalogLoad`); do not pass it as
@@ -64,10 +68,20 @@ Built via `buildMerchandiseRequestActionItems`:
 
 ## ConfirmDeliveryLoadingOverlay
 
-Full-page spinner overlay on Admin Merchandise while Branch Admin confirms a
-**Shipped** item (`POST /merchandise-requests/:id/confirm-delivery`). Blocks
-double-submit from the row menu or Track modal.
+Full-page spinner overlay while Branch Admin confirms a **Shipped** item
+(`POST /merchandise-requests/:id/confirm-delivery`). Mounted from
+`ConfirmDeliveryProvider` in `Layout` (not the Merchandise page) so it survives
+navigation.
 
+**Minimize:** users can click **Minimize**, acknowledge a notice
+(“Please wait for the receipt confirmation to be completed before enrolling
+the student.”), then navigate elsewhere while the API call continues. A **mini
+round yellow spinner** stays fixed above the Branch Admin **Need help?** button;
+click it to expand the full overlay again. When confirm finishes, the usual
+success/error alert still appears.
+
+In-flight request IDs stay locked on the Shipped tab (checkbox + row actions)
+until the confirm completes — see `contexts/confirmDelivery/`.
 
 ## ReturnStockModal
 
@@ -104,4 +118,4 @@ status and branch stock update automatically after RHET webhooks (no manual relo
 | Admin Merchandise | `REQUEST_STOCK_ENABLED` | `pages/admin/adminMerchandise.jsx` |
 | Admin Merchandise | `RETURN_STOCK_ENABLED` | `pages/admin/adminMerchandise.jsx` |
 
-Set to `true` to re-enable the header buttons. Disabled buttons stay visible with reduced opacity and a tooltip.
+Set to `false` to disable the header buttons. Disabled buttons stay visible with reduced opacity and a tooltip.

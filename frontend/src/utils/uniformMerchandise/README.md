@@ -15,7 +15,7 @@ Creating / editing merchandise persists the **same vocabulary as RHET Inventory*
 | Category (`merchandise_name`) | `School Uniform`, `PE Uniform`, `Shirt`, `Backpack`, … |
 | Gender | `Male`, `Female`, `Unisex` |
 | Size | `XS`, `S`, `M`, `L`, `XL`, `2XL`, `3XL`, `4XL`, `5XL`, `Teen` |
-| Type / piece | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `Set` |
+| Type / piece | `Polo`, `Short`, `Blouse`, `Skirt`, `Shirt`, `Pants`, `Logo 1`, `Logo 2`, `ACC`, `Beeli`, `LCA`, `Set` |
 
 Legacy values (`LCA Uniform`, `Men`, `Extra Small`, …) are still **recognized on
 read** and **normalized on write** via `normalizeMerchandiseAttributes()`.
@@ -37,7 +37,9 @@ Enrollment / Configure Merchandise roles (`getUniformCategory`):
 
 Sizing is complete when the student picks **Set**, or every piece role that
 exists in branch stock (Top and/or Bottom). See
-`isStudentUniformSelectionComplete`.
+`isStudentUniformSelectionComplete`. In Configure Merchandise, selecting **Set**
+covers Top/Bottom (those size dropdowns are disabled with a short notice). The
+former “Use same size for Top & Bottom” checkbox was removed.
 
 ## Product model
 

@@ -32,6 +32,7 @@ import {
   isLearningKitCategory,
   normalizeMerchandiseRequestInput,
   resolveUniformFulfillIdentity,
+  resolveRequestStockFormMode,
 } from '../services/inventory/inventoryFieldMapping.js';
 import {
   applyMerchandiseRequestStock,
@@ -42,6 +43,7 @@ import {
 } from '../services/inventory/applyMerchandiseRequestStock.js';
 import { runIgnoringMissingUpdatedAt } from '../services/inventory/runMerchRequestSql.js';
 import { resolveLearningKitRecipe } from '../services/inventory/learningKitRecipes.js';
+import { isRhetBundleCategory } from '../services/inventory/bundleBom.js';
 import {
   LOCAL_REQUEST_STATUS,
   isDeliveredRemoteStatus,
@@ -348,10 +350,17 @@ async function insertLocalMerchandiseRequestRow({
 }
 
 async function resolveKitRecipeForBody(body) {
+  const categoryKind = body.category_kind || body.categoryKind;
   const categoryName = String(
     body.category_name || body.categoryName || body.merchandise_name || ''
   ).trim();
-  if (!isLearningKitCategory(categoryName) && !isLearningKitCategory(body.merchandise_name)) {
+  const formMode = resolveRequestStockFormMode({ categoryName, categoryKind });
+  if (
+    formMode !== 'kit' &&
+    !isRhetBundleCategory({ categoryName, categoryKind }) &&
+    !isLearningKitCategory(categoryName) &&
+    !isLearningKitCategory(body.merchandise_name)
+  ) {
     return null;
   }
   return resolveLearningKitRecipe({
@@ -401,7 +410,13 @@ async function normalizeIncomingRequestLine(body, { inventoryOn, requested_quant
       },
     };
   }
-  if (isLearningKitCategory(merchandise_name)) {
+  if (
+    isRhetBundleCategory({
+      categoryName: merchandise_name,
+      categoryKind: body.category_kind || body.categoryKind,
+    }) ||
+    isLearningKitCategory(merchandise_name)
+  ) {
     return {
       error: {
         status: 400,
@@ -789,7 +804,13 @@ router.post(
             error: { code: 'MERCHANDISE_NAME_REQUIRED' },
           });
         }
-        if (isLearningKitCategory(merchandise_name)) {
+        if (
+          isRhetBundleCategory({
+            categoryName: merchandise_name,
+            categoryKind: req.body.category_kind || req.body.categoryKind,
+          }) ||
+          isLearningKitCategory(merchandise_name)
+        ) {
           return res.status(400).json({
             success: false,
             message:

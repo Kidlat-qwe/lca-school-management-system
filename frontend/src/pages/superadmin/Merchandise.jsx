@@ -38,6 +38,7 @@ import {
   applyCreateTypeCategoryDefaults,
   isInventoryIntegrationDisabledError,
   isMerchandiseTypeShellRow,
+  canEditMerchandiseTypeCategory,
 } from '../../utils/merchandiseRequests/createTypeCategory';
 import {
   DEFAULT_REQUEST_STATUS_MODULE,
@@ -57,8 +58,8 @@ import {
   getMerchandiseStockSku,
 } from '../../utils/merchandiseStock';
 
-/** Superadmin "Add Merchandise Type" control. Set true to re-enable. */
-const ADD_MERCHANDISE_TYPE_ENABLED = false;
+/** Superadmin "Add Merchandise Type" control. Set false to disable. */
+const ADD_MERCHANDISE_TYPE_ENABLED = true;
 
 const Merchandise = () => {
   const { selectedBranchId: globalBranchId, selectedBranchName: globalBranchName } = useGlobalBranchFilter();
@@ -186,12 +187,12 @@ const Merchandise = () => {
   }, [selectedBranchId]);
 
   useEffect(() => {
-    // Load RHET catalog when Add Merchandise Type form is open (category dropdown).
+    // Load RHET catalog for Add Merchandise Type and Edit Type (category realign).
+    // Skip Add/Edit Stock forms (editingMerchandise / viewingStocksFor).
     if (
       isModalOpen &&
       modalStep === 'form' &&
       !editingMerchandise &&
-      !editingMerchandiseType &&
       !viewingStocksFor
     ) {
       fetchInventoryCatalog();
@@ -691,14 +692,20 @@ const Merchandise = () => {
   const validateForm = () => {
     const errors = {};
 
-    // When editing merchandise type image only, we don't need merchandise_name validation
-    if (!editingMerchandiseType && !formData.merchandise_name.trim()) {
-      errors.merchandise_name = 'Merchandise category is required';
-    }
-
     const name = formData.merchandise_name?.trim() || '';
     const creatingType =
       !editingMerchandise && !editingMerchandiseType && !viewingStocksFor;
+    const editingTypeCategoryEditable =
+      Boolean(editingMerchandiseType) &&
+      canEditMerchandiseTypeCategory(editingMerchandiseType.name, {
+        inventoryIntegrationEnabled,
+        catalog: inventoryCatalog,
+        catalogLoading,
+      });
+
+    if (!editingMerchandiseType && !name) {
+      errors.merchandise_name = 'Merchandise category is required';
+    }
 
     // New type must be an exact RHET category when catalog is available
     if (inventoryIntegrationEnabled && creatingType && name) {
@@ -711,6 +718,35 @@ const Merchandise = () => {
       ) {
         errors.merchandise_name =
           'Select a category from the RHET Inventory list (exact category name required).';
+      }
+    }
+
+    // Misaligned type: if Superadmin changes category, it must be a real RHET name
+    // and must not collide with another type already on this branch.
+    if (editingTypeCategoryEditable && name) {
+      const original = String(editingMerchandiseType.name || '').trim();
+      const changed = name.toLowerCase() !== original.toLowerCase();
+      if (changed) {
+        if (inventoryIntegrationEnabled) {
+          const allCatalog = getCreateMerchandiseCategoryOptions(inventoryCatalog, {
+            excludeLearningKit: true,
+          });
+          if (
+            allCatalog.length > 0 &&
+            !allCatalog.some((c) => c.toLowerCase() === name.toLowerCase())
+          ) {
+            errors.merchandise_name =
+              'Select a category from the RHET Inventory list (exact category name required).';
+          }
+        }
+        const conflict = getUniqueMerchandiseTypes().some(
+          (t) =>
+            String(t.name || '').trim().toLowerCase() === name.toLowerCase() &&
+            String(t.name || '').trim().toLowerCase() !== original.toLowerCase()
+        );
+        if (conflict) {
+          errors.merchandise_name = `Category "${name}" already exists on this branch. Pick a different RHET category or merge stocks manually first.`;
+        }
       }
     }
 
@@ -904,20 +940,41 @@ const Merchandise = () => {
           body: JSON.stringify(basePayload),
         });
       } else if (editingMerchandiseType) {
-        // When editing merchandise type, update all items of that type with the image
-        // First, get all items of this type
+        const originalName = String(editingMerchandiseType.name || '').trim();
+        const nextName = String(basePayload.merchandise_name || '').trim();
+        const nameChanged =
+          Boolean(nextName) && nextName.toLowerCase() !== originalName.toLowerCase();
+
         const itemsToUpdate = merchandise.filter(
-          item => item.branch_id === selectedBranchId && 
-                   item.merchandise_name === editingMerchandiseType.name
+          (item) =>
+            item.branch_id === selectedBranchId &&
+            item.merchandise_name === originalName
         );
-        
-        // Update each item with the new image_url
+
+        if (nameChanged) {
+          const conflict = merchandise.some(
+            (item) =>
+              item.branch_id === selectedBranchId &&
+              String(item.merchandise_name || '').trim().toLowerCase() ===
+                nextName.toLowerCase()
+          );
+          if (conflict) {
+            throw new Error(
+              `Category "${nextName}" already exists on this branch. Pick a different RHET category.`
+            );
+          }
+        }
+
         for (const item of itemsToUpdate) {
+          const body = {
+            image_url: basePayload.image_url,
+          };
+          if (nameChanged) {
+            body.merchandise_name = nextName;
+          }
           await apiRequest(`/merchandise/${item.merchandise_id}`, {
             method: 'PUT',
-            body: JSON.stringify({
-              image_url: basePayload.image_url,
-            }),
+            body: JSON.stringify(body),
           });
         }
       } else {
@@ -1021,6 +1078,25 @@ const Merchandise = () => {
     excludeLearningKit: true,
     excludeNames: merchandiseTypeList.map((t) => t.name),
   });
+  const canEditTypeCategory =
+    Boolean(editingMerchandiseType) &&
+    canEditMerchandiseTypeCategory(editingMerchandiseType.name, {
+      inventoryIntegrationEnabled,
+      catalog: inventoryCatalog,
+      catalogLoading,
+    });
+  // When realigning a misaligned type, omit other branch categories but keep current name out of exclude
+  // (current name is not in RHET list anyway). Target options = catalog minus existing branch types.
+  const editTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog, {
+    excludeLearningKit: true,
+    excludeNames: merchandiseTypeList
+      .map((t) => t.name)
+      .filter(
+        (n) =>
+          String(n || '').trim().toLowerCase() !==
+          String(editingMerchandiseType?.name || '').trim().toLowerCase()
+      ),
+  });
   const isCreateTypeMode =
     !editingMerchandise && !editingMerchandiseType && !viewingStocksFor;
 
@@ -1100,7 +1176,9 @@ const Merchandise = () => {
                 <div>
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
                     {editingMerchandiseType
-                      ? 'Edit Merchandise Image'
+                      ? canEditTypeCategory
+                        ? 'Edit Merchandise Type'
+                        : 'Edit Merchandise Image'
                       : editingMerchandise
                         ? 'Edit Stock'
                         : viewingStocksFor
@@ -1112,7 +1190,9 @@ const Merchandise = () => {
                   {modalStep === 'form' && !editingMerchandise && (
                     <p className="text-sm text-gray-500 mt-1">
                       {editingMerchandiseType
-                        ? 'Update the image for this merchandise type'
+                        ? canEditTypeCategory
+                          ? 'Update image and realign category to RHET Inventory'
+                          : 'Update the image for this merchandise type'
                         : viewingStocksFor
                           ? 'Fill in the stock details for this merchandise type'
                           : 'Pick a RHET Inventory category and set a display image. Stock and sizes come from Request Stock.'}
@@ -1214,18 +1294,88 @@ const Merchandise = () => {
                         </div>
 
                         {editingMerchandiseType ? (
-                          <div>
-                            <label className="label-field">Category</label>
-                            <input
-                              type="text"
-                              value={formData.merchandise_name}
-                              readOnly
-                              className="input-field bg-gray-50 cursor-not-allowed"
-                            />
-                            <p className="mt-1 text-xs text-gray-500">
-                              Category is locked after create (must stay exact RHET categoryName for fulfill matching).
-                            </p>
-                          </div>
+                          canEditTypeCategory && inventoryIntegrationEnabled ? (
+                            <div>
+                              <p className="mb-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2">
+                                Current category <strong>{editingMerchandiseType.name}</strong> is
+                                not in RHET Inventory. Select the correct catalog category to
+                                realign (or keep it and update the image only).
+                              </p>
+                              <RhetCategorySelect
+                                id="edit_type_rhet_category"
+                                value={
+                                  editTypeCategoryOptions.some(
+                                    (c) =>
+                                      c.toLowerCase() ===
+                                      String(formData.merchandise_name || '')
+                                        .trim()
+                                        .toLowerCase()
+                                  )
+                                    ? formData.merchandise_name
+                                    : ''
+                                }
+                                options={editTypeCategoryOptions}
+                                onChange={handleCreateTypeCategoryChange}
+                                onRetry={fetchInventoryCatalog}
+                                loading={catalogLoading}
+                                error={
+                                  editTypeCategoryOptions.length === 0 && !catalogLoading
+                                    ? catalogError || 'No categories loaded'
+                                    : ''
+                                }
+                                required={false}
+                              />
+                              {formErrors.merchandise_name && (
+                                <p className="mt-1 text-sm text-red-600">
+                                  {formErrors.merchandise_name}
+                                </p>
+                              )}
+                              {catalogWarning && editTypeCategoryOptions.length > 0 && (
+                                <p className="text-xs text-amber-700 mt-1">{catalogWarning}</p>
+                              )}
+                            </div>
+                          ) : canEditTypeCategory ? (
+                            <div>
+                              <label htmlFor="edit_type_legacy_name" className="label-field">
+                                Category <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                id="edit_type_legacy_name"
+                                type="text"
+                                value={formData.merchandise_name}
+                                onChange={(e) => {
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    merchandise_name: e.target.value,
+                                  }));
+                                }}
+                                className={`input-field ${formErrors.merchandise_name ? 'border-red-500' : ''}`}
+                                placeholder="Merchandise category"
+                              />
+                              {formErrors.merchandise_name && (
+                                <p className="mt-1 text-sm text-red-600">
+                                  {formErrors.merchandise_name}
+                                </p>
+                              )}
+                              <p className="mt-1 text-xs text-gray-500">
+                                RHET Inventory integration is not configured (legacy free-text).
+                              </p>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="label-field">Category</label>
+                              <input
+                                type="text"
+                                value={formData.merchandise_name}
+                                readOnly
+                                className="input-field bg-gray-50 cursor-not-allowed"
+                              />
+                              <p className="mt-1 text-xs text-gray-500">
+                                Category is locked — it already matches RHET Inventory (needed for
+                                fulfill matching).
+                              </p>
+                            </div>
+                          )
                         ) : inventoryIntegrationEnabled ? (
                           <div>
                             <RhetCategorySelect
@@ -1626,7 +1776,9 @@ const Merchandise = () => {
                       </span>
                     ) : (
                     editingMerchandiseType
-                      ? 'Update Image'
+                      ? canEditTypeCategory
+                        ? 'Update Type'
+                        : 'Update Image'
                       : editingMerchandise
                       ? 'Update Stock'
                       : viewingStocksFor

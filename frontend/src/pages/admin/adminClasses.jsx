@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+﻿import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
@@ -51,12 +51,9 @@ import {
 import {
   isUniformTopBottomType,
   findUniformStockByNameSizeCategory,
-  findMatchingTopBottomBySize,
-  getUniformSizePairAvailability,
   filterMerchandiseByStudentGender,
   formatMerchandiseGenderLabel,
   formatUniformSizeOptionLabel,
-  formatUniformSameSizePairOptionLabel,
   isSchoolUniformMerchandiseName,
   getUniformCategory,
   listUniformStockCategories,
@@ -69,8 +66,11 @@ import {
   buildPackageMerchEntitlementLine,
   validatePackageMerchEntitlements,
   resolvePackageMerchInclusionDisplay,
+  requiresPackageItemVariantSelection,
+  isStudentItemVariantSelectionComplete,
 } from '../../utils/packageMerchSwap';
 import PackageMerchEntitlementPanel from '../../components/packageMerch/PackageMerchEntitlementPanel';
+import PackageMerchItemVariantPanel from '../../components/packageMerch/PackageMerchItemVariantPanel';
 import EnrollStudentSelectionLayout from '../../components/enrollStudentSelection/EnrollStudentSelectionLayout';
 import EnrollWizardStepper from '../../components/enrollStudentSelection/EnrollWizardStepper';
 import EnrollOrderSummary from '../../components/enrollStudentSelection/EnrollOrderSummary';
@@ -78,7 +78,7 @@ import {
   buildEnrollSummaryItems,
   formatEnrollPackagePrice,
 } from '../../components/enrollStudentSelection/buildEnrollSummaryItems';
-import { pickFirstInStockMerchandiseItem } from '../../utils/merchandiseStock';
+import { pickFirstInStockMerchandiseItem, isItemNamedStockCategory } from '../../utils/merchandiseStock';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
 
 const AdminClasses = () => {
@@ -230,8 +230,6 @@ const AdminClasses = () => {
   const [selectedMerchandise, setSelectedMerchandise] = useState([]); // Array of {merchandise_id, size}
   const [packageMerchSelections, setPackageMerchSelections] = useState({});
   const [uniformCategoryFilters, setUniformCategoryFilters] = useState({});
-  /** Keys `${studentId}::${typeName}` → true when “same size for Top & Bottom” is on. */
-  const [uniformSameSizeEnabled, setUniformSameSizeEnabled] = useState({});
   // Per-student merchandise selections: { [student_id]: [{merchandise_id, size, merchandise_name}] }
   const [studentMerchandiseSelections, setStudentMerchandiseSelections] = useState({});
   /** Per student → package freebie type → { action, replacement_merchandise_id, reason } */
@@ -389,7 +387,17 @@ const initializePackageMerchSelections = useCallback(
         // Check if this merchandise type requires sizing
         const requiresSizing = requiresSizingForMerchandise(typeName);
         
-        // For items that don't require sizing, automatically include them without showing in configure section
+        // For item-keyed types (Tool Kit, Moving Up Kit, …), per-student variant pick in UI
+        if (
+          requiresPackageItemVariantSelection(typeName, merchandise, {
+            requiresSizing,
+          })
+        ) {
+          updatedSelections[typeName] = [];
+          return;
+        }
+
+        // For other non-sized items, automatically include first in-stock variant
         if (!requiresSizing) {
           const pick = pickFirstInStockMerchandiseItem(items);
           if (!pick) {
@@ -3997,86 +4005,35 @@ const initializePackageMerchSelections = useCallback(
     });
   };
 
-  const uniformSameSizeKey = (studentId, typeName) => `${studentId}::${typeName}`;
-
-  const handleStudentUniformSameSizeChange = (studentId, merchandiseName, size, studentGender) => {
-    const { top, bottom } = size
-      ? findMatchingTopBottomBySize(
-          merchandise,
-          merchandiseName,
-          size,
-          getUniformCategory,
-          studentGender
-        )
-      : { top: null, bottom: null };
-
+  const handleStudentItemVariantChange = (studentId, typeName, merchandiseId) => {
     setStudentMerchandiseSelections((prev) => {
-      const studentSelections = (prev[studentId] || []).filter(
+      const studentSelections = prev[studentId] || [];
+      const filtered = studentSelections.filter(
         (selection) =>
-          !(
-            selection.merchandise_name === merchandiseName &&
-            (selection.category === 'Top' ||
-              selection.category === 'Bottom' ||
-              selection.category === 'Set')
-          )
+          String(selection.merchandise_name || '').trim().toLowerCase() !==
+          String(typeName || '').trim().toLowerCase()
       );
-      if (top) {
-        studentSelections.push({
-          merchandise_id: top.merchandise_id,
-          merchandise_name: merchandiseName,
-          size: top.size,
-          category: 'Top',
-        });
+      if (!merchandiseId) {
+        return { ...prev, [studentId]: filtered };
       }
-      if (bottom) {
-        studentSelections.push({
-          merchandise_id: bottom.merchandise_id,
-          merchandise_name: merchandiseName,
-          size: bottom.size,
-          category: 'Bottom',
-        });
-      }
-      return { ...prev, [studentId]: studentSelections };
-    });
-
-    // Keep package-level slots in sync so validatePackageMerchSelections sees Top + Bottom pieces
-    setPackageMerchSelections((prev) => {
-      const currentSelections = (prev[merchandiseName] || []).filter((selection) => {
-        const cat =
-          selection.category ||
-          getUniformCategory(
-            merchandise.find((m) => m.merchandise_id === selection.merchandise_id) || {}
-          );
-        return cat !== 'Top' && cat !== 'Bottom';
-      });
-      if (top) {
-        currentSelections.push({
-          merchandise_id: top.merchandise_id,
-          size: top.size || null,
-          category: 'Top',
-        });
-      }
-      if (bottom) {
-        currentSelections.push({
-          merchandise_id: bottom.merchandise_id,
-          size: bottom.size || null,
-          category: 'Bottom',
-        });
+      const item = merchandise.find(
+        (m) => Number(m.merchandise_id) === Number(merchandiseId)
+      );
+      if (!item) {
+        return { ...prev, [studentId]: filtered };
       }
       return {
         ...prev,
-        [merchandiseName]: currentSelections,
+        [studentId]: [
+          ...filtered,
+          {
+            merchandise_id: item.merchandise_id,
+            merchandise_name: typeName,
+            size: item.size || null,
+            category: null,
+          },
+        ],
       };
-    });
-  };
-
-  const clearUniformSameSizeLink = (studentId, typeName) => {
-    const key = uniformSameSizeKey(studentId, typeName);
-    setUniformSameSizeEnabled((prev) => {
-      if (!prev[key]) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
     });
   };
 
@@ -4183,16 +4140,18 @@ const initializePackageMerchSelections = useCallback(
   // Check if a merchandise type requires sizing
   const requiresSizingForMerchandise = (typeName) => {
     if (!typeName) return false;
-    
-    // Check if name contains "uniform" (case-insensitive)
+    if (isItemNamedStockCategory(typeName)) return false;
     if (typeName.toLowerCase().includes('uniform')) {
       return true;
     }
-    
-    // Check if any item of this type has a size (not null/empty)
     const itemsForType = getMerchandiseItemsByType(typeName);
     return itemsForType.some(item => item.size && item.size.trim() !== '' && item.size !== 'N/A');
   };
+
+  const requiresItemVariantForMerchandise = (typeName) =>
+    requiresPackageItemVariantSelection(typeName, merchandise, {
+      requiresSizing: requiresSizingForMerchandise(typeName),
+    });
   
   const selectedPackageDetails = selectedPackage
     ? groupPackageDetails(selectedPackage.details || [])
@@ -4203,14 +4162,25 @@ const initializePackageMerchSelections = useCallback(
     typeName => requiresSizingForMerchandise(typeName)
   );
   const selectedPackageSwappableTypes = selectedPackageDetails.includedMerchandiseTypes.filter(
-    (typeName) =>
-      isPackageMerchSwappable(typeName, {
-        requiresSizing: requiresSizingForMerchandise(typeName),
-      })
+    (typeName) => {
+      if (
+        !isPackageMerchSwappable(typeName, {
+          requiresSizing: requiresSizingForMerchandise(typeName),
+        })
+      ) {
+        return false;
+      }
+      // Multi-SKU kits use the variant picker, not Keep/Swap
+      return !requiresItemVariantForMerchandise(typeName);
+    }
+  );
+  const selectedPackageItemVariantTypes = selectedPackageDetails.merchandiseTypes.filter(
+    (typeName) => requiresItemVariantForMerchandise(typeName)
   );
   const needsEnrollMerchandiseConfig =
     Boolean(selectedPackage) &&
     (selectedPackageMerchTypes.length > 0 ||
+      selectedPackageItemVariantTypes.length > 0 ||
       selectedPackageSwappableTypes.length > 0 ||
       selectedPackageDetails.includedMerchandiseTypes.length > 0 ||
       selectedPackageDetails.paidMerchandiseTypes.length > 0);
@@ -4326,6 +4296,18 @@ const initializePackageMerchSelections = useCallback(
             getUniformCategory
           );
         });
+        return !everyStudentConfigured;
+      }
+
+      // Item-keyed variants (Tool Kit, …) — per-student merchandise_id required
+      if (requiresItemVariantForMerchandise(typeName) && selectedStudents.length > 0) {
+        const everyStudentConfigured = selectedStudents.every((student) =>
+          isStudentItemVariantSelectionComplete(
+            studentMerchandiseSelections[student.user_id],
+            typeName,
+            merchandise
+          )
+        );
         return !everyStudentConfigured;
       }
 
@@ -4673,7 +4655,7 @@ const initializePackageMerchSelections = useCallback(
               appAlert(
                 `Please select a size for ${merchName}${missing && missing !== 'size' ? ` - ${missing}` : ''} for student: ${student.full_name}`
               );
-                  return;
+              return;
             }
           } else if (hasSizes) {
             // For other merchandise with sizes, check for size selection
@@ -4761,6 +4743,11 @@ const initializePackageMerchSelections = useCallback(
                       requiresSizing: requiresSizingForMerchandise(typeName),
                     })
                   ) {
+                    return;
+                  }
+
+                  // Item-keyed variants are chosen per student in Configure items
+                  if (requiresItemVariantForMerchandise(typeName)) {
                     return;
                   }
 
@@ -11945,34 +11932,16 @@ const resolvedBranchId =
                                                         ? formatMerchandiseGenderLabel(student.gender)
                                                         : null;
                                                       const typeNameForLink = item.merchandise_name;
-                                                      const sameSizeKey = uniformSameSizeKey(student.user_id, typeNameForLink);
-                                                      const sameSizeOn = !!uniformSameSizeEnabled[sameSizeKey];
-                                                      const sizePairAvailability = hasTopAndBottom
-                                                        ? getUniformSizePairAvailability(
-                                                            itemsForType,
-                                                            student.gender,
-                                                            getUniformCategory
-                                                          )
-                                                        : [];
-                                                      const sharedSizes = sizePairAvailability
-                                                        .filter((row) => row.canPair)
-                                                        .map((row) => row.size);
-                                                      const topSel = studentMerchSelections.find(
-                                                        (m) =>
-                                                          m.merchandise_name === typeNameForLink && m.category === 'Top'
-                                                      );
-                                                      const bottomSel = studentMerchSelections.find(
+                                                      const setSelection = studentMerchSelections.find(
                                                         (m) =>
                                                           m.merchandise_name === typeNameForLink &&
-                                                          m.category === 'Bottom'
+                                                          m.category === 'Set' &&
+                                                          m.merchandise_id &&
+                                                          m.size
                                                       );
-                                                      const linkedSize =
-                                                        sameSizeOn &&
-                                                        topSel?.size &&
-                                                        bottomSel?.size &&
-                                                        topSel.size === bottomSel.size
-                                                          ? topSel.size
-                                                          : '';
+                                                      const setCoversPieces =
+                                                        Boolean(setSelection) &&
+                                                        (activeCategory === 'Top' || activeCategory === 'Bottom');
 
                                                       return (
                                                         <div key={`${item.merchandise_name}-${activeCategory || 'all'}-${student.user_id}`} className={`p-2.5 rounded-lg border ${colorScheme.border} ${colorScheme.bg} mb-1.5`}>
@@ -12000,82 +11969,19 @@ const resolvedBranchId =
                                                               </span>
                                                             )}
                                                           </div>
-                                                          {hasTopAndBottom && (
-                                                            <div className="mb-1.5 space-y-1">
-                                                              <label className="flex items-center gap-1.5 text-[10px] text-gray-700 cursor-pointer">
-                                                                <input
-                                                                  type="checkbox"
-                                                                  checked={sameSizeOn}
-                                                                  onChange={(e) => {
-                                                                    const enabled = e.target.checked;
-                                                                    setUniformSameSizeEnabled((prev) => {
-                                                                      const next = { ...prev };
-                                                                      if (enabled) next[sameSizeKey] = true;
-                                                                      else delete next[sameSizeKey];
-                                                                      return next;
-                                                                    });
-                                                                  }}
-                                                                  className="h-3 w-3 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
-                                                                />
-                                                                Use same size for Top &amp; Bottom
-                                                              </label>
-                                                              <p className="text-[9px] text-gray-500 leading-snug">
-                                                                Only sizes stocked for both Top and Bottom can be selected here. Uncheck to set Top and Bottom separately (e.g. Top-only sizes).
-                                                              </p>
-                                                              {sameSizeOn && (
-                                                                <select
-                                                                  value={linkedSize}
-                                                                  onChange={(e) => {
-                                                                    handleStudentUniformSameSizeChange(
-                                                                      student.user_id,
-                                                                      typeNameForLink,
-                                                                      e.target.value || null,
-                                                                      student.gender
-                                                                    );
-                                                                  }}
-                                                                  className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
-                                                                >
-                                                                  <option value="">Select size for both</option>
-                                                                  {sizePairAvailability.length === 0 ? (
-                                                                    <option value="" disabled>
-                                                                      No Top/Bottom stock for this gender
-                                                                    </option>
-                                                                  ) : (
-                                                                    sizePairAvailability.map((row) => {
-                                                                        const topInv = row.topItem
-                                                                          ? checkInventoryAvailability(row.topItem.merchandise_id)
-                                                                          : null;
-                                                                        const botInv = row.bottomItem
-                                                                          ? checkInventoryAvailability(row.bottomItem.merchandise_id)
-                                                                          : null;
-                                                                        return (
-                                                                        <option
-                                                                        key={row.size}
-                                                                        value={row.canPair ? row.size : ''}
-                                                                        disabled={!row.canPair}
-                                                                      >
-                                                                        {formatUniformSameSizePairOptionLabel(
-                                                                          row,
-                                                                          topInv?.available ?? null,
-                                                                          botInv?.available ?? null
-                                                                        )}
-                                                                      </option>
-                                                                    );
-                                                                    })
-                                                                  )}
-                                                                </select>
-                                                              )}
-                                                            </div>
-                                                          )}
+                                                          {setCoversPieces ? (
+                                                            <p className="text-[10px] text-emerald-700 mb-1">
+                                                              Covered by Set size {setSelection.size}. Top and Bottom do not need separate sizes.
+                                                            </p>
+                                                          ) : null}
                                                           <div className="flex items-center gap-1.5">
                                                             <label className="text-[10px] text-gray-700 flex-shrink-0">
                                                               Size:
                                                             </label>
                                                             <select
                                                               value={currentMerchandiseId}
-                                                              disabled={sameSizeOn}
+                                                              disabled={setCoversPieces}
                                                               onChange={(e) => {
-                                                                clearUniformSameSizeLink(student.user_id, typeNameForLink);
                                                                 const selectedId = e.target.value;
                                                                 if (!selectedId) {
                                                                   handleStudentMerchandiseSizeChange(student.user_id, item.merchandise_name, null, activeCategory);
@@ -12446,33 +12352,16 @@ const resolvedBranchId =
                                                   const genderLabel = student.gender
                                                     ? formatMerchandiseGenderLabel(student.gender)
                                                     : null;
-                                                  const sameSizeKey = uniformSameSizeKey(student.user_id, typeName);
-                                                  const sameSizeOn = !!uniformSameSizeEnabled[sameSizeKey];
-                                                  const sizePairAvailability = hasTopAndBottom
-                                                    ? getUniformSizePairAvailability(
-                                                        itemsForType,
-                                                        student.gender,
-                                                        getUniformCategory
-                                                      )
-                                                    : [];
-                                                  const sharedSizes = sizePairAvailability
-                                                    .filter((row) => row.canPair)
-                                                    .map((row) => row.size);
-                                                  const topSel = studentMerchSelections.find(
+                                                  const setSelection = studentMerchSelections.find(
                                                     (m) =>
-                                                      m.merchandise_name === typeName && m.category === 'Top'
+                                                      m.merchandise_name === typeName &&
+                                                      m.category === 'Set' &&
+                                                      m.merchandise_id &&
+                                                      m.size
                                                   );
-                                                  const bottomSel = studentMerchSelections.find(
-                                                    (m) =>
-                                                      m.merchandise_name === typeName && m.category === 'Bottom'
-                                                  );
-                                                  const linkedSize =
-                                                    sameSizeOn &&
-                                                    topSel?.size &&
-                                                    bottomSel?.size &&
-                                                    topSel.size === bottomSel.size
-                                                      ? topSel.size
-                                                      : '';
+                                                  const setCoversPieces =
+                                                    Boolean(setSelection) &&
+                                                    (activeCategory === 'Top' || activeCategory === 'Bottom');
 
                                                   return (
                                                     <div key={`${typeName}-${activeCategory || 'all'}-${student.user_id}`} className={`p-2.5 rounded-lg border ${colorScheme.border} ${colorScheme.bg} mb-1.5`}>
@@ -12500,82 +12389,19 @@ const resolvedBranchId =
                                                           </span>
                                                         )}
                                                       </div>
-                                                      {hasTopAndBottom && (
-                                                        <div className="mb-1.5 space-y-1">
-                                                          <label className="flex items-center gap-1.5 text-[10px] text-gray-700 cursor-pointer">
-                                                            <input
-                                                              type="checkbox"
-                                                              checked={sameSizeOn}
-                                                              onChange={(e) => {
-                                                                const enabled = e.target.checked;
-                                                                setUniformSameSizeEnabled((prev) => {
-                                                                  const next = { ...prev };
-                                                                  if (enabled) next[sameSizeKey] = true;
-                                                                  else delete next[sameSizeKey];
-                                                                  return next;
-                                                                });
-                                                              }}
-                                                              className="h-3 w-3 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
-                                                            />
-                                                            Use same size for Top &amp; Bottom
-                                                          </label>
-                                                          <p className="text-[9px] text-gray-500 leading-snug">
-                                                            Only sizes stocked for both Top and Bottom can be selected here. Uncheck to set Top and Bottom separately (e.g. Top-only sizes).
-                                                          </p>
-                                                          {sameSizeOn && (
-                                                            <select
-                                                              value={linkedSize}
-                                                              onChange={(e) => {
-                                                                handleStudentUniformSameSizeChange(
-                                                                  student.user_id,
-                                                                  typeName,
-                                                                  e.target.value || null,
-                                                                  student.gender
-                                                                );
-                                                              }}
-                                                              className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
-                                                            >
-                                                              <option value="">Select size for both</option>
-                                                              {sizePairAvailability.length === 0 ? (
-                                                                <option value="" disabled>
-                                                                  No Top/Bottom stock for this gender
-                                                                </option>
-                                                              ) : (
-                                                                sizePairAvailability.map((row) => {
-                                                                    const topInv = row.topItem
-                                                                      ? checkInventoryAvailability(row.topItem.merchandise_id)
-                                                                      : null;
-                                                                    const botInv = row.bottomItem
-                                                                      ? checkInventoryAvailability(row.bottomItem.merchandise_id)
-                                                                      : null;
-                                                                    return (
-                                                                    <option
-                                                                    key={row.size}
-                                                                    value={row.canPair ? row.size : ''}
-                                                                    disabled={!row.canPair}
-                                                                  >
-                                                                    {formatUniformSameSizePairOptionLabel(
-                                                                      row,
-                                                                      topInv?.available ?? null,
-                                                                      botInv?.available ?? null
-                                                                    )}
-                                                                  </option>
-                                                                );
-                                                                })
-                                                              )}
-                                                            </select>
-                                                          )}
-                                                        </div>
-                                                      )}
+                                                      {setCoversPieces ? (
+                                                        <p className="text-[10px] text-emerald-700 mb-1">
+                                                          Covered by Set size {setSelection.size}. Top and Bottom do not need separate sizes.
+                                                        </p>
+                                                      ) : null}
                                                       <div className="flex items-center gap-1.5">
                                                         <label className="text-[10px] text-gray-700 flex-shrink-0">
                                                           Size:
                                                         </label>
                                                         <select
                                                           value={currentMerchandiseId}
-                                                          disabled={sameSizeOn}
+                                                          disabled={setCoversPieces}
                                                           onChange={(e) => {
-                                                            clearUniformSameSizeLink(student.user_id, typeName);
                                                             const selectedId = e.target.value;
                                                             if (!selectedId) {
                                                               handleStudentMerchandiseSizeChange(student.user_id, typeName, null, activeCategory);
@@ -12723,6 +12549,28 @@ const resolvedBranchId =
                           <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                             <p className="text-sm text-yellow-800">
                               Select a student to keep or swap package freebies (e.g. Backpack).
+                            </p>
+                          </div>
+                        ) : null}
+
+                        {selectedPackageItemVariantTypes.length > 0 && selectedStudents.length > 0 ? (
+                          <div className="space-y-3">
+                            {selectedPackageItemVariantTypes.map((typeName) => (
+                              <PackageMerchItemVariantPanel
+                                key={`item-variant-${typeName}`}
+                                students={selectedStudents}
+                                typeName={typeName}
+                                merchandise={merchandise}
+                                selectionsByStudent={studentMerchandiseSelections}
+                                onVariantChange={handleStudentItemVariantChange}
+                                embedded
+                              />
+                            ))}
+                          </div>
+                        ) : selectedPackageItemVariantTypes.length > 0 ? (
+                          <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                            <p className="text-sm text-yellow-800">
+                              Select a student to choose item variants (e.g. Tool Kit).
                             </p>
                           </div>
                         ) : null}
@@ -13254,13 +13102,13 @@ const resolvedBranchId =
                             
                             if (hasSizes) {
                               if (!isStudentUniformSelectionComplete(studentMerchSelections, typeName, uniformItems, getUniformCategory)) {
-                                  appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
-                                  return;
-                                }
-                              }
+                              appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
+                              return;
+                            }
                             }
                           }
                         }
+                      }
                       }
 
                     const entitlementError = validatePackageMerchEntitlements({
@@ -16099,32 +15947,17 @@ const resolvedBranchId =
                                       const filteredItemsForCategory = hasCategoryFilter
                                         ? itemsForType.filter(item => getUniformCategory(item) === activeCategory)
                                         : itemsForType;
-                                      const sameSizeKey = uniformSameSizeKey(studentId, typeName);
-                                      const sameSizeOn = !!uniformSameSizeEnabled[sameSizeKey];
-                                      const sizePairAvailability = hasTopAndBottom
-                                        ? getUniformSizePairAvailability(
-                                            itemsForType,
-                                            upgradeStudentGender,
-                                            getUniformCategory
-                                          )
-                                        : [];
-                                      const sharedSizes = sizePairAvailability
-                                        .filter((row) => row.canPair)
-                                        .map((row) => row.size);
                                       const upgradeSels = upgradeStudentMerchandiseSelections[studentId] || [];
-                                      const topSel = upgradeSels.find(
-                                        (m) => m.merchandise_name === typeName && m.category === 'Top'
-                                      );
-                                      const bottomSel = upgradeSels.find(
-                                        (m) => m.merchandise_name === typeName && m.category === 'Bottom'
-                                      );
-                                      const linkedSize =
-                                        sameSizeOn &&
-                                        topSel?.size &&
-                                        bottomSel?.size &&
-                                        topSel.size === bottomSel.size
-                                          ? topSel.size
-                                          : '';
+                                                      const setSelection = upgradeSels.find(
+                                                        (m) =>
+                                                          m.merchandise_name === typeName &&
+                                                          m.category === 'Set' &&
+                                                          m.merchandise_id &&
+                                                          m.size
+                                                      );
+                                                      const setCoversPieces =
+                                                        Boolean(setSelection) &&
+                                                        (activeCategory === 'Top' || activeCategory === 'Bottom');
                                       
                                       return (
                                         <div className="space-y-2">
@@ -16168,104 +16001,11 @@ const resolvedBranchId =
                                                 </span>
                                               )}
                                             </div>
-                                            {hasTopAndBottom && (
-                                              <div className="mb-1.5 space-y-1">
-                                                <label className="flex items-center gap-1.5 text-[10px] text-gray-700 cursor-pointer">
-                                                  <input
-                                                    type="checkbox"
-                                                    checked={sameSizeOn}
-                                                    onChange={(e) => {
-                                                      const enabled = e.target.checked;
-                                                      setUniformSameSizeEnabled((prev) => {
-                                                        const next = { ...prev };
-                                                        if (enabled) next[sameSizeKey] = true;
-                                                        else delete next[sameSizeKey];
-                                                        return next;
-                                                      });
-                                                    }}
-                                                    className="h-3 w-3 rounded border-gray-300 text-[#F7C844] focus:ring-[#F7C844]"
-                                                  />
-                                                  Use same size for Top &amp; Bottom
-                                                </label>
-                                                <p className="text-[9px] text-gray-500 leading-snug">
-                                                  Only sizes stocked for both Top and Bottom can be selected here. Uncheck to set Top and Bottom separately (e.g. Top-only sizes).
-                                                </p>
-                                                {sameSizeOn && (
-                                                  <select
-                                                    value={linkedSize}
-                                                    onChange={(e) => {
-                                                      const size = e.target.value;
-                                                      setUpgradeStudentMerchandiseSelections((prev) => {
-                                                        const studentSelections = (prev[studentId] || []).filter(
-                                                          (m) =>
-                                                            !(
-                                                              m.merchandise_name === typeName &&
-                                                              (m.category === 'Top' || m.category === 'Bottom')
-                                                            )
-                                                        );
-                                                        if (!size) {
-                                                          return { ...prev, [studentId]: studentSelections };
-                                                        }
-                                                        const { top, bottom } = findMatchingTopBottomBySize(
-                                                          merchandise,
-                                                          typeName,
-                                                          size,
-                                                          getUniformCategory,
-                                                          upgradeStudentGender
-                                                        );
-                                                        if (top) {
-                                                          studentSelections.push({
-                                                            merchandise_id: top.merchandise_id,
-                                                            merchandise_name: typeName,
-                                                            size: top.size,
-                                                            category: 'Top',
-                                                          });
-                                                        }
-                                                        if (bottom) {
-                                                          studentSelections.push({
-                                                            merchandise_id: bottom.merchandise_id,
-                                                            merchandise_name: typeName,
-                                                            size: bottom.size,
-                                                            category: 'Bottom',
-                                                          });
-                                                        }
-                                                        return { ...prev, [studentId]: studentSelections };
-                                                      });
-                                                    }}
-                                                    className="w-full px-1.5 py-1 border border-gray-300 rounded text-[11px] font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
-                                                  >
-                                                    <option value="">Select size for both</option>
-                                                    {sizePairAvailability.length === 0 ? (
-                                                      <option value="" disabled>
-                                                        No Top/Bottom stock for this gender
-                                                      </option>
-                                                    ) : (
-                                                      sizePairAvailability.map((row) => {
-                                                          const topInv = row.topItem
-                                                            ? checkInventoryAvailability(row.topItem.merchandise_id)
-                                                            : null;
-                                                          const botInv = row.bottomItem
-                                                            ? checkInventoryAvailability(row.bottomItem.merchandise_id)
-                                                            : null;
-                                                          return (
-                                                          <option
-                                                          key={row.size}
-                                                          value={row.canPair ? row.size : ''}
-                                                          disabled={!row.canPair}
-                                                        >
-                                                          {formatUniformSameSizePairOptionLabel(
-                                                            row,
-                                                            topInv?.available ?? null,
-                                                            botInv?.available ?? null
-                                                          )}
-                                                        </option>
-                                                      );
-                                                      })
-                                                    )}
-                                                  </select>
-                                                )}
-                                              </div>
-                                            )}
+                                                            {setCoversPieces ? (
+                                                              <p className="text-[10px] text-emerald-700 mb-1">
+                                                                Covered by Set size {setSelection.size}. Top and Bottom do not need separate sizes.
+                                                              </p>
+                                                            ) : null}
                                             <div className="flex items-center gap-1.5">
                                               <label className="text-[10px] text-gray-700 flex-shrink-0">
                                                 Size:
@@ -16286,9 +16026,8 @@ const resolvedBranchId =
                                                 return (
                                                   <select
                                                     value={currentMerchandiseId}
-                                                    disabled={sameSizeOn}
+                                                                    disabled={setCoversPieces}
                                                     onChange={(e) => {
-                                                      clearUniformSameSizeLink(studentId, typeName);
                                                       const selectedId = e.target.value;
                                                       if (!selectedId) {
                                                         setUpgradeStudentMerchandiseSelections((prev) => {
@@ -17007,8 +16746,8 @@ const resolvedBranchId =
                               // Check if uniform categories exist (for LCA Uniform with Top/Bottom)
                               if (!isStudentUniformSelectionComplete(studentMerchSelections, typeName, uniformItems, getUniformCategory)) {
                               appAlert(`Please select a size for ${typeName} for student: ${student.full_name}`);
-                                    return;
-                              }
+                              return;
+                            }
                             }
                           }
                         }

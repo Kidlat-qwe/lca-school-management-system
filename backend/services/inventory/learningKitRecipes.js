@@ -6,6 +6,10 @@
  */
 
 import { getCatalog } from './inventoryClient.js';
+import {
+  catalogCategoryByName,
+  getCatalogBomComponents,
+} from './bundleBom.js';
 
 const UNIFORM_BOM_CATEGORY_NAMES = new Set([
   'school uniform',
@@ -28,16 +32,33 @@ function isUniformBomCategory(categoryName) {
 }
 
 /**
- * Build a CMS recipe from a RHET catalog Learning Kit item (live BOM).
+ * Slot kinds:
+ * - 'uniform'   = MERCHANDISE uniform (gender + type + size)
+ * - 'other'     = MERCHANDISE item (itemName + sku picker)
+ * - 'supplies'  = SUPPLIES item (auto-filled by frontend/RHET; no picker)
+ */
+function resolveSlotKind(categoryName, catalogCategories) {
+  const cat = catalogCategoryByName(catalogCategories, categoryName);
+  const categoryType = String(cat?.categoryType || cat?.category_type || '').toUpperCase();
+  if (categoryType === 'SUPPLIES') return 'supplies';
+  if (isUniformBomCategory(categoryName)) return 'uniform';
+  return 'other';
+}
+
+/**
+ * Build a CMS recipe from a RHET catalog bundle item (live BOM).
+ * @param {object} catalogItem
+ * @param {object[]} [catalogCategories]
  * @returns {object|null}
  */
-export function recipeFromCatalogKitItem(catalogItem) {
-  if (!catalogItem || !Array.isArray(catalogItem.components) || !catalogItem.components.length) {
+export function recipeFromCatalogKitItem(catalogItem, catalogCategories = []) {
+  const bomRows = getCatalogBomComponents(catalogItem);
+  if (!catalogItem || !bomRows.length) {
     return null;
   }
   const itemName = String(catalogItem.itemName || catalogItem.item_name || '').trim();
   const sku = String(catalogItem.sku || '').trim();
-  const slots = catalogItem.components
+  const slots = bomRows
     .map((component) => {
       const categoryName = String(
         component.categoryName || component.category_name || ''
@@ -45,7 +66,7 @@ export function recipeFromCatalogKitItem(catalogItem) {
       if (!categoryName) return null;
       return {
         categoryName,
-        kind: isUniformBomCategory(categoryName) ? 'uniform' : 'other',
+        kind: resolveSlotKind(categoryName, catalogCategories),
         minCount: Math.max(1, Number(component.quantity) || 1),
       };
     })
@@ -131,6 +152,11 @@ function normalizeKey(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+/** Match catalog itemName/sku with hyphen/underscore variants. */
+function normalizeCatalogIdentity(value) {
+  return normalizeKey(value).replace(/_/g, '-');
+}
+
 function loadEnvRecipes() {
   const raw = String(process.env.LEARNING_KIT_RECIPES_JSON || '').trim();
   if (!raw) return {};
@@ -172,40 +198,46 @@ function recipeIndex() {
  * Find a kit recipe by catalog item, itemName, or sku.
  * @returns {object|null}
  */
-export function getLearningKitRecipe({ itemName, sku, catalogItem } = {}) {
-  const fromCatalog = catalogItem ? recipeFromCatalogKitItem(catalogItem) : null;
+export function getLearningKitRecipe({ itemName, sku, catalogItem, catalogCategories } = {}) {
+  const fromCatalog = catalogItem
+    ? recipeFromCatalogKitItem(catalogItem, catalogCategories || [])
+    : null;
   if (fromCatalog) return fromCatalog;
   const index = recipeIndex();
   return (
+    index[normalizeCatalogIdentity(itemName)] ||
     index[normalizeKey(itemName)] ||
+    index[normalizeCatalogIdentity(sku)] ||
     index[normalizeKey(sku)] ||
     null
   );
 }
 
 /**
- * Resolve kit recipe: static/env map first, then live RHET /catalog BOM.
+ * Resolve kit recipe: live RHET /catalog BOM first, then static/env CMS map.
  * @returns {Promise<object|null>}
  */
 export async function resolveLearningKitRecipe({ itemName, sku } = {}) {
-  const staticRecipe = getLearningKitRecipe({ itemName, sku });
-  if (staticRecipe) return staticRecipe;
   try {
     const payload = await getCatalog();
     const root = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
     const items = Array.isArray(root?.items) ? root.items : [];
-    const keyName = normalizeKey(itemName);
-    const keySku = normalizeKey(sku);
+    const categories = Array.isArray(root?.categories) ? root.categories : [];
+    const keyName = normalizeCatalogIdentity(itemName);
+    const keySku = normalizeCatalogIdentity(sku);
     const match = items.find((item) => {
-      const name = normalizeKey(item.itemName || item.item_name);
-      const itemSku = normalizeKey(item.sku);
+      const name = normalizeCatalogIdentity(item.itemName || item.item_name);
+      const itemSku = normalizeCatalogIdentity(item.sku);
       return (keyName && name === keyName) || (keySku && itemSku === keySku);
     });
-    return match ? recipeFromCatalogKitItem(match) : null;
+    if (match) {
+      const fromCatalog = recipeFromCatalogKitItem(match, categories);
+      if (fromCatalog) return fromCatalog;
+    }
   } catch (err) {
     console.warn('[learningKitRecipes] Catalog recipe lookup failed:', err.message);
-    return null;
   }
+  return getLearningKitRecipe({ itemName, sku });
 }
 
 /**
@@ -217,14 +249,22 @@ export function validateLearningKitComponents(recipe, components, kitQuantity) {
     return {
       ok: false,
       error:
-        'Kit recipe not configured in CMS for this Learning Kit. Add it to learningKitRecipes.js (or LEARNING_KIT_RECIPES_JSON).',
+        'Kit recipe not configured for this bundle. RHET catalog must expose components[] or add a CMS fallback in learningKitRecipes.js.',
     };
   }
 
   const qty = Math.max(1, Number(kitQuantity) || 1);
   const list = Array.isArray(components) ? components : [];
-  if (list.length === 0) {
-    return { ok: false, error: 'Learning Kit requests require components[] for every BOM category.' };
+
+  // Supplies-only kits: all slots are auto-filled by frontend / RHET internals.
+  // Accept empty components[] when every slot is 'supplies' — RHET resolves them.
+  const allSlotsAreSupplies =
+    recipe.slots.length > 0 && recipe.slots.every((s) => s.kind === 'supplies');
+  if (list.length === 0 && !allSlotsAreSupplies) {
+    return { ok: false, error: 'Kit requests require components[] for every BOM category.' };
+  }
+  if (list.length === 0 && allSlotsAreSupplies) {
+    return { ok: true, components: [] };
   }
 
   const normalized = [];
@@ -264,12 +304,17 @@ export function validateLearningKitComponents(recipe, components, kitQuantity) {
         quantity: componentQty,
       });
     } else {
+      // Both 'supplies' (auto-filled) and 'other' (user-picked) require itemName/sku
       const itemName = String(raw.itemName || raw.item_name || '').trim();
       const sku = String(raw.sku || '').trim();
       if (!itemName && !sku) {
+        // For supplies, auto-fill may not have resolved — backend still needs identity
         return {
           ok: false,
-          error: `Component ${categoryName} requires itemName and/or sku.`,
+          error:
+            slot.kind === 'supplies'
+              ? `Supplies component ${categoryName} could not be auto-resolved (no itemName/sku). Check RHET catalog items for this category.`
+              : `Component ${categoryName} requires itemName and/or sku.`,
         };
       }
       const row = {
@@ -283,6 +328,14 @@ export function validateLearningKitComponents(recipe, components, kitQuantity) {
   }
 
   for (const slot of recipe.slots) {
+    // SUPPLIES slots may have 0 user-provided rows when all-supplies kit omits components[]
+    // In that case, allow it — RHET resolves them; still enforce minCount for MERCHANDISE slots
+    if (slot.kind === 'supplies') {
+      const count = normalized.filter(
+        (c) => c.categoryName.toLowerCase() === slot.categoryName.toLowerCase()
+      ).length;
+      if (count === 0) continue; // SUPPLIES OK to omit — RHET handles
+    }
     const count = normalized.filter(
       (c) => c.categoryName.toLowerCase() === slot.categoryName.toLowerCase()
     ).length;

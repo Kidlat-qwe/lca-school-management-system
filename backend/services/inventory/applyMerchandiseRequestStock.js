@@ -19,7 +19,6 @@
  */
 
 import {
-  isLearningKitCategory,
   isUniformLikeCategory,
   localMerchandiseTypeNameCandidates,
   mapGenderToInventory,
@@ -27,6 +26,7 @@ import {
   mapTypeToInventory,
   resolveLocalMerchandiseTypeName,
 } from './inventoryFieldMapping.js';
+import { isBundleStockRequest } from './bundleBom.js';
 
 function isOpsAuditRemarks(remarks) {
   const text = String(remarks || '').trim();
@@ -270,10 +270,11 @@ export async function findExistingMerchandiseStockRow(client, request) {
   const itemSku = normalizeAttr(
     request.inventory_requested_sku || request.inventory_matched_sku || request.sku
   );
-  const isKit =
-    isLearningKitCategory(preferredName) ||
-    isLearningKitCategory(request.inventory_category_name) ||
-    isLearningKitCategory(request.merchandise_name);
+  const isKit = isBundleStockRequest({
+    categoryName: request.inventory_category_name || preferredName,
+    inventory_components_json: request.inventory_components_json,
+    merchandise_name: request.merchandise_name,
+  });
   const isUniform =
     isUniformLikeCategory(preferredName) ||
     isUniformLikeCategory(request.inventory_category_name);
@@ -435,7 +436,11 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
 
   const categoryForAttrs =
     String(request.inventory_category_name || '').trim() || typeName;
-  const isKit = isLearningKitCategory(categoryForAttrs) || isLearningKitCategory(typeName);
+  const isKit = isBundleStockRequest({
+    categoryName: categoryForAttrs,
+    inventory_components_json: request.inventory_components_json,
+    merchandise_name: typeName,
+  });
   const isUniform = isUniformLikeCategory(categoryForAttrs);
   const stockItemName = normalizeAttr(request.inventory_item_name || request.item_name);
   const stockSku = normalizeAttr(

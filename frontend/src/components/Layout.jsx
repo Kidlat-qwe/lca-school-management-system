@@ -8,6 +8,7 @@ import BranchCashHoldingAlertModal from './BranchCashHoldingAlertModal';
 import BranchAdminUpcomingDropAlertModal from './branchAdmin/BranchAdminUpcomingDropAlertModal';
 import BranchAdminHelpFloatingButton from './branchAdmin/BranchAdminHelpFloatingButton';
 import { GlobalBranchFilterProvider } from '../contexts/GlobalBranchFilterContext';
+import { ConfirmDeliveryProvider } from '../contexts/confirmDelivery';
 import { useAuth } from '../contexts/AuthContext';
 
 const LayoutBody = () => {
@@ -55,9 +56,10 @@ const LayoutBody = () => {
 
 const Layout = () => (
   <GlobalBranchFilterProvider>
-    <LayoutBody />
+    <ConfirmDeliveryProvider>
+      <LayoutBody />
+    </ConfirmDeliveryProvider>
   </GlobalBranchFilterProvider>
 );
 
 export default Layout;
-

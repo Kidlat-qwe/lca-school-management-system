@@ -17,6 +17,7 @@ import {
   getLearningKitRecipe,
   validateLearningKitComponents,
 } from './learningKitRecipes.js';
+import { isBundleStockRequest } from './bundleBom.js';
 
 const DEFAULT_SYSTEM_CODE = 'PSMS';
 
@@ -624,7 +625,14 @@ export function buildInventoryStockRequestItem(requestRow) {
   const externalReference = buildExternalReference(requestRow.request_id);
   const quantity = Number(requestRow.requested_quantity);
 
-  if (isLearningKitCategory(categoryName) || isLearningKitCategory(requestRow.merchandise_name)) {
+  if (
+    isBundleStockRequest({
+      categoryName,
+      categoryKind: requestRow.category_kind,
+      inventory_components_json: requestRow.inventory_components_json,
+      merchandise_name: requestRow.merchandise_name,
+    })
+  ) {
     const itemName = String(
       requestRow.inventory_item_name || requestRow.item_name || ''
     ).trim();
@@ -641,8 +649,11 @@ export function buildInventoryStockRequestItem(requestRow) {
     }
     if (!Array.isArray(components)) components = [];
 
+    const rhetCategory =
+      mapCategoryNameToInventory(categoryName) || categoryName || requestRow.merchandise_name;
+
     const item = {
-      categoryName: mapCategoryNameToInventory(categoryName) || 'Learning Kit',
+      categoryName: rhetCategory,
       quantity,
       externalReference,
       components,
@@ -728,11 +739,17 @@ export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
         error: 'Select a Learning Kit from the RHET catalog (item name or SKU).',
       };
     }
-    const recipe = options.learningKitRecipe ?? getLearningKitRecipe({ itemName: resolvedItemName, sku });
+    const recipe =
+      options.learningKitRecipe ??
+      getLearningKitRecipe({
+        itemName: resolvedItemName,
+        sku,
+        catalogItem: body.catalog_kit_item || body.catalogKitItem,
+      });
     if (!recipe) {
       return {
         error:
-          'Kit recipe not configured in CMS for this Learning Kit. Contact an admin to add the kit BOM slots.',
+          'Kit recipe not configured for this bundle. RHET catalog must expose components[] or contact an admin to add kit BOM slots.',
         code: 'KIT_RECIPE_MISSING',
       };
     }
@@ -746,17 +763,18 @@ export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
       return { error: validated.error, code: 'KIT_COMPONENTS_INVALID' };
     }
     return {
-      inventory_category_name: 'Learning Kit',
+      inventory_category_name: inventoryCategoryName,
       inventory_item_name: resolvedItemName || recipe.itemName || null,
       inventory_requested_sku: sku || recipe.sku || null,
       inventory_components_json: validated.components,
-      merchandise_name: 'Learning Kit',
+      merchandise_name: mapCategoryNameToLocal(inventoryCategoryName),
       // Request-log `type` CHECK only allows uniform pieces — kit identity lives in inventory_*
       gender: null,
       type: null,
       size: null,
       is_uniform: false,
       is_learning_kit: true,
+      category_kind: categoryKind,
     };
   }
 
@@ -820,6 +838,20 @@ export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
 export function assertInventoryItemHasMatchKey(item) {
   if (!item?.categoryName) {
     return 'categoryName is required';
+  }
+  if (
+    isBundleStockRequest({
+      categoryName: item.categoryName,
+      inventory_components_json: item.components,
+    })
+  ) {
+    if (!item.itemName && !item.sku) {
+      return 'Bundle requests require itemName and/or sku';
+    }
+    if (!Array.isArray(item.components) || item.components.length === 0) {
+      return 'Bundle requests require components[] for every BOM category';
+    }
+    return null;
   }
   if (isLearningKitCategory(item.categoryName)) {
     if (!item.itemName && !item.sku) {

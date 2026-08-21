@@ -1,12 +1,28 @@
-# Learning Kit recipes (CMS)
+# Learning Kit / bundle recipes (CMS)
 
-BOM category slots for Learning Kit Request Stock.
+BOM category slots for **LEARNING_KIT** bundle Request Stock (Learning Kit, Tool Kit, Moving Up Kit, …).
 
 ## Source of truth (preferred)
 
-RHET `GET /catalog` Learning Kit items include live **`components[]`** BOM
+RHET `GET /catalog` bundle items (`categoryKind: LEARNING_KIT`) include live **`components[]`** BOM
 (`stockMode: VIRTUAL_BUNDLE`, `bomComplete: true`). CMS derives recipe slots from
-that payload when you pick a kit in Request Stock.
+that payload — **no duplicate CMS recipe** when catalog exposes BOM, especially
+supplies-only bundles (all slot categories have `categoryType: SUPPLIES`).
+
+Helpers: `bundleBom.js` (`isRhetBundleCategory`, `isSuppliesOnlyBom`, `resolveKitBomSlots`, `categorizeBomSlots`, `getBomKind`).
+
+## Three-tier BOM rendering (UI + validation)
+
+| BOM kind | Description | UI behavior |
+|---|---|---|
+| **All SUPPLIES** | Every slot has `categoryType: SUPPLIES` | No component pickers. Auto-filled from catalog. Badge shown. Backend accepts empty `components[]`. |
+| **All MERCHANDISE** | Every slot has `categoryType: MERCHANDISE` | Full pickers for every slot (existing behavior). |
+| **Mixed** | Mix of SUPPLIES + MERCHANDISE slots | Pickers only for MERCHANDISE slots; SUPPLIES slots auto-fill. |
+
+Slot `kind` values in recipe:
+- `'supplies'` — auto-fillable (`categoryType: SUPPLIES`)
+- `'uniform'` — MERCHANDISE uniform (gender + type + size)
+- `'other'` — MERCHANDISE item (itemName + sku picker)
 
 Example **NC Learning Kit** (`nc-learningkit` / `LEA-NC-LEARNINGKIT`):
 

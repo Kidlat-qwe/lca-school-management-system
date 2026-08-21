@@ -3,6 +3,8 @@ import {
   formatStockCountLabel,
   lookupMerchandiseQuantity,
   sumMerchandiseTypeStock,
+  formatMerchandiseVariantSubtitle,
+  isUniformStockCategory,
 } from '../../utils/merchandiseStock';
 
 function merchImage(merchandiseList, name, id) {
@@ -38,10 +40,23 @@ export function buildEnrollSummaryItems({
     if (seen.has(key)) return;
     seen.add(key);
     const stockQty = lookupMerchandiseQuantity(merchandiseList, sel.merchandise_id);
+    const merchRow = (merchandiseList || []).find(
+      (m) => Number(m.merchandise_id) === Number(sel.merchandise_id)
+    );
+    const variantDetail =
+      merchRow && !isUniformStockCategory(sel.merchandise_name)
+        ? formatMerchandiseVariantSubtitle(merchRow)
+        : null;
     items.push({
       name: piece ? `${sel.merchandise_name} (${piece})` : sel.merchandise_name,
-      detail: [piece, sel.size].filter(Boolean).join(' • ') || null,
-      complete: Boolean(sel.size || sel.merchandise_id),
+      detail:
+        [piece, sel.size, variantDetail !== 'Select size' ? variantDetail : null]
+          .filter(Boolean)
+          .join(' • ') || null,
+      complete: Boolean(
+        sel.merchandise_id &&
+          (sel.size || !isUniformStockCategory(sel.merchandise_name))
+      ),
       included: true,
       swapped: false,
       replaces: null,

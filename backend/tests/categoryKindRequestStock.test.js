@@ -43,6 +43,10 @@ function testFormMode() {
     resolveRequestStockFormMode({ categoryName: 'Learning Kit', categoryKind: 'LEARNING_KIT' }),
     'kit'
   );
+  assert.equal(
+    resolveRequestStockFormMode({ categoryName: 'Tool Kit', categoryKind: 'LEARNING_KIT' }),
+    'kit'
+  );
   // Missing kind → name heuristic
   assert.equal(resolveRequestStockFormMode({ categoryName: 'Shirt' }), 'uniform');
   assert.equal(resolveRequestStockFormMode({ categoryName: 'Workbooks' }), 'other');

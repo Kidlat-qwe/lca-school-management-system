@@ -12,6 +12,7 @@ import {
   isLearningKitMerchandiseName,
   serializeKitComponentsForApi,
 } from './learningKit';
+import { filterRequestStockCatalogItems } from './catalogBundleFilter';
 
 const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', '4XL', '5XL', 'Teen'];
 
@@ -179,6 +180,7 @@ export function unwrapCatalogPayload(payload) {
         categoryName: String(c.categoryName || c.category_name || '').trim(),
         categoryKind:
           normalizeCategoryKind(c.categoryKind || c.category_kind || '') || null,
+        categoryType: String(c.categoryType || c.category_type || '').trim().toUpperCase() || null,
       }))
       .filter((c) => c.categoryName),
     items: items.map(normalizeCatalogItem).filter(Boolean),
@@ -217,6 +219,16 @@ export function getCatalogItemsForCategory(items, categoryName) {
   return (items || []).filter(
     (item) => String(item.categoryName || '').trim().toLowerCase() === key
   );
+}
+
+export { isVirtualBundleCatalogItem } from './catalogBundleFilter';
+
+/**
+ * Request Stock item picker for a category (see catalogBundleFilter.js).
+ */
+export function getRequestStockCatalogItemsForCategory(items, categoryName) {
+  const rows = getCatalogItemsForCategory(items, categoryName);
+  return filterRequestStockCatalogItems(rows, categoryName);
 }
 
 function uniqueSorted(values, orderList = null) {
@@ -383,7 +395,7 @@ export function buildCatalogRequestPayload(line, requestReason) {
     request_reason: String(requestReason || '').trim(),
   };
 
-  if (mode === 'kit' || isLearningKitMerchandiseName(categoryName)) {
+  if (mode === 'kit') {
     return {
       ...base,
       item_name: String(line.item_name || '').trim() || null,

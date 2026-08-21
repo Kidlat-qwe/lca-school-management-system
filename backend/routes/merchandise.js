@@ -30,8 +30,13 @@ const ALLOWED_UNIFORM_PIECE_TYPES = [
   'Pants',
   'Top',
   'Bottom',
+  'Set',
   'Logo 1',
   'Logo 2',
+  // RHET LCA_SHIRT catalog logo labels (migration 139)
+  'ACC',
+  'Beeli',
+  'LCA',
 ];
 
 /**
@@ -54,7 +59,7 @@ function validateUniformPieceFields(merchandiseName, size, gender, type, { allow
     return 'Gender is required for uniforms (Male, Female, or Unisex)';
   }
   if (!t || !ALLOWED_UNIFORM_PIECE_TYPES.includes(t)) {
-    return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt, Shirt/Pants for PE, Logo 1/Logo 2 for Shirt)';
+    return 'Piece is required for uniforms (Polo/Short/Blouse/Skirt, Shirt/Pants for PE, ACC/Beeli/LCA or Logo 1/Logo 2 for Shirt)';
   }
   return null;
 }
@@ -355,7 +360,7 @@ router.post(
       .optional({ nullable: true, checkFalsy: true })
       .isIn([...ALLOWED_UNIFORM_PIECE_TYPES, null, ''])
       .withMessage(
-        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Logo 1, Logo 2 (or legacy Top, Bottom)'
+        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Set, Logo 1, Logo 2, ACC, Beeli, LCA (or legacy Top, Bottom)'
       ),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
@@ -597,7 +602,7 @@ router.put(
       .optional({ nullable: true, checkFalsy: true })
       .isIn([...ALLOWED_UNIFORM_PIECE_TYPES, null, ''])
       .withMessage(
-        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Logo 1, Logo 2 (or legacy Top, Bottom)'
+        'Type must be one of: Polo, Short, Blouse, Skirt, Shirt, Pants, Set, Logo 1, Logo 2, ACC, Beeli, LCA (or legacy Top, Bottom)'
       ),
     body('image_url').optional({ nullable: true, checkFalsy: true }).isURL().withMessage('Image URL must be a valid URL'),
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),

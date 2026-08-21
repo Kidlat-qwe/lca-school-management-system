@@ -6,11 +6,13 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | File | Purpose |
 |---|---|
 | `approvedBy.js` | Display label for who approved/rejected a request. |
-| `learningKit.js` | Learning Kit detection, CMS kit recipes, component validation/serialize for Request Stock. |
+| `bundleBom.js` | LEARNING_KIT bundle detection, supplies-only BOM, catalog slot resolution, `categorizeBomSlots`/`getBomKind` (mirror: backend `bundleBom.js`). |
+| `learningKit.js` | Bundle kit recipes from catalog `components[]`, component validation/serialize for Request Stock. |
 | `catalogOptions.js` | RHET catalog unwrap, stale-cache warning vs blocking error, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
+| `catalogBundleFilter.js` | Virtual-bundle filter: parent categories (Tool Kit) show kit SKUs only, not raw BOM parts in `components[]`. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
-| `requestActionMenu.js` | Ellipsis menu items: terminal statuses → View details only; Pending/Shipped → Track + actions. Return Stock pending has no Cancel / Confirm received. |
+| `requestActionMenu.js` | Ellipsis menu items + `canConfirmReceived` (Shipped, not return, has RHET id). Admin My Requests Shipped tab uses checkboxes for bulk Confirm received. |
 | `requestStatusModules.js` | Count/filter/paginate helpers for My Requests status modules (Pending / Shipped / Delivered / Returned / Rejected). |
 | `uniqueCartCategory.js` | Request / Return carts: one category per row (no double-select). |
 
@@ -60,7 +62,7 @@ Creating a branch merchandise type is **not** Request Stock and must not invent 
 | Image | Required when inventory integration is enabled. |
 | Learning Kit | Hidden from create-type dropdown by default (`excludeLearningKit: true`). |
 | Already added | Pass `excludeNames` so branch types already present are omitted. |
-| Edit type | Image only — category locked after create (fulfill matches on `categoryName`). |
+| Edit type | Image always. Category editable when current name is **not** an exact RHET `categoryName` (`canEditMerchandiseTypeCategory`). Catalog is loaded on edit (not only on create). Aligned types stay locked. |
 | Stock / sizes | Come later from Request Stock / View Stocks — type create posts a CMS **type shell** only. |
 | View Stocks | Type-shell rows are hidden via `isMerchandiseTypeShellRow` (empty table until real stock). |
 | Request Stock (Admin) | Category dropdown = branch types ∩ RHET catalog (`getRequestStockCategoryOptions`). |

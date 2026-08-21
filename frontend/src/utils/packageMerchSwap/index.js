@@ -6,6 +6,10 @@
  */
 
 import { isMerchandiseTypeShellRow } from '../merchandiseRequests/createTypeCategory';
+import {
+  isUniformStockCategory,
+  formatMerchandiseVariantOptionLabel,
+} from '../merchandiseStock';
 
 export const PACKAGE_MERCH_ACTION = {
   ISSUE: 'issue',
@@ -13,17 +17,12 @@ export const PACKAGE_MERCH_ACTION = {
   SWAP: 'swap',
 };
 
-/** Types that can be kept or swapped for another in-stock freebie. */
-export const PACKAGE_MERCH_SWAPABLE_TYPE_NAMES = [
-  'Backpack',
-  'LCA Bag',
-  'ID Lace',
-  'Book',
-  'Workbook',
-  'Workbooks',
-  'Accessory',
-  'Other',
-];
+/**
+ * @deprecated No longer used as an allowlist. Keep/Swap is offered for any
+ * non-sizing package freebie; swap targets come from branch merchandisestbl.
+ * Kept as an empty export so older imports do not break.
+ */
+export const PACKAGE_MERCH_SWAPABLE_TYPE_NAMES = [];
 
 export function normalizePackageMerchAction(action) {
   const a = String(action || '')
@@ -35,20 +34,71 @@ export function normalizePackageMerchAction(action) {
 }
 
 /**
- * Non-uniform package freebies that may be kept or swapped.
- * Uniforms / Shirt / Learning Kit stay on the sized Configure Merchandise path.
+ * Real stock rows for a package type (excludes category image shells).
+ */
+export function listPackageItemVariantRows(merchandiseList, typeName) {
+  const key = String(typeName || '').trim().toLowerCase();
+  if (!key) return [];
+  return (merchandiseList || []).filter((item) => {
+    if (String(item.merchandise_name || '').trim().toLowerCase() !== key) return false;
+    if (isMerchandiseTypeShellRow(item)) return false;
+    return true;
+  });
+}
+
+/**
+ * Item-keyed package types (Tool Kit, Moving Up Kit, …) need a per-student variant pick
+ * when the branch has more than one stock item for that type.
+ * Other freebies use Keep/Swap (`isPackageMerchSwappable`) instead.
+ */
+export function requiresPackageItemVariantSelection(
+  typeName,
+  merchandiseList,
+  { requiresSizing = false } = {}
+) {
+  if (!typeName || requiresSizing) return false;
+  if (isUniformStockCategory(typeName)) return false;
+  const variants = listPackageItemVariantRows(merchandiseList, typeName);
+  return variants.length > 1;
+}
+
+export function isStudentItemVariantSelectionComplete(
+  studentSelections,
+  typeName,
+  merchandiseList
+) {
+  const variants = listPackageItemVariantRows(merchandiseList, typeName);
+  if (!variants.length) return false;
+  const sel = (studentSelections || []).find(
+    (m) =>
+      String(m.merchandise_name || '').trim().toLowerCase() ===
+      String(typeName || '').trim().toLowerCase()
+  );
+  if (!sel?.merchandise_id) return false;
+  return variants.some(
+    (v) => Number(v.merchandise_id) === Number(sel.merchandise_id)
+  );
+}
+
+export function formatPackageItemVariantOptionLabel(item) {
+  return formatMerchandiseVariantOptionLabel(item, { includePrice: false });
+}
+
+/**
+ * Package-included freebies that show Keep / Swap in Configure Items.
+ * Not an allowlist of names — any non-sizing type that is not a uniform / Shirt /
+ * Learning Kit. Multi-SKU kits are excluded by callers via
+ * `requiresPackageItemVariantSelection` (variant picker wins).
+ * Swap *targets* are existing branch merchandise rows (`getPackageMerchSwapOptions`).
  */
 export function isPackageMerchSwappable(typeName, { requiresSizing } = {}) {
   const name = String(typeName || '').trim();
   if (!name) return false;
   if (typeof requiresSizing === 'boolean' && requiresSizing) return false;
+  if (isUniformStockCategory(name)) return false;
   const lower = name.toLowerCase();
-  if (lower.includes('uniform')) return false;
-  if (lower === 'shirt' || lower === 'lca shirt') return false;
   if (lower.includes('learning kit')) return false;
-  return PACKAGE_MERCH_SWAPABLE_TYPE_NAMES.some(
-    (t) => t.toLowerCase() === lower
-  );
+  return true;
 }
 
 export function createDefaultPackageMerchEntitlement(typeName) {

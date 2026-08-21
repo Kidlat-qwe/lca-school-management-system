@@ -4,6 +4,49 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `repairPampangaUniformTypesToRhet.js`
+
+Normalize School Uniform + PE Uniform piece labels to RHET values for one branch.
+**Default branch: Malolos.** Override with `--branch-name=Cavite` / `Guiguinto` / `Pampanga` (etc.).
+
+| Category | Updates |
+|----------|---------|
+| PE Uniform | `Top` → `Shirt`, `Bottom` → `Pants` |
+| School Uniform | `Men`/`Women` → `Male`/`Female`; Male Top→`Polo`, Male Bottom→`Short`, Female Top→`Blouse`, Female Bottom→`Skirt` |
+
+Also matches legacy names `LCA PE Uniform`, `LCA Uniform`, `School Uniform_Replacement`.
+Default is **dry-run**; you run `--apply` when ready.
+
+```bash
+node backend/scripts/repairPampangaUniformTypesToRhet.js
+node backend/scripts/repairPampangaUniformTypesToRhet.js --dry-run
+node backend/scripts/repairPampangaUniformTypesToRhet.js --apply
+node backend/scripts/repairPampangaUniformTypesToRhet.js --dry-run --branch-name=Cavite
+node backend/scripts/repairPampangaUniformTypesToRhet.js --apply --branch-name=Pampanga
+```
+
+### `createMalolosTogaMerchandise.js`
+
+Creates a **CMS-only** merchandise row **Toga Set** for the **Malolos** branch on the
+**development** database (`psms_db`). Not linked to RHET / inventory (`item_name` and
+`sku` stay `NULL`).
+
+| Field | Default |
+|-------|---------|
+| Name | `Toga Set` |
+| Quantity | `50` |
+| Price | `0` |
+| Gender | `Unisex` |
+| Size / type / item_name / sku | `null` |
+
+Idempotent: if Malolos already has `Toga Set`, the script exits without inserting.
+
+```bash
+node backend/scripts/createMalolosTogaMerchandise.js --development
+node backend/scripts/createMalolosTogaMerchandise.js --development --apply
+node backend/scripts/createMalolosTogaMerchandise.js --development --apply --quantity=20 --price=1500
+```
+
 ### `repairBriaToledanoFullPaymentThroughJuly.js`
 
 **Bria Renesmee M. Toledano** (`jennyrosewin@gmail.com`, student **356**, class **68** `VMP_Playgroup_SS_9:30AM`). Full payment INV-**350** auto-enrolled all **10** class phases, so Month Re-enrollment showed **October completed** and August still re-enrolled. Package ends **Phase 7 / July**.
@@ -143,6 +186,15 @@ node backend/scripts/repairMariannaRomeroPhase6BlankEnrollmentInactive.js --prod
 ```bash
 node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production
 node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production --apply
+```
+
+### `repairLucretiusManuelPhase5Balance4606.js`
+
+**Lucretius Theodore B Manuel** (`krisstinamanuel729@gmail.com`). Phase 5 balance leaf **INV-1960** had Late Payment Penalty **₱460.60**, so Student History showed balance **₱5,066.60**. Zeros that penalty only; remaining balance becomes **₱4,606** (₱4,803 − ₱197 paid on INV-1959).
+
+```bash
+node backend/scripts/repairLucretiusManuelPhase5Balance4606.js --production
+node backend/scripts/repairLucretiusManuelPhase5Balance4606.js --production --apply
 ```
 
 ### `repairVitoFernandoPhaseDatesDrop6.js`

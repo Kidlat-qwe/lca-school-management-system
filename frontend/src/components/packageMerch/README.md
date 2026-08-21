@@ -5,8 +5,16 @@
 Enroll modal controls for package-included **freebies** (non-uniform):
 
 - **Keep** — release the package’s included item (default). Shows type stock (e.g. `12 in stock`).
-- **Swap** — deduct a different item instead; package price unchanged. Replacement options and the selected item show stock.
+- **Swap** — deduct a different **existing CMS merchandise** row instead; package price unchanged.
+- Offered for any non-sizing package freebie (not a hard-coded name list).
 - Zero stock is allowed; fulfill later from **Pending issue**
+
+## PackageMerchItemVariantPanel
+
+Per-student **item variant** picker for item-keyed package types (Tool Kit, Moving Up Kit)
+when branch stock has **more than one** variant: choose `itemName · SKU`
+(e.g. `gs_toolkit` vs `nc_kg_toolkit`). Freebies such as Backpack / Toga use
+`PackageMerchEntitlementPanel` (Keep / Swap) instead.
 
 ## PackageMerchPendingQueue
 
