@@ -207,7 +207,7 @@ export function buildFiuuPaymentLinkEmailContent({
           <tr>
             <td style="padding:16px 24px 8px;font-size:13px;color:#374151;">
               <div><strong>To:</strong> ${escapeHtml(toEmail)}</div>
-              <div style="margin-top:4px;"><strong>Customer:</strong> ${escapeHtml(greeting)}</div>
+              <div style="margin-top:4px;"><strong>Student Name:</strong> ${escapeHtml(greeting)}</div>
               <div style="margin-top:4px;"><strong>Reference:</strong> ${escapeHtml(refLabel)} (${escapeHtml(paymentTypeLabel)})</div>
             </td>
           </tr>

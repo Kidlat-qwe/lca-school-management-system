@@ -107,6 +107,8 @@ router.post(
     body('pay_link_expires_on').optional().isString(),
     body('disable_after_payment').optional(),
     body('send_copy_to_me').optional(),
+    body('tip_amount').optional(),
+    body('discount_amount').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -129,6 +131,8 @@ router.post(
         send_copy_to_me:
           req.body.send_copy_to_me === true || req.body.send_copy_to_me === 'true',
         staff_email: req.user.email,
+        tip_amount: req.body.tip_amount,
+        discount_amount: req.body.discount_amount,
       });
       res.status(201).json({ success: true, data });
     } catch (err) {

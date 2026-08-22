@@ -28,7 +28,8 @@ export async function createFiuuInvoicePayment({
   send_email = false,
   recipient_email,
   pay_link_expires_on,
-  disable_after_payment,
+  tip_amount,
+  discount_amount,
 }) {
   const res = await apiRequest('/payments/fiuu/create', {
     method: 'POST',
@@ -39,8 +40,9 @@ export async function createFiuuInvoicePayment({
       send_email: Boolean(send_email),
       recipient_email: recipient_email || undefined,
       pay_link_expires_on: pay_link_expires_on || undefined,
-      disable_after_payment:
-        disable_after_payment === undefined ? undefined : Boolean(disable_after_payment),
+      tip_amount: tip_amount === '' || tip_amount == null ? undefined : Number(tip_amount),
+      discount_amount:
+        discount_amount === '' || discount_amount == null ? undefined : Number(discount_amount),
     }),
   });
   return res.data;

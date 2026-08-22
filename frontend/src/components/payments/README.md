@@ -7,7 +7,7 @@ Shared UI for finance payment logs and related flows.
 | File | Purpose |
 |------|---------|
 | `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. |
-| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. **Send payment link**, **Open FIUU now**, and **Advanced settings** (expiry, disable after payment, Preview). |
+| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. **Send payment link**, **Open FIUU now**, invoice **tip/discount**, and **Advanced settings** (expiry, Preview). |
 
 ## Public pay page
 
@@ -22,9 +22,11 @@ Collapsible section matching FIUU-style options:
 
 | Control | Behavior |
 |---------|----------|
-| Expiry Date | Optional; blank uses 7-day server TTL. Sent as `pay_link_expires_on` when set |
-| Disable Payment Link After Payment | Off by default; when on, paid links show already-paid |
+| Tip / Discount (invoice) | Same as manual Record Payment; FIUU charge = amount due − discount + tip |
+| Expiry Date | Optional. When set → email shows that date and link expires then. When blank → email shows **N/A** (no auto-expiry) |
 | Preview | Opens HTML preview via `POST /payments/fiuu/preview-email` |
+
+Paid links are always disabled after FIUU confirms payment (no staff toggle). AR tip/discount stay on the create form above the panel.
 
 ## Related utils
 

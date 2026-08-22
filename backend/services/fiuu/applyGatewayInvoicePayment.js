@@ -1,6 +1,6 @@
 /**
  * Records a full invoice payment from FIUU gateway success.
- * v1: Full Payment only — no partial / discount / tip via FIUU.
+ * Supports optional tip (+) and discount (−) stored on the gateway row metadata.
  */
 import { coerceToManilaYmd, todayYmdManila } from '../../utils/dateUtils.js';
 import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentEligibility.js';
@@ -101,6 +101,8 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
     invoice_id,
     student_id,
     payable_amount,
+    discount_amount = 0,
+    tip_amount = 0,
     reference_number,
     payment_method,
     created_by,
@@ -153,13 +155,30 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
   }
 
   const remaining = parseFloat(invoice.amount) || 0;
-  const payAmount = parseFloat(payable_amount) || 0;
-  if (payAmount <= 0) {
+  const discountApplied = Math.max(0, parseFloat(discount_amount) || 0);
+  const tipApplied = Math.max(0, parseFloat(tip_amount) || 0);
+  // Net toward invoice = FIUU charge minus tip (tip is extra cash, not balance settlement).
+  // Prefer explicit payable_amount from metadata when present.
+  let netPayable = parseFloat(payable_amount);
+  if (!Number.isFinite(netPayable)) {
+    netPayable = Math.max(0, remaining - discountApplied);
+  }
+  netPayable = Math.max(0, netPayable);
+
+  if (discountApplied >= remaining && remaining > 0) {
+    throw Object.assign(new Error('Discount amount must be less than invoice remaining balance'), {
+      statusCode: 400,
+    });
+  }
+  if (netPayable <= 0) {
     throw Object.assign(new Error('Payable amount must be greater than 0'), { statusCode: 400 });
   }
-  if (Math.abs(payAmount - remaining) > 0.02) {
+  // Full settlement: net + discount must close remaining balance (same as manual Record Payment).
+  if (Math.abs(netPayable + discountApplied - remaining) > 0.02) {
     throw Object.assign(
-      new Error(`FIUU amount must match invoice remaining balance (PHP ${remaining.toFixed(2)})`),
+      new Error(
+        `FIUU payment must settle the full remaining balance (PHP ${remaining.toFixed(2)}; got net ${netPayable.toFixed(2)} + discount ${discountApplied.toFixed(2)})`
+      ),
       { statusCode: 400 }
     );
   }
@@ -171,29 +190,39 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
     ? `FIUU - ${String(fiuu_channel).trim()}`
     : payment_method || 'FIUU Online';
 
-  const remarkText = [
+  const remarkParts = [
     remarks,
     fiuu_channel ? `FIUU channel: ${fiuu_channel}` : null,
     'Auto-verified via FIUU gateway',
-  ]
-    .filter(Boolean)
-    .join(' | ');
+  ];
+  if (discountApplied > 0) {
+    remarkParts.push(
+      `Discount applied at payment: ₱${discountApplied.toFixed(2)} (Original payable: ₱${remaining.toFixed(2)})`
+    );
+  }
+  if (tipApplied > 0) {
+    remarkParts.push(`Tip/payment adjustment: ₱${tipApplied.toFixed(2)}`);
+  }
+  const remarkText = remarkParts.filter(Boolean).join(' | ');
 
   const hasActionOwnerCol = await paymenttblHasActionOwnerUserIdColumn();
+  const refNum = reference_number != null && String(reference_number).trim() !== ''
+    ? String(reference_number).trim()
+    : null;
   const insertSql = hasActionOwnerCol
     ? `INSERT INTO paymenttbl (
          invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, discount_amount, tip_amount, issue_date, status,
          reference_number, remarks, created_by, action_owner_user_id,
          approval_status, approved_by, approved_at, finance_verified_reference_number
-       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,0,0,$6,'Completed',$7,$8,$9,$10,'Approved',$9,CURRENT_TIMESTAMP,$7)
+       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,$12,'Approved',$11,CURRENT_TIMESTAMP,$13)
        RETURNING *`
     : `INSERT INTO paymenttbl (
          invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, discount_amount, tip_amount, issue_date, status,
          reference_number, remarks, created_by,
          approval_status, approved_by, approved_at, finance_verified_reference_number
-       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,0,0,$6,'Completed',$7,$8,$9,'Approved',$9,CURRENT_TIMESTAMP,$7)
+       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,'Approved',$11,CURRENT_TIMESTAMP,$12)
        RETURNING *`;
 
   const insertParams = hasActionOwnerCol
@@ -202,23 +231,29 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
         student_id,
         branch_id,
         methodLabel,
-        payAmount,
+        netPayable,
+        discountApplied,
+        tipApplied,
         issueDateYmd,
-        reference_number || null,
+        refNum,
         remarkText || null,
         created_by,
         actionOwnerUserId,
+        refNum,
       ]
     : [
         invoice_id,
         student_id,
         branch_id,
         methodLabel,
-        payAmount,
+        netPayable,
+        discountApplied,
+        tipApplied,
         issueDateYmd,
-        reference_number || null,
+        refNum,
         remarkText || null,
         created_by,
+        refNum,
       ];
 
   const paymentResult = await client.query(insertSql, insertParams);
@@ -239,7 +274,7 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
     invoice_id,
     invoice,
     totalSettled,
-    payAmount
+    netPayable
   );
 
   const remainingBalance = Math.max(0, originalInvoiceAmount - totalSettled);

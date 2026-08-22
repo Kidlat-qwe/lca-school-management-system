@@ -377,8 +377,8 @@ export async function createFiuuArPayment({
         branch,
         tipAmount: tip_amount,
         discountAmount: discountValue,
-        expiresAt: metadata.pay_link_expires_at
-          ? String(metadata.pay_link_expires_at).slice(0, 10)
+        expiresAt: pay_link_expires_on
+          ? String(metadata.pay_link_expires_at || '').slice(0, 10)
           : '',
         ccEmails: send_copy_to_me && staff_email ? [staff_email] : [],
       });

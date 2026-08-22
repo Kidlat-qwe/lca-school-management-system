@@ -22,8 +22,8 @@ export function buildPayLinkExpiry(ttlMs = DEFAULT_LINK_TTL_MS) {
 }
 
 /**
- * Parse staff-chosen expiry date (YYYY-MM-DD) to ISO end-of-day UTC-ish (23:59:59.999 local interpretation as date).
- * Falls back to default TTL when empty/invalid.
+ * Parse staff-chosen expiry date (YYYY-MM-DD) to ISO end-of-day.
+ * Returns null when empty/invalid (no configured expiry → email shows N/A; link does not auto-expire).
  */
 export function resolvePayLinkExpiresAt(expiresOnYmd) {
   const raw = String(expiresOnYmd || '').trim().slice(0, 10);
@@ -33,7 +33,7 @@ export function resolvePayLinkExpiresAt(expiresOnYmd) {
       return end.toISOString();
     }
   }
-  return buildPayLinkExpiry();
+  return null;
 }
 
 export function attachPayLinkToMetadata(
@@ -41,13 +41,20 @@ export function attachPayLinkToMetadata(
   { token, expiresAt, expiresOnYmd, disableAfterPayment = true } = {}
 ) {
   const pay_link_token = token || generatePayLinkToken();
-  const pay_link_expires_at = expiresAt || resolvePayLinkExpiresAt(expiresOnYmd);
-  return {
+  const next = {
     ...metadata,
     pay_link_token,
-    pay_link_expires_at,
     disable_after_payment: disableAfterPayment !== false,
   };
+  const resolved =
+    expiresAt ||
+    (expiresOnYmd != null && String(expiresOnYmd).trim() !== ''
+      ? resolvePayLinkExpiresAt(expiresOnYmd)
+      : null);
+  if (resolved) {
+    next.pay_link_expires_at = resolved;
+  }
+  return next;
 }
 
 /** Public URL for email "Pay now" — hits API bridge that immediately POSTs to FIUU. */

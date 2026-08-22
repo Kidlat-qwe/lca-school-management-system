@@ -44,16 +44,19 @@ Sandbox / demo testing: see `docs/FIUU_SANDBOX_ACCESS_GUIDE.md`.
 Create / preview body extras:
 
 - `send_email`, `recipient_email`
-- `pay_link_expires_on` (YYYY-MM-DD) — Advanced settings expiry (optional; blank → 7-day default)
-- `disable_after_payment` (UI default off; when on, paid links do not re-open FIUU)
+- `tip_amount`, `discount_amount` — invoice create: charge = (remaining − discount) + tip; webhook writes same to `paymenttbl`
+- `pay_link_expires_on` (YYYY-MM-DD) — optional Advanced settings expiry; blank → email shows **N/A** and link does not auto-expire
+
+Paid links are **always** disabled after FIUU webhook success (`/go/:token` shows already paid).
 
 ## Advanced settings (staff UI)
 
 Collapsible on `FiuuPayOnlinePanel`:
 
-1. **Expiry Date** — stored as `metadata.pay_link_expires_at` (end of chosen day)
-2. **Disable Payment Link After Payment** — after webhook paid (or expiry), `/go/:token` shows already-paid / expired instead of FIUU form
-3. **Preview** — `POST /preview-email` returns HTML (no send, no gateway row)
+1. **Expiry Date** — when set, stored as `metadata.pay_link_expires_at` and shown in the email; when blank, email shows **N/A**
+2. **Preview** — `POST /preview-email` returns HTML (no send, no gateway row)
+
+Invoice **Pay via FIUU** also has Tip / Discount payment adjustments (same semantics as manual Record Payment). AR tip/discount remain on the create form above the FIUU panel.
 
 ## API (public, no Firebase)
 

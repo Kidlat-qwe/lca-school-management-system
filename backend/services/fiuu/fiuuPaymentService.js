@@ -121,14 +121,31 @@ export async function createFiuuInvoicePayment({
   disable_after_payment = true,
   send_copy_to_me = false,
   staff_email,
+  tip_amount = 0,
+  discount_amount = 0,
 }) {
   if (!isFiuuConfigured()) {
     throw Object.assign(new Error('FIUU is not configured on the server'), { statusCode: 503 });
   }
 
   const { invoice, student, remaining } = await loadInvoiceForFiuuCreate(invoice_id, student_id);
+  const tipApplied = Math.max(0, parseFloat(tip_amount) || 0);
+  const discountApplied = Math.max(0, parseFloat(discount_amount) || 0);
+  if (discountApplied > 0 && discountApplied >= remaining) {
+    throw Object.assign(new Error('Discount amount must be less than invoice remaining balance'), {
+      statusCode: 400,
+    });
+  }
+  const netPayable = Math.max(0, remaining - discountApplied);
+  if (netPayable <= 0.009) {
+    throw Object.assign(new Error('Payable amount after discount must be greater than 0'), {
+      statusCode: 400,
+    });
+  }
+  const chargeAmt = netPayable + tipApplied;
+
   const orderid = buildInvoiceOrderId(invoice_id);
-  const amount = formatFiuuAmount(remaining);
+  const amount = formatFiuuAmount(chargeAmt);
   const currency = getFiuuCurrency();
   const fiuuChannel = channel || getFiuuDefaultChannel();
   const refLabel = invoice.invoice_description || `INV-${invoice_id}`;
@@ -137,7 +154,7 @@ export async function createFiuuInvoicePayment({
     studentName: student.full_name || 'Student',
     branchName: invoice.branch_name || 'Branch',
     refLabel,
-    amountPhp: remaining,
+    amountPhp: chargeAmt,
     initiatorName: initiator_name,
   });
 
@@ -169,6 +186,10 @@ export async function createFiuuInvoicePayment({
     {
       channel: fiuuChannel,
       payment_type: 'Full Payment',
+      tip_amount: tipApplied,
+      discount_amount: discountApplied,
+      net_payable: netPayable,
+      invoice_remaining: remaining,
     },
     {
       expiresOnYmd: pay_link_expires_on,
@@ -190,7 +211,7 @@ export async function createFiuuInvoicePayment({
     student_id,
     branch_id: invoice.branch_id,
     invoice_id,
-    amount: remaining,
+    amount: chargeAmt,
     currency,
     description_sent: description,
     metadata,
@@ -205,15 +226,17 @@ export async function createFiuuInvoicePayment({
     emailResult = await sendFiuuPaymentLinkEmail({
       to: recipients,
       payLinkUrl,
-      amount: remaining,
+      amount: chargeAmt,
       studentName: student.full_name || 'Client',
       refLabel: invoice.invoice_ar_number || refLabel || `INV-${invoice_id}`,
       itemDescription: invoice.invoice_description || refLabel || 'Invoice payment',
       orderid,
       paymentTypeLabel: 'Invoice',
       branch,
-      expiresAt: metadata.pay_link_expires_at
-        ? String(metadata.pay_link_expires_at).slice(0, 10)
+      tipAmount: tipApplied,
+      discountAmount: discountApplied,
+      expiresAt: pay_link_expires_on
+        ? String(metadata.pay_link_expires_at || '').slice(0, 10)
         : '',
       ccEmails:
         send_copy_to_me && staff_email ? [staff_email] : [],
@@ -230,6 +253,9 @@ export async function createFiuuInvoicePayment({
     channel: fiuuChannel,
     pay_link_url: payLinkUrl,
     pay_link_token: metadata.pay_link_token,
+    tip_amount: tipApplied,
+    discount_amount: discountApplied,
+    net_payable: netPayable,
     email: emailResult,
   };
 }
@@ -294,8 +320,11 @@ export async function previewFiuuPaymentLinkEmail({
   send_copy_to_me = false,
   staff_email,
 }) {
-  const expiresAt = resolvePayLinkExpiresAt(pay_link_expires_on).slice(0, 10);
+  const expiresIso = resolvePayLinkExpiresAt(pay_link_expires_on);
+  const expiresAt = expiresIso ? expiresIso.slice(0, 10) : '';
   const placeholderLink = 'https://example.invalid/pay/preview';
+  const tipApplied = Math.max(0, parseFloat(tip_amount) || 0);
+  const discountApplied = Math.max(0, parseFloat(discount_amount) || 0);
 
   if (mode === 'invoice') {
     if (!invoice_id || !student_id) {
@@ -304,6 +333,13 @@ export async function previewFiuuPaymentLinkEmail({
       });
     }
     const { invoice, student, remaining } = await loadInvoiceForFiuuCreate(invoice_id, student_id);
+    if (discountApplied > 0 && discountApplied >= remaining) {
+      throw Object.assign(new Error('Discount amount must be less than invoice remaining balance'), {
+        statusCode: 400,
+      });
+    }
+    const netPayable = Math.max(0, remaining - discountApplied);
+    const chargeAmt = netPayable + tipApplied;
     const branch = await loadBranchForPayEmail(invoice.branch_id);
     const to =
       recipient_email ||
@@ -311,13 +347,15 @@ export async function previewFiuuPaymentLinkEmail({
     return buildFiuuPaymentLinkEmailContent({
       to,
       payLinkUrl: placeholderLink,
-      amount: remaining,
+      amount: chargeAmt,
       studentName: student.full_name || 'Client',
       refLabel: invoice.invoice_ar_number || invoice.invoice_description || `INV-${invoice_id}`,
       itemDescription: invoice.invoice_description || 'Invoice payment',
       orderid: 'PREVIEW-ORDER',
       paymentTypeLabel: 'Invoice',
       branch,
+      tipAmount: tipApplied,
+      discountAmount: discountApplied,
       expiresAt,
       ccEmails: send_copy_to_me && staff_email ? [staff_email] : [],
     });
@@ -406,10 +444,20 @@ async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
         issue_date: new Date().toISOString().slice(0, 10),
       });
     } else {
+      const meta =
+        current.metadata && typeof current.metadata === 'object' ? current.metadata : {};
+      const tipApplied = Math.max(0, parseFloat(meta.tip_amount) || 0);
+      const discountApplied = Math.max(0, parseFloat(meta.discount_amount) || 0);
+      const netPayable =
+        meta.net_payable != null
+          ? Math.max(0, parseFloat(meta.net_payable) || 0)
+          : Math.max(0, (parseFloat(current.amount) || 0) - tipApplied);
       applyResult = await applyGatewayInvoiceFullPayment(client, {
         invoice_id: current.invoice_id,
         student_id: current.student_id,
-        payable_amount: current.amount,
+        payable_amount: netPayable,
+        discount_amount: discountApplied,
+        tip_amount: tipApplied,
         reference_number: tranID,
         payment_method: 'FIUU Online',
         fiuu_channel: channel || getFiuuDefaultChannel(),
@@ -489,7 +537,9 @@ export async function handleFiuuWebhookPayload(payload, { source = 'notify' } = 
     Math.abs(parseFloat(payload.amount || 0) - parseFloat(gatewayRow.amount || 0)) < 0.02;
   const currency = String(payload.currency ?? 'PHP').trim();
   if (!amountOk) {
-    console.error(`[fiuu-${source}] Amount mismatch for ${orderid}`);
+    console.error(
+      `[fiuu-${source}] Amount mismatch for ${orderid}: webhook=${payload.amount} gateway=${gatewayRow.amount}`
+    );
     await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {
       status: 'failed',
       raw_webhook: payload,

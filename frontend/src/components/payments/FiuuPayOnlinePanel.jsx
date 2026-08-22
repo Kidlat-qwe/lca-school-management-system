@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '../../utils/appAlert';
 import {
+  PAYMENT_DISCOUNT_ADJUSTMENT_HINT,
+  PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
+  PAYMENT_TIP_ADJUSTMENT_LABEL,
+} from '../../constants/paymentFormLabels';
+import {
   createFiuuInvoicePayment,
   createFiuuArPayment,
   previewFiuuPaymentEmail,
@@ -19,6 +24,8 @@ const formatCurrency = (value) => {
  * Secondary: open FIUU QR now (counter).
  *
  * mode="invoice" | mode="ar"
+ * Invoice mode: tip (+) / discount (−) adjustments (same meaning as manual Record Payment).
+ * AR mode: tip/discount come from the create form above this panel.
  */
 export default function FiuuPayOnlinePanel({
   mode = 'invoice',
@@ -41,9 +48,10 @@ export default function FiuuPayOnlinePanel({
   const [recipientEmail, setRecipientEmail] = useState(defaultEmail || '');
   const [error, setError] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // Empty = use server default TTL (7 days); staff can set a date when needed.
+  // Empty = no configured expiry (email shows N/A); staff can set a date when needed.
   const [expiryDate, setExpiryDate] = useState('');
-  const [disableAfterPayment, setDisableAfterPayment] = useState(false);
+  const [tipAmount, setTipAmount] = useState('');
+  const [discountAmount, setDiscountAmount] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const pollAbort = useRef(false);
 
@@ -51,12 +59,37 @@ export default function FiuuPayOnlinePanel({
     ? Number(amountProp ?? 0)
     : Number(invoice?.amount ?? 0);
 
+  const tipApplied = !isAr && tipAmount !== '' ? Math.max(0, parseFloat(tipAmount) || 0) : 0;
+  const discountApplied =
+    !isAr && discountAmount !== '' ? Math.max(0, parseFloat(discountAmount) || 0) : 0;
+  const netPayable = isAr ? remaining : Math.max(0, remaining - discountApplied);
+  const chargeAmount = isAr ? remaining : netPayable + tipApplied;
+
+  const adjustmentError = useMemo(() => {
+    if (isAr) return '';
+    if (tipAmount !== '' && (Number.isNaN(parseFloat(tipAmount)) || parseFloat(tipAmount) < 0)) {
+      return 'Tip amount must be 0 or greater';
+    }
+    if (
+      discountAmount !== '' &&
+      (Number.isNaN(parseFloat(discountAmount)) || parseFloat(discountAmount) < 0)
+    ) {
+      return 'Discount amount must be 0 or greater';
+    }
+    if (discountApplied > 0 && discountApplied >= remaining) {
+      return 'Discount amount must be less than amount due';
+    }
+    if (remaining > 0 && chargeAmount <= 0) {
+      return 'Charge amount after discount must be greater than 0';
+    }
+    return '';
+  }, [isAr, tipAmount, discountAmount, discountApplied, remaining, chargeAmount]);
+
   const linkOptions = useMemo(
     () => ({
       pay_link_expires_on: expiryDate || undefined,
-      disable_after_payment: disableAfterPayment,
     }),
-    [expiryDate, disableAfterPayment]
+    [expiryDate]
   );
 
   useEffect(() => {
@@ -73,6 +106,10 @@ export default function FiuuPayOnlinePanel({
   const createAttempt = useCallback(
     async ({ sendEmail, openNow }) => {
       setError('');
+      if (!isAr && adjustmentError) {
+        appAlert(adjustmentError);
+        return;
+      }
       setPhase('creating');
       try {
         let data;
@@ -114,6 +151,8 @@ export default function FiuuPayOnlinePanel({
             student_id: parseInt(studentId, 10),
             send_email: Boolean(sendEmail),
             recipient_email: sendEmail ? recipientEmail.trim() : undefined,
+            tip_amount: tipApplied,
+            discount_amount: discountApplied,
             ...linkOptions,
           });
         }
@@ -167,10 +206,13 @@ export default function FiuuPayOnlinePanel({
     },
     [
       isAr,
+      adjustmentError,
       arPayloadBuilder,
       invoice?.invoice_id,
       studentId,
       recipientEmail,
+      tipApplied,
+      discountApplied,
       linkOptions,
       onPaid,
       onLinkSent,
@@ -180,6 +222,10 @@ export default function FiuuPayOnlinePanel({
   const handlePreview = useCallback(async () => {
     if (!(recipientEmail || '').trim()) {
       appAlert('Enter the guardian/client email before preview.');
+      return;
+    }
+    if (!isAr && adjustmentError) {
+      appAlert(adjustmentError);
       return;
     }
     setPreviewLoading(true);
@@ -218,6 +264,8 @@ export default function FiuuPayOnlinePanel({
           invoice_id: invoice.invoice_id,
           student_id: parseInt(studentId, 10),
           recipient_email: recipientEmail.trim(),
+          tip_amount: tipApplied,
+          discount_amount: discountApplied,
           ...linkOptions,
         };
       }
@@ -239,17 +287,22 @@ export default function FiuuPayOnlinePanel({
     }
   }, [
     isAr,
+    adjustmentError,
     arPayloadBuilder,
     recipientEmail,
     remaining,
     branchId,
     invoice?.invoice_id,
     studentId,
+    tipApplied,
+    discountApplied,
     linkOptions,
   ]);
 
   const controlsDisabled =
     phase === 'creating' || phase === 'waiting' || phase === 'link_sent';
+  const actionsDisabled =
+    controlsDisabled || chargeAmount <= 0 || Boolean(adjustmentError);
 
   return (
     <div className="space-y-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
@@ -265,7 +318,7 @@ export default function FiuuPayOnlinePanel({
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 text-sm">
         <div>
-          <span className="text-gray-500 text-xs">Amount due</span>
+          <span className="text-gray-500 text-xs">{isAr ? 'Amount to charge' : 'Amount due'}</span>
           <p className="font-semibold text-gray-900">{formatCurrency(remaining)}</p>
         </div>
         <div>
@@ -275,6 +328,64 @@ export default function FiuuPayOnlinePanel({
           </p>
         </div>
       </div>
+
+      {!isAr ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              {PAYMENT_TIP_ADJUSTMENT_LABEL}
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={tipAmount}
+              onChange={(e) => setTipAmount(e.target.value)}
+              placeholder="0.00"
+              disabled={controlsDisabled}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              {PAYMENT_DISCOUNT_ADJUSTMENT_LABEL}
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              max={remaining > 0 ? Math.max(0, remaining - 0.01).toFixed(2) : undefined}
+              value={discountAmount}
+              onChange={(e) => setDiscountAmount(e.target.value)}
+              placeholder="0.00"
+              disabled={controlsDisabled}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">{PAYMENT_DISCOUNT_ADJUSTMENT_HINT}</p>
+          </div>
+          <div className="sm:col-span-2 rounded-md bg-white border border-indigo-100 px-3 py-2 text-sm">
+            <div className="flex flex-wrap justify-between gap-2">
+              <span className="text-gray-600">Charge on FIUU</span>
+              <span className="font-semibold text-gray-900">{formatCurrency(chargeAmount)}</span>
+            </div>
+            {(tipApplied > 0 || discountApplied > 0) && (
+              <p className="mt-1 text-xs text-gray-500">
+                {formatCurrency(remaining)}
+                {discountApplied > 0 ? ` − discount ${formatCurrency(discountApplied)}` : ''}
+                {tipApplied > 0 ? ` + tip ${formatCurrency(tipApplied)}` : ''}
+              </p>
+            )}
+          </div>
+          {adjustmentError ? (
+            <p className="sm:col-span-2 text-xs text-red-600">{adjustmentError}</p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="text-xs text-gray-600">
+          Tip and discount for AR are set in the fields above (before Pay via FIUU). Amount to charge
+          already includes those adjustments.
+        </p>
+      )}
 
       <div>
         <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -320,29 +431,14 @@ export default function FiuuPayOnlinePanel({
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Optional. Leave blank to use the default link lifetime (7 days). If set, the link
-                stops working after this date (shown in the email).
+                Optional. Leave blank to show N/A in the email (link does not auto-expire). If set,
+                the link stops working after this date.
               </p>
             </div>
-            <label className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={disableAfterPayment}
-                onChange={(e) => setDisableAfterPayment(e.target.checked)}
-                disabled={controlsDisabled}
-              />
-              <span>
-                <span className="font-semibold">Disable Payment Link After Payment</span>
-                <span className="block text-xs text-gray-500 font-normal">
-                  After FIUU confirms payment, the link shows as already paid (recommended).
-                </span>
-              </span>
-            </label>
             <button
               type="button"
               onClick={handlePreview}
-              disabled={controlsDisabled || previewLoading || remaining <= 0}
+              disabled={actionsDisabled || previewLoading}
               className="w-full rounded-md bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {previewLoading ? 'Preparing preview…' : 'Preview'}
@@ -391,7 +487,7 @@ export default function FiuuPayOnlinePanel({
 
       {phase === 'paid' ? (
         <div className="text-sm text-green-800 bg-green-50 border border-green-200 rounded-md px-3 py-2">
-          Payment received ({formatCurrency(amount || remaining)}).{' '}
+          Payment received ({formatCurrency(amount || chargeAmount)}).{' '}
           {isAr ? 'Acknowledgement receipt will refresh.' : 'Invoice will refresh.'}
         </div>
       ) : null}
@@ -411,7 +507,7 @@ export default function FiuuPayOnlinePanel({
             <button
               type="button"
               onClick={() => createAttempt({ sendEmail: false, openNow: true })}
-              disabled={phase === 'creating' || phase === 'waiting' || remaining <= 0}
+              disabled={actionsDisabled || phase === 'waiting'}
               className="px-4 py-2 text-sm font-medium text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {phase === 'waiting' ? 'Waiting…' : 'Open FIUU now'}
@@ -419,12 +515,7 @@ export default function FiuuPayOnlinePanel({
             <button
               type="button"
               onClick={() => createAttempt({ sendEmail: true, openNow: false })}
-              disabled={
-                phase === 'creating' ||
-                phase === 'waiting' ||
-                remaining <= 0 ||
-                !(recipientEmail || '').trim()
-              }
+              disabled={actionsDisabled || !(recipientEmail || '').trim()}
               className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {phase === 'creating' ? 'Sending…' : 'Send payment link'}
