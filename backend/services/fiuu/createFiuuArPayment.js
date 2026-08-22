@@ -18,6 +18,9 @@ import {
 } from './config.js';
 import { buildArOrderId, formatFiuuDescription } from './orderId.js';
 import { buildPaymentVcode, formatFiuuAmount } from './signature.js';
+import { attachPayLinkToMetadata, buildFiuuPublicPayPageUrl } from './payLink.js';
+import { sendFiuuPaymentLinkEmail } from './sendFiuuPaymentLinkEmail.js';
+import { normalizeNotificationRecipients } from '../../utils/emailService.js';
 
 const FIUU_AR_PAYMENT_METHOD = 'FIUU Online';
 
@@ -35,6 +38,8 @@ export async function createFiuuArPayment({
   initiator_name,
   channel,
   userBranchId = null,
+  send_email = false,
+  recipient_email,
 }) {
   if (!isFiuuConfigured()) {
     throw httpError('FIUU is not configured on the server', 503);
@@ -303,6 +308,22 @@ export async function createFiuuArPayment({
     if (notifyUrl) formFields.notifyurl = notifyUrl;
     if (callbackUrl) formFields.callbackurl = callbackUrl;
 
+    const metadata = attachPayLinkToMetadata({
+      channel: fiuuChannel,
+      payment_type: 'AR',
+      ar_type: arType,
+      ack_receipt_id: ackId,
+      tip_amount,
+      discount_amount: discountValue,
+      charge_amount: chargeAmt,
+    });
+    let payLinkUrl = null;
+    try {
+      payLinkUrl = buildFiuuPublicPayPageUrl(metadata.pay_link_token);
+    } catch (err) {
+      if (send_email) throw err;
+    }
+
     await client.query(
       `INSERT INTO gateway_paymentstbl (
          gateway, orderid, target_type, target_id, student_id, branch_id, invoice_id,
@@ -319,21 +340,26 @@ export async function createFiuuArPayment({
         chargeAmt,
         currency,
         description,
-        JSON.stringify({
-          channel: fiuuChannel,
-          payment_type: 'AR',
-          ar_type: arType,
-          ack_receipt_id: ackId,
-          tip_amount,
-          discount_amount: discountValue,
-          charge_amount: chargeAmt,
-        }),
+        JSON.stringify(metadata),
         JSON.stringify(formFields),
         created_by ?? null,
       ]
     );
 
     await client.query('COMMIT');
+
+    let emailResult = null;
+    if (send_email) {
+      const recipients = resolveArPayLinkRecipients(recipient_email, prospect_student_email);
+      emailResult = await sendFiuuPaymentLinkEmail({
+        to: recipients,
+        payLinkUrl,
+        amount: chargeAmt,
+        studentName: prospect_student_name || 'Client',
+        refLabel: ackReceipt.ack_receipt_number || `AR-${ackId}`,
+        description,
+      });
+    }
 
     return {
       orderid,
@@ -346,6 +372,9 @@ export async function createFiuuArPayment({
       ack_receipt_id: ackId,
       ack_receipt_number: ackReceipt.ack_receipt_number,
       ar_type: arType,
+      pay_link_url: payLinkUrl,
+      pay_link_token: metadata.pay_link_token,
+      email: emailResult,
     };
   } catch (err) {
     try {
@@ -357,6 +386,25 @@ export async function createFiuuArPayment({
   } finally {
     client.release();
   }
+}
+
+function resolveArPayLinkRecipients(recipientEmail, prospectEmail) {
+  if (recipientEmail != null && String(recipientEmail).trim() !== '') {
+    const list = normalizeNotificationRecipients(
+      Array.isArray(recipientEmail) ? recipientEmail : String(recipientEmail).split(/[,;]/)
+    );
+    if (list.length === 0) {
+      throw httpError('recipient_email is not a valid email address');
+    }
+    return list;
+  }
+  const list = normalizeNotificationRecipients([prospectEmail]);
+  if (list.length === 0) {
+    throw httpError(
+      'Client email is required to send the FIUU payment link. Enter an email on Step 1 or in the FIUU panel.'
+    );
+  }
+  return list;
 }
 
 export { FIUU_AR_PAYMENT_METHOD };

@@ -6,6 +6,8 @@ import {
   createFiuuInvoicePayment,
   createFiuuArPayment,
   getFiuuPaymentStatus,
+  getPublicFiuuPayByToken,
+  getPublicFiuuGoHtmlByToken,
   handleFiuuWebhookPayload,
   isFiuuConfigured,
   normalizeFiuuPostBody,
@@ -30,8 +32,56 @@ router.get('/config', verifyFirebaseToken, (req, res) => {
 });
 
 /**
+ * GET /api/sms/payments/fiuu/go/:token
+ * Unauthenticated — emailed Pay now opens this URL; HTML auto-POSTs to FIUU (same tab).
+ */
+router.get(
+  '/go/:token',
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const html = await getPublicFiuuGoHtmlByToken(req.params.token);
+      res.status(200).type('html').send(html);
+    } catch (err) {
+      if (err.statusCode) {
+        return res
+          .status(err.statusCode)
+          .type('html')
+          .send(
+            `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
+              err.message || 'Payment link error'
+            ).replace(/</g, '')}</p></body></html>`
+          );
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/fiuu/public/:token
+ * Unauthenticated JSON payload (optional CMS landing / diagnostics).
+ */
+router.get(
+  '/public/:token',
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const data = await getPublicFiuuPayByToken(req.params.token);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
  * POST /api/sms/payments/fiuu/create
  * Admin/Superadmin: start FIUU payment for an invoice (full balance).
+ * Body: send_email=true emails CMS pay link; invoice stays unpaid until webhook.
  */
 router.post(
   '/create',
@@ -41,6 +91,8 @@ router.post(
     body('invoice_id').isInt().withMessage('invoice_id is required'),
     body('student_id').isInt().withMessage('student_id is required'),
     body('channel').optional().isString(),
+    body('send_email').optional(),
+    body('recipient_email').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -52,6 +104,8 @@ router.post(
         created_by: createdBy,
         initiator_name: req.user.fullName || req.user.full_name,
         channel: req.body.channel,
+        send_email: req.body.send_email === true || req.body.send_email === 'true',
+        recipient_email: req.body.recipient_email,
       });
       res.status(201).json({ success: true, data });
     } catch (err) {
@@ -65,7 +119,8 @@ router.post(
 
 /**
  * POST /api/sms/payments/fiuu/create-ar
- * Admin/Superadmin: create pending Merchandise/Package AR and start FIUU QR payment.
+ * Admin/Superadmin: create pending Merchandise/Package AR and FIUU payment.
+ * send_email=true emails CMS pay link; AR stays Unverified until webhook.
  */
 router.post(
   '/create-ar',
@@ -78,6 +133,8 @@ router.post(
     body('prospect_student_phone').notEmpty().withMessage('prospect_student_phone is required'),
     body('issue_date').notEmpty().withMessage('issue_date is required'),
     body('channel').optional().isString(),
+    body('send_email').optional(),
+    body('recipient_email').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -90,6 +147,8 @@ router.post(
         initiator_name: req.user.fullName || req.user.full_name,
         channel: req.body.channel,
         userBranchId,
+        send_email: req.body.send_email === true || req.body.send_email === 'true',
+        recipient_email: req.body.recipient_email,
       });
       res.status(201).json({ success: true, data });
     } catch (err) {

@@ -1011,6 +1011,11 @@ const Invoice = () => {
     }
   };
 
+  const handleFiuuLinkSent = async () => {
+    handleClosePaymentModal();
+    await fetchInvoices(currentPage);
+  };
+
   const closePaymentRecordedInvoiceSummary = () => {
     if (paymentRecordedPdfLoading) return;
     setPaymentRecordedSummary(null);
@@ -3545,7 +3550,17 @@ const Invoice = () => {
                 <FiuuPayOnlinePanel
                   invoice={selectedInvoiceForPayment}
                   studentId={paymentFormData.student_id}
+                  defaultEmail={
+                    selectedInvoiceForPayment?.students?.find(
+                      (s) => String(s.student_id) === String(paymentFormData.student_id)
+                    )?.email ||
+                    selectedInvoiceForPayment?.students?.find(
+                      (s) => String(s.student_id) === String(paymentFormData.student_id)
+                    )?.guardian_email ||
+                    ''
+                  }
                   onPaid={handleFiuuPaymentSuccess}
+                  onLinkSent={handleFiuuLinkSent}
                   onCancel={() => setPaymentEntryMode('manual')}
                 />
               </div>

@@ -1295,6 +1295,13 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     userBranchId,
   ]);
 
+  const handleFiuuArLinkSent = useCallback(async () => {
+    setShowCreateModal(false);
+    resetCreateForm();
+    await fetchReceipts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleFiuuArPaymentSuccess = useCallback(
     async ({ ack_receipt_id, ar_type: paidArType }) => {
       try {
@@ -4322,8 +4329,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           <FiuuPayOnlinePanel
                             mode="ar"
                             amount={arCreateNetPayable()}
+                            defaultEmail={(createFormData.prospect_student_email || '').trim()}
                             arPayloadBuilder={buildArFiuuCreatePayload}
                             onPaid={handleFiuuArPaymentSuccess}
+                            onLinkSent={handleFiuuArLinkSent}
                             onCancel={() => setArCreatePaymentMode('manual')}
                           />
                         ) : (
@@ -4799,8 +4808,10 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           <FiuuPayOnlinePanel
                             mode="ar"
                             amount={arCreateNetPayable()}
+                            defaultEmail={(createFormData.prospect_student_email || '').trim()}
                             arPayloadBuilder={buildArFiuuCreatePayload}
                             onPaid={handleFiuuArPaymentSuccess}
+                            onLinkSent={handleFiuuArLinkSent}
                             onCancel={() => setArCreatePaymentMode('manual')}
                           />
                         ) : (

@@ -6,6 +6,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import FiuuPublicPayPage from './pages/public/FiuuPublicPayPage';
 import FinancialDashboard from './pages/superadmin/FinancialDashboard';
 import DailyOperationalDashboard from './pages/superadmin/DailyOperationalDashboard';
 import MonthlyOperationalDashboard from './pages/superadmin/MonthlyOperationalDashboard';
@@ -107,6 +108,7 @@ function App() {
           {/* Public Routes */}
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
+          <Route path="/pay/fiuu/:token" element={<FiuuPublicPayPage />} />
           
           {/* Protected Routes with Layout */}
           <Route

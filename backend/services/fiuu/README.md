@@ -4,24 +4,25 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 
 ## Scope (v1)
 
-- **Admin / Superadmin** invoice **full balance** payments via FIUU **QRPH** (GCash-compatible scan). Frontend tab: `FIUU_PAYMENT_UI_ENABLED` in `frontend/src/utils/fiuuPayment.js`.
-- **Admin / Superadmin** Merchandise / Package **Acknowledgement Receipt Create → Step 2** via the same Manual | Pay via FIUU tabs (`POST /payments/fiuu/create-ar`). Event AR is out of scope.
-- Auto-creates `paymenttbl` / verifies AR when FIUU webhook confirms success.
+- **Admin / Superadmin** invoice **full balance** via FIUU **QRPH**.
+- **Admin / Superadmin** Merchandise / Package **AR Create → Step 2** (`POST /payments/fiuu/create-ar`).
+- **Primary UX:** email a **Pay now** link that opens FIUU (API `/payments/fiuu/go/:token` auto-POSTs). Invoice stays **Unpaid** / AR stays **Unverified** until the FIUU webhook confirms success.
+- **Optional:** staff can still **Open FIUU now** at the counter.
 - Manual Cash / E-wallet recording unchanged.
 
 ## Setup
 
 1. Run migration `136_create_gateway_paymentstbl.sql`.
 2. Add env vars to backend `.env` (see `.env.example`).
-3. Register webhook URLs in FIUU Merchant Portal → Transactions → Settings:
+3. Ensure `FIUU_NOTIFY_URL` is set (used to derive the public API base for email pay links), or set `PUBLIC_API_BASE_URL=https://api-cms.lca-app.com/api/sms`.
+4. Register webhook URLs in FIUU Merchant Portal → Transactions → Settings:
    - Notify: `https://<api-host>/api/webhooks/fiuu/notify`
    - Callback: `https://<api-host>/api/webhooks/fiuu/callback`
    - Return: `https://<api-host>/api/webhooks/fiuu/return`
-4. Enable **IPN** in FIUU portal.
+5. Enable **IPN** in FIUU portal.
+6. Email (Brevo or SMTP) must be configured to send payment links.
 
-Sandbox / demo testing (separate `_Dev` account): see `docs/FIUU_SANDBOX_ACCESS_GUIDE.md` (Word: `docs/FIUU_SANDBOX_ACCESS_GUIDE.docx` or open `.html` then Save As `.docx`).
-
-CMS hosts: Coolify `*.lca-app.com` = development; Linode `cms.little-champion.com` = production. FIUU webhook URLs currently in portal are Coolify development, not Linode.
+Sandbox / demo testing: see `docs/FIUU_SANDBOX_ACCESS_GUIDE.md`.
 
 ## Order ID standard
 
@@ -29,8 +30,6 @@ CMS hosts: Coolify `*.lca-app.com` = development; Linode `cms.little-champion.co
 |---|---|
 | Invoice | `PSMS-I-{invoice_id}-{attempt}` |
 | Acknowledgement receipt | `PSMS-AR-{ack_receipt_id}-{attempt}` |
-
-Description: `PSMS CMS | {type} | {Student} | {Branch} | {Ref} | PHP {amount}`
 
 ## API (authenticated)
 
@@ -41,48 +40,35 @@ Description: `PSMS CMS | {type} | {Student} | {Branch} | {Ref} | PHP {amount}`
 | POST | `/api/sms/payments/fiuu/create-ar` | Admin, Superadmin |
 | GET | `/api/sms/payments/fiuu/status/:orderid` | Admin, Superadmin |
 
-### Create AR (`create-ar`)
+Create body extras:
 
-Body mirrors Merchandise/Package AR create fields (`ar_type`, student/guardian, phone, branch, merchandise_items or package_id, tip, discount, issue_date, installment_option).
+- `send_email: true` — email pay link that opens FIUU via `GET .../payments/fiuu/go/:token` (HTML auto-POST)
+- `recipient_email` — optional override (otherwise guardian/student or AR client email)
 
-Flow:
-
-1. Insert AR as **Unverified** with `payment_method = FIUU Online` (no attachment).
-2. Insert `gateway_paymentstbl` with `target_type = ack_receipt`.
-3. Return hosted pay URL + form fields (same shape as invoice create).
-4. On FIUU success webhook: set AR **Verified**, `reference_number = tranID`; Merchandise also creates invoice + payment + stock release (same side effects as cash merch AR).
-
-`downpayment_plus_phase1` package option is rejected for FIUU (use downpayment only or manual).
-
-## Webhooks (no Firebase auth)
+## API (public, no Firebase)
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET / HEAD | `/api/webhooks/fiuu/notify` | FIUU portal **Check** / health |
-| POST | `/api/webhooks/fiuu/notify` | Payment IPN (ACK + `treq=1`) |
-| GET / HEAD | `/api/webhooks/fiuu/callback` | FIUU portal **Check** / health |
-| POST | `/api/webhooks/fiuu/callback` | Deferred status (ACK `CBTOKEN:MPSTATOK`) |
-| GET / HEAD | `/api/webhooks/fiuu/return` | FIUU portal **Check** / health |
-| POST | `/api/webhooks/fiuu/return` | Browser return → redirect to CMS |
+| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — HTML auto-POSTs to FIUU (same tab) |
+| GET | `/api/sms/payments/fiuu/public/:token` | JSON payload (optional CMS landing / diagnostics) |
 
-Webhooks verify FIUU `skey` using `FIUU_SECRET_KEY` for real CMS order IDs (`PSMS-I-…`, `PSMS-AR-…`).
+Optional CMS route `/pay/fiuu/:token` remains for diagnostics; **emails use the API `/go/:token` URL**.
 
-FIUU **Check** may POST dummy orderids (`DEMO894`, etc.) or GET the URL. Those pings return **200** and do not create payments.
+## Webhooks (no Firebase auth)
+
+Same as before: `/api/webhooks/fiuu/notify|callback|return`.
 
 ## Files
 
-- `config.js` — env + pay URL
-- `orderId.js` — order id / description builders
-- `signature.js` — vcode + skey
-- `gatewayPaymentRepository.js` — `gateway_paymentstbl` CRUD
-- `applyGatewayInvoicePayment.js` — mark invoice paid after success
-- `createFiuuArPayment.js` — pending Merchandise/Package AR + gateway row
-- `applyGatewayArPayment.js` — verify AR (+ merch invoice/stock) after success
-- `fiuuPaymentService.js` — create + webhook orchestration
+- `payLink.js` — token + public pay URL helpers
+- `sendFiuuPaymentLinkEmail.js` — guardian payment-link email
+- `createFiuuArPayment.js` / `applyGatewayArPayment.js` — AR create + verify
+- `applyGatewayInvoicePayment.js` — invoice paid after success
+- `fiuuPaymentService.js` — orchestration
 - `../routes/fiuuPayments.js` — HTTP routes
 
 ## Next phases
 
 - Installment plan payments (`PSMS-INS-*`)
 - Event AR FIUU
-- Student self-pay portal
+- Richer student self-pay portal (history, multi-invoice)

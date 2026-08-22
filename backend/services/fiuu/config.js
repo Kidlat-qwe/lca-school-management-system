@@ -67,3 +67,25 @@ export function getFiuuExtendedVcode() {
 export function getFiuuFrontendReturnUrl() {
   return trim(process.env.FIUU_FRONTEND_RETURN_URL) || trim(process.env.CORS_ORIGIN?.split(',')[0]);
 }
+
+/**
+ * Public API origin used in emailed pay links (auto-POST bridge to FIUU).
+ * Prefer PUBLIC_API_BASE_URL; else derive from FIUU_NOTIFY_URL.
+ */
+export function getFiuuPublicApiBaseUrl() {
+  const explicit = trim(process.env.PUBLIC_API_BASE_URL) || trim(process.env.API_PUBLIC_URL);
+  if (explicit) return explicit.replace(/\/$/, '');
+
+  const notify = getFiuuNotifyUrl();
+  if (notify) {
+    try {
+      const u = new URL(notify);
+      // https://api-cms.lca-app.com/api/webhooks/fiuu/notify → https://api-cms.lca-app.com/api/sms
+      const origin = u.origin;
+      return `${origin}/api/sms`;
+    } catch {
+      /* ignore */
+    }
+  }
+  return '';
+}

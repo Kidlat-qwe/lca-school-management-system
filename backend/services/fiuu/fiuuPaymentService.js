@@ -28,9 +28,18 @@ import {
 } from './applyGatewayInvoicePayment.js';
 import { applyGatewayArPayment } from './applyGatewayArPayment.js';
 import { createFiuuArPayment } from './createFiuuArPayment.js';
+import {
+  attachPayLinkToMetadata,
+  buildFiuuPublicPayPageUrl,
+  buildPublicPayPayload,
+  buildFiuuAutoPostHtml,
+  findGatewayPaymentByPayToken,
+} from './payLink.js';
+import { sendFiuuPaymentLinkEmail } from './sendFiuuPaymentLinkEmail.js';
 import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentEligibility.js';
 import { getClient } from '../../config/database.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../../utils/paymentConfirmationEmailService.js';
+import { normalizeNotificationRecipients } from '../../utils/emailService.js';
 
 export { isFiuuConfigured, createFiuuArPayment };
 
@@ -89,6 +98,11 @@ export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
 
 /**
  * Create pending gateway row + FIUU hosted payment payload.
+ * Invoice stays unpaid until FIUU webhook confirms success.
+ *
+ * @param {object} params
+ * @param {boolean} [params.send_email] - email CMS pay link to guardian/client
+ * @param {string|string[]} [params.recipient_email] - override recipient(s)
  */
 export async function createFiuuInvoicePayment({
   invoice_id,
@@ -96,6 +110,8 @@ export async function createFiuuInvoicePayment({
   created_by,
   initiator_name,
   channel,
+  send_email = false,
+  recipient_email,
 }) {
   if (!isFiuuConfigured()) {
     throw Object.assign(new Error('FIUU is not configured on the server'), { statusCode: 503 });
@@ -140,6 +156,17 @@ export async function createFiuuInvoicePayment({
   if (notifyUrl) formFields.notifyurl = notifyUrl;
   if (callbackUrl) formFields.callbackurl = callbackUrl;
 
+  const metadata = attachPayLinkToMetadata({
+    channel: fiuuChannel,
+    payment_type: 'Full Payment',
+  });
+  let payLinkUrl = null;
+  try {
+    payLinkUrl = buildFiuuPublicPayPageUrl(metadata.pay_link_token);
+  } catch (err) {
+    if (send_email) throw err;
+  }
+
   await insertGatewayPayment({
     gateway: 'FIUU',
     orderid,
@@ -151,10 +178,23 @@ export async function createFiuuInvoicePayment({
     amount: remaining,
     currency,
     description_sent: description,
-    metadata: { channel: fiuuChannel, payment_type: 'Full Payment' },
+    metadata,
     raw_request: formFields,
     created_by,
   });
+
+  let emailResult = null;
+  if (send_email) {
+    const recipients = await resolveInvoicePayLinkRecipients(student_id, recipient_email, student);
+    emailResult = await sendFiuuPaymentLinkEmail({
+      to: recipients,
+      payLinkUrl,
+      amount: remaining,
+      studentName: student.full_name || 'Client',
+      refLabel,
+      description,
+    });
+  }
 
   return {
     orderid,
@@ -164,7 +204,51 @@ export async function createFiuuInvoicePayment({
     formFields,
     description,
     channel: fiuuChannel,
+    pay_link_url: payLinkUrl,
+    pay_link_token: metadata.pay_link_token,
+    email: emailResult,
   };
+}
+
+async function resolveInvoicePayLinkRecipients(studentId, recipientEmail, student) {
+  if (recipientEmail != null && String(recipientEmail).trim() !== '') {
+    const list = normalizeNotificationRecipients(
+      Array.isArray(recipientEmail) ? recipientEmail : String(recipientEmail).split(/[,;]/)
+    );
+    if (list.length === 0) {
+      throw Object.assign(new Error('recipient_email is not a valid email address'), {
+        statusCode: 400,
+      });
+    }
+    return list;
+  }
+
+  const gRes = await query(
+    `SELECT email FROM guardianstbl WHERE student_id = $1 AND email IS NOT NULL AND TRIM(email) <> ''
+     ORDER BY guardian_id ASC LIMIT 3`,
+    [studentId]
+  );
+  const fromGuardians = gRes.rows.map((r) => r.email);
+  const list = normalizeNotificationRecipients([...(fromGuardians || []), student?.email]);
+  if (list.length === 0) {
+    throw Object.assign(
+      new Error('No guardian or student email on file. Enter an email to send the payment link.'),
+      { statusCode: 400 }
+    );
+  }
+  return list;
+}
+
+export async function getPublicFiuuPayByToken(token) {
+  const row = await findGatewayPaymentByPayToken(token);
+  return buildPublicPayPayload(row);
+}
+
+/** HTML bridge for email "Pay now" — auto-POSTs to FIUU in the same tab. */
+export async function getPublicFiuuGoHtmlByToken(token) {
+  const row = await findGatewayPaymentByPayToken(token);
+  const payload = buildPublicPayPayload(row);
+  return buildFiuuAutoPostHtml(payload);
 }
 
 export async function getFiuuPaymentStatus(orderid) {

@@ -1,4 +1,11 @@
+/**
+ * FIUU payment helpers (invoice + AR).
+ *
+ * Primary staff flow: email CMS pay link to guardian (`send_email: true`).
+ * Optional: open FIUU QR immediately at the counter.
+ */
 import { apiRequest } from '../config/api';
+import API_BASE_URL from '../config/api';
 
 /**
  * Show Pay via FIUU on Record Payment and AR Create Step 2 (Admin/Superadmin).
@@ -14,15 +21,27 @@ export async function fetchFiuuConfig() {
   return res.data || { enabled: false };
 }
 
-export async function createFiuuInvoicePayment({ invoice_id, student_id, channel }) {
+export async function createFiuuInvoicePayment({
+  invoice_id,
+  student_id,
+  channel,
+  send_email = false,
+  recipient_email,
+}) {
   const res = await apiRequest('/payments/fiuu/create', {
     method: 'POST',
-    body: JSON.stringify({ invoice_id, student_id, channel }),
+    body: JSON.stringify({
+      invoice_id,
+      student_id,
+      channel,
+      send_email: Boolean(send_email),
+      recipient_email: recipient_email || undefined,
+    }),
   });
   return res.data;
 }
 
-/** Merchandise / Package AR create → pending AR + FIUU hosted pay. */
+/** Merchandise / Package AR create → pending AR + FIUU (optional email link). */
 export async function createFiuuArPayment(body) {
   const res = await apiRequest('/payments/fiuu/create-ar', {
     method: 'POST',
@@ -34,6 +53,16 @@ export async function createFiuuArPayment(body) {
 export async function fetchFiuuPaymentStatus(orderid) {
   const res = await apiRequest(`/payments/fiuu/status/${encodeURIComponent(orderid)}`);
   return res.data;
+}
+
+/** Public (no auth) payload for /pay/fiuu/:token landing page. */
+export async function fetchPublicFiuuPay(token) {
+  const res = await fetch(`${API_BASE_URL}/payments/fiuu/public/${encodeURIComponent(token)}`);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.message || 'Payment link not found');
+  }
+  return json.data;
 }
 
 /** POST form fields to FIUU hosted payment page (opens new tab). */
