@@ -8,6 +8,7 @@ import {
   getFiuuPaymentStatus,
   getPublicFiuuPayByToken,
   getPublicFiuuGoHtmlByToken,
+  previewFiuuPaymentLinkEmail,
   handleFiuuWebhookPayload,
   isFiuuConfigured,
   normalizeFiuuPostBody,
@@ -103,6 +104,9 @@ router.post(
     body('channel').optional().isString(),
     body('send_email').optional(),
     body('recipient_email').optional(),
+    body('pay_link_expires_on').optional().isString(),
+    body('disable_after_payment').optional(),
+    body('send_copy_to_me').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -116,8 +120,48 @@ router.post(
         channel: req.body.channel,
         send_email: req.body.send_email === true || req.body.send_email === 'true',
         recipient_email: req.body.recipient_email,
+        pay_link_expires_on: req.body.pay_link_expires_on,
+        disable_after_payment:
+          req.body.disable_after_payment === undefined
+            ? true
+            : req.body.disable_after_payment === true ||
+              req.body.disable_after_payment === 'true',
+        send_copy_to_me:
+          req.body.send_copy_to_me === true || req.body.send_copy_to_me === 'true',
+        staff_email: req.user.email,
       });
       res.status(201).json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/preview-email
+ * Admin/Superadmin: HTML preview of payment-link email (no send, no gateway row).
+ */
+router.post(
+  '/preview-email',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [body('mode').optional().isIn(['invoice', 'ar']), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const data = await previewFiuuPaymentLinkEmail({
+        ...req.body,
+        mode: req.body.mode || 'invoice',
+        invoice_id: req.body.invoice_id != null ? parseInt(req.body.invoice_id, 10) : undefined,
+        student_id: req.body.student_id != null ? parseInt(req.body.student_id, 10) : undefined,
+        branch_id: req.body.branch_id != null ? parseInt(req.body.branch_id, 10) : undefined,
+        send_copy_to_me:
+          req.body.send_copy_to_me === true || req.body.send_copy_to_me === 'true',
+        staff_email: req.user.email,
+      });
+      res.json({ success: true, data });
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ success: false, message: err.message });
@@ -145,6 +189,9 @@ router.post(
     body('channel').optional().isString(),
     body('send_email').optional(),
     body('recipient_email').optional(),
+    body('pay_link_expires_on').optional().isString(),
+    body('disable_after_payment').optional(),
+    body('send_copy_to_me').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -159,6 +206,15 @@ router.post(
         userBranchId,
         send_email: req.body.send_email === true || req.body.send_email === 'true',
         recipient_email: req.body.recipient_email,
+        pay_link_expires_on: req.body.pay_link_expires_on,
+        disable_after_payment:
+          req.body.disable_after_payment === undefined
+            ? true
+            : req.body.disable_after_payment === true ||
+              req.body.disable_after_payment === 'true',
+        send_copy_to_me:
+          req.body.send_copy_to_me === true || req.body.send_copy_to_me === 'true',
+        staff_email: req.user.email,
       });
       res.status(201).json({ success: true, data });
     } catch (err) {

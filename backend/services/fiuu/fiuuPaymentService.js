@@ -34,8 +34,13 @@ import {
   buildPublicPayPayload,
   buildFiuuAutoPostHtml,
   findGatewayPaymentByPayToken,
+  resolvePayLinkExpiresAt,
 } from './payLink.js';
-import { sendFiuuPaymentLinkEmail } from './sendFiuuPaymentLinkEmail.js';
+import {
+  sendFiuuPaymentLinkEmail,
+  loadBranchForPayEmail,
+  buildFiuuPaymentLinkEmailContent,
+} from './sendFiuuPaymentLinkEmail.js';
 import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentEligibility.js';
 import { getClient } from '../../config/database.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../../utils/paymentConfirmationEmailService.js';
@@ -112,6 +117,10 @@ export async function createFiuuInvoicePayment({
   channel,
   send_email = false,
   recipient_email,
+  pay_link_expires_on,
+  disable_after_payment = true,
+  send_copy_to_me = false,
+  staff_email,
 }) {
   if (!isFiuuConfigured()) {
     throw Object.assign(new Error('FIUU is not configured on the server'), { statusCode: 503 });
@@ -156,10 +165,16 @@ export async function createFiuuInvoicePayment({
   if (notifyUrl) formFields.notifyurl = notifyUrl;
   if (callbackUrl) formFields.callbackurl = callbackUrl;
 
-  const metadata = attachPayLinkToMetadata({
-    channel: fiuuChannel,
-    payment_type: 'Full Payment',
-  });
+  const metadata = attachPayLinkToMetadata(
+    {
+      channel: fiuuChannel,
+      payment_type: 'Full Payment',
+    },
+    {
+      expiresOnYmd: pay_link_expires_on,
+      disableAfterPayment: disable_after_payment !== false,
+    }
+  );
   let payLinkUrl = null;
   try {
     payLinkUrl = buildFiuuPublicPayPageUrl(metadata.pay_link_token);
@@ -186,13 +201,22 @@ export async function createFiuuInvoicePayment({
   let emailResult = null;
   if (send_email) {
     const recipients = await resolveInvoicePayLinkRecipients(student_id, recipient_email, student);
+    const branch = await loadBranchForPayEmail(invoice.branch_id);
     emailResult = await sendFiuuPaymentLinkEmail({
       to: recipients,
       payLinkUrl,
       amount: remaining,
       studentName: student.full_name || 'Client',
-      refLabel,
-      description,
+      refLabel: invoice.invoice_ar_number || refLabel || `INV-${invoice_id}`,
+      itemDescription: invoice.invoice_description || refLabel || 'Invoice payment',
+      orderid,
+      paymentTypeLabel: 'Invoice',
+      branch,
+      expiresAt: metadata.pay_link_expires_at
+        ? String(metadata.pay_link_expires_at).slice(0, 10)
+        : '',
+      ccEmails:
+        send_copy_to_me && staff_email ? [staff_email] : [],
     });
   }
 
@@ -249,6 +273,75 @@ export async function getPublicFiuuGoHtmlByToken(token) {
   const row = await findGatewayPaymentByPayToken(token);
   const payload = buildPublicPayPayload(row);
   return buildFiuuAutoPostHtml(payload);
+}
+
+/**
+ * Build payment-link email HTML for staff Preview (does not create gateway row or send mail).
+ */
+export async function previewFiuuPaymentLinkEmail({
+  mode = 'invoice',
+  invoice_id,
+  student_id,
+  recipient_email,
+  amount,
+  student_name,
+  ref_label,
+  item_description,
+  branch_id,
+  tip_amount = 0,
+  discount_amount = 0,
+  pay_link_expires_on,
+  send_copy_to_me = false,
+  staff_email,
+}) {
+  const expiresAt = resolvePayLinkExpiresAt(pay_link_expires_on).slice(0, 10);
+  const placeholderLink = 'https://example.invalid/pay/preview';
+
+  if (mode === 'invoice') {
+    if (!invoice_id || !student_id) {
+      throw Object.assign(new Error('invoice_id and student_id are required for invoice preview'), {
+        statusCode: 400,
+      });
+    }
+    const { invoice, student, remaining } = await loadInvoiceForFiuuCreate(invoice_id, student_id);
+    const branch = await loadBranchForPayEmail(invoice.branch_id);
+    const to =
+      recipient_email ||
+      (await resolveInvoicePayLinkRecipients(student_id, recipient_email, student));
+    return buildFiuuPaymentLinkEmailContent({
+      to,
+      payLinkUrl: placeholderLink,
+      amount: remaining,
+      studentName: student.full_name || 'Client',
+      refLabel: invoice.invoice_ar_number || invoice.invoice_description || `INV-${invoice_id}`,
+      itemDescription: invoice.invoice_description || 'Invoice payment',
+      orderid: 'PREVIEW-ORDER',
+      paymentTypeLabel: 'Invoice',
+      branch,
+      expiresAt,
+      ccEmails: send_copy_to_me && staff_email ? [staff_email] : [],
+    });
+  }
+
+  const branch = await loadBranchForPayEmail(branch_id);
+  if (!recipient_email) {
+    throw Object.assign(new Error('recipient_email is required for AR preview'), { statusCode: 400 });
+  }
+  return buildFiuuPaymentLinkEmailContent({
+    to: recipient_email,
+    payLinkUrl: placeholderLink,
+    amount: amount != null ? amount : 0,
+    studentName: student_name || 'Client',
+    refLabel: ref_label || 'AR preview',
+    itemDescription: item_description || 'Acknowledgement receipt',
+    orderid: 'PREVIEW-ORDER',
+    paymentTypeLabel: 'Acknowledgement Receipt',
+    branch,
+    tipAmount: tip_amount,
+    discountAmount: discount_amount,
+    expiresAt,
+    ccEmails: send_copy_to_me && staff_email ? [staff_email] : [],
+  });
 }
 
 export async function getFiuuPaymentStatus(orderid) {

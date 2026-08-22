@@ -19,7 +19,7 @@ import {
 import { buildArOrderId, formatFiuuDescription } from './orderId.js';
 import { buildPaymentVcode, formatFiuuAmount } from './signature.js';
 import { attachPayLinkToMetadata, buildFiuuPublicPayPageUrl } from './payLink.js';
-import { sendFiuuPaymentLinkEmail } from './sendFiuuPaymentLinkEmail.js';
+import { sendFiuuPaymentLinkEmail, loadBranchForPayEmail } from './sendFiuuPaymentLinkEmail.js';
 import { normalizeNotificationRecipients } from '../../utils/emailService.js';
 
 const FIUU_AR_PAYMENT_METHOD = 'FIUU Online';
@@ -40,6 +40,10 @@ export async function createFiuuArPayment({
   userBranchId = null,
   send_email = false,
   recipient_email,
+  pay_link_expires_on,
+  disable_after_payment = true,
+  send_copy_to_me = false,
+  staff_email,
 }) {
   if (!isFiuuConfigured()) {
     throw httpError('FIUU is not configured on the server', 503);
@@ -308,15 +312,21 @@ export async function createFiuuArPayment({
     if (notifyUrl) formFields.notifyurl = notifyUrl;
     if (callbackUrl) formFields.callbackurl = callbackUrl;
 
-    const metadata = attachPayLinkToMetadata({
-      channel: fiuuChannel,
-      payment_type: 'AR',
-      ar_type: arType,
-      ack_receipt_id: ackId,
-      tip_amount,
-      discount_amount: discountValue,
-      charge_amount: chargeAmt,
-    });
+    const metadata = attachPayLinkToMetadata(
+      {
+        channel: fiuuChannel,
+        payment_type: 'AR',
+        ar_type: arType,
+        ack_receipt_id: ackId,
+        tip_amount,
+        discount_amount: discountValue,
+        charge_amount: chargeAmt,
+      },
+      {
+        expiresOnYmd: pay_link_expires_on,
+        disableAfterPayment: disable_after_payment !== false,
+      }
+    );
     let payLinkUrl = null;
     try {
       payLinkUrl = buildFiuuPublicPayPageUrl(metadata.pay_link_token);
@@ -351,13 +361,26 @@ export async function createFiuuArPayment({
     let emailResult = null;
     if (send_email) {
       const recipients = resolveArPayLinkRecipients(recipient_email, prospect_student_email);
+      const branch = await loadBranchForPayEmail(branchId);
       emailResult = await sendFiuuPaymentLinkEmail({
         to: recipients,
         payLinkUrl,
         amount: chargeAmt,
         studentName: prospect_student_name || 'Client',
         refLabel: ackReceipt.ack_receipt_number || `AR-${ackId}`,
-        description,
+        itemDescription:
+          arType === 'Merchandise'
+            ? 'Merchandise (acknowledgement receipt)'
+            : packageNameSnapshot || 'Package (acknowledgement receipt)',
+        orderid,
+        paymentTypeLabel: `Acknowledgement Receipt — ${arType}`,
+        branch,
+        tipAmount: tip_amount,
+        discountAmount: discountValue,
+        expiresAt: metadata.pay_link_expires_at
+          ? String(metadata.pay_link_expires_at).slice(0, 10)
+          : '',
+        ccEmails: send_copy_to_me && staff_email ? [staff_email] : [],
       });
     }
 

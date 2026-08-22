@@ -38,12 +38,22 @@ Sandbox / demo testing: see `docs/FIUU_SANDBOX_ACCESS_GUIDE.md`.
 | GET | `/api/sms/payments/fiuu/config` | Admin, Superadmin |
 | POST | `/api/sms/payments/fiuu/create` | Admin, Superadmin |
 | POST | `/api/sms/payments/fiuu/create-ar` | Admin, Superadmin |
+| POST | `/api/sms/payments/fiuu/preview-email` | Admin, Superadmin |
 | GET | `/api/sms/payments/fiuu/status/:orderid` | Admin, Superadmin |
 
-Create body extras:
+Create / preview body extras:
 
-- `send_email: true` — email pay link that opens FIUU via `GET .../payments/fiuu/go/:token` (HTML auto-POST)
-- `recipient_email` — optional override (otherwise guardian/student or AR client email)
+- `send_email`, `recipient_email`
+- `pay_link_expires_on` (YYYY-MM-DD) — Advanced settings expiry (optional; blank → 7-day default)
+- `disable_after_payment` (UI default off; when on, paid links do not re-open FIUU)
+
+## Advanced settings (staff UI)
+
+Collapsible on `FiuuPayOnlinePanel`:
+
+1. **Expiry Date** — stored as `metadata.pay_link_expires_at` (end of chosen day)
+2. **Disable Payment Link After Payment** — after webhook paid (or expiry), `/go/:token` shows already-paid / expired instead of FIUU form
+3. **Preview** — `POST /preview-email` returns HTML (no send, no gateway row)
 
 ## API (public, no Firebase)
 
@@ -63,7 +73,7 @@ Same as before: `/api/webhooks/fiuu/notify|callback|return`.
 ## Files
 
 - `payLink.js` — token + public pay URL helpers
-- `sendFiuuPaymentLinkEmail.js` — guardian payment-link email
+- `sendFiuuPaymentLinkEmail.js` — guardian payment-link email (branch header + payment summary + Pay button; invoice & AR)
 - `createFiuuArPayment.js` / `applyGatewayArPayment.js` — AR create + verify
 - `applyGatewayInvoicePayment.js` — invoice paid after success
 - `fiuuPaymentService.js` — orchestration

@@ -27,6 +27,8 @@ export async function createFiuuInvoicePayment({
   channel,
   send_email = false,
   recipient_email,
+  pay_link_expires_on,
+  disable_after_payment,
 }) {
   const res = await apiRequest('/payments/fiuu/create', {
     method: 'POST',
@@ -36,6 +38,9 @@ export async function createFiuuInvoicePayment({
       channel,
       send_email: Boolean(send_email),
       recipient_email: recipient_email || undefined,
+      pay_link_expires_on: pay_link_expires_on || undefined,
+      disable_after_payment:
+        disable_after_payment === undefined ? undefined : Boolean(disable_after_payment),
     }),
   });
   return res.data;
@@ -44,6 +49,15 @@ export async function createFiuuInvoicePayment({
 /** Merchandise / Package AR create → pending AR + FIUU (optional email link). */
 export async function createFiuuArPayment(body) {
   const res = await apiRequest('/payments/fiuu/create-ar', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  return res.data;
+}
+
+/** Preview payment-link email HTML (no send). */
+export async function previewFiuuPaymentEmail(body) {
+  const res = await apiRequest('/payments/fiuu/preview-email', {
     method: 'POST',
     body: JSON.stringify(body),
   });

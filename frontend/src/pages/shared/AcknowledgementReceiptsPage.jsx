@@ -4330,6 +4330,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             mode="ar"
                             amount={arCreateNetPayable()}
                             defaultEmail={(createFormData.prospect_student_email || '').trim()}
+                            branchId={createFormData.branch_id || userBranchId}
                             arPayloadBuilder={buildArFiuuCreatePayload}
                             onPaid={handleFiuuArPaymentSuccess}
                             onLinkSent={handleFiuuArLinkSent}
@@ -4809,6 +4810,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             mode="ar"
                             amount={arCreateNetPayable()}
                             defaultEmail={(createFormData.prospect_student_email || '').trim()}
+                            branchId={createFormData.branch_id || userBranchId}
                             arPayloadBuilder={buildArFiuuCreatePayload}
                             onPaid={handleFiuuArPaymentSuccess}
                             onLinkSent={handleFiuuArLinkSent}

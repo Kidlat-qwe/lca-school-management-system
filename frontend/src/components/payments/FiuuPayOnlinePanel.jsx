@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { appAlert } from '../../utils/appAlert';
 import {
   createFiuuInvoicePayment,
   createFiuuArPayment,
+  previewFiuuPaymentEmail,
   pollFiuuPaymentStatus,
   submitFiuuPaymentForm,
 } from '../../utils/fiuuPayment';
@@ -25,6 +26,7 @@ export default function FiuuPayOnlinePanel({
   studentId,
   amount: amountProp,
   defaultEmail = '',
+  branchId = null,
   arPayloadBuilder,
   onPaid,
   onLinkSent,
@@ -38,11 +40,24 @@ export default function FiuuPayOnlinePanel({
   const [payLinkUrl, setPayLinkUrl] = useState('');
   const [recipientEmail, setRecipientEmail] = useState(defaultEmail || '');
   const [error, setError] = useState('');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Empty = use server default TTL (7 days); staff can set a date when needed.
+  const [expiryDate, setExpiryDate] = useState('');
+  const [disableAfterPayment, setDisableAfterPayment] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const pollAbort = useRef(false);
 
   const remaining = isAr
     ? Number(amountProp ?? 0)
     : Number(invoice?.amount ?? 0);
+
+  const linkOptions = useMemo(
+    () => ({
+      pay_link_expires_on: expiryDate || undefined,
+      disable_after_payment: disableAfterPayment,
+    }),
+    [expiryDate, disableAfterPayment]
+  );
 
   useEffect(() => {
     setRecipientEmail(defaultEmail || '');
@@ -81,6 +96,7 @@ export default function FiuuPayOnlinePanel({
             ...body,
             send_email: Boolean(sendEmail),
             recipient_email: sendEmail ? (recipientEmail || undefined) : undefined,
+            ...linkOptions,
           });
         } else {
           if (!invoice?.invoice_id || !studentId) {
@@ -98,6 +114,7 @@ export default function FiuuPayOnlinePanel({
             student_id: parseInt(studentId, 10),
             send_email: Boolean(sendEmail),
             recipient_email: sendEmail ? recipientEmail.trim() : undefined,
+            ...linkOptions,
           });
         }
 
@@ -154,10 +171,85 @@ export default function FiuuPayOnlinePanel({
       invoice?.invoice_id,
       studentId,
       recipientEmail,
+      linkOptions,
       onPaid,
       onLinkSent,
     ]
   );
+
+  const handlePreview = useCallback(async () => {
+    if (!(recipientEmail || '').trim()) {
+      appAlert('Enter the guardian/client email before preview.');
+      return;
+    }
+    setPreviewLoading(true);
+    setError('');
+    try {
+      let payload;
+      if (isAr) {
+        if (typeof arPayloadBuilder !== 'function') {
+          appAlert('Unable to preview AR payment email.');
+          return;
+        }
+        const body = arPayloadBuilder();
+        if (!body) return;
+        payload = {
+          mode: 'ar',
+          recipient_email: recipientEmail.trim(),
+          amount: remaining,
+          student_name: body.prospect_student_name,
+          ref_label: 'AR preview',
+          item_description:
+            body.ar_type === 'Merchandise'
+              ? 'Merchandise (acknowledgement receipt)'
+              : 'Package (acknowledgement receipt)',
+          branch_id: body.branch_id || branchId,
+          tip_amount: body.tip_amount || 0,
+          discount_amount: body.discount_amount || 0,
+          ...linkOptions,
+        };
+      } else {
+        if (!invoice?.invoice_id || !studentId) {
+          appAlert('Select a student before preview.');
+          return;
+        }
+        payload = {
+          mode: 'invoice',
+          invoice_id: invoice.invoice_id,
+          student_id: parseInt(studentId, 10),
+          recipient_email: recipientEmail.trim(),
+          ...linkOptions,
+        };
+      }
+      const data = await previewFiuuPaymentEmail(payload);
+      const w = window.open('', '_blank', 'noopener,noreferrer');
+      if (w) {
+        w.document.open();
+        w.document.write(data.html || '<p>No preview</p>');
+        w.document.close();
+      } else {
+        appAlert('Popup blocked. Allow popups to preview the email.');
+      }
+    } catch (err) {
+      const msg = err?.message || 'Could not preview email.';
+      setError(msg);
+      appAlert(msg);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [
+    isAr,
+    arPayloadBuilder,
+    recipientEmail,
+    remaining,
+    branchId,
+    invoice?.invoice_id,
+    studentId,
+    linkOptions,
+  ]);
+
+  const controlsDisabled =
+    phase === 'creating' || phase === 'waiting' || phase === 'link_sent';
 
   return (
     <div className="space-y-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
@@ -193,7 +285,7 @@ export default function FiuuPayOnlinePanel({
           value={recipientEmail}
           onChange={(e) => setRecipientEmail(e.target.value)}
           placeholder="guardian@example.com"
-          disabled={phase === 'creating' || phase === 'waiting' || phase === 'link_sent'}
+          disabled={controlsDisabled}
           className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
         />
         <p className="mt-1 text-xs text-gray-500">
@@ -201,6 +293,62 @@ export default function FiuuPayOnlinePanel({
             ? 'Defaults from the client email on Step 1 when provided.'
             : 'Defaults from guardian/student record when available; you can edit before sending.'}
         </p>
+      </div>
+
+      <div className="rounded-md border border-slate-200 bg-slate-50 overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-3 py-2.5 text-left text-sm font-medium text-sky-800 hover:bg-slate-100"
+          disabled={controlsDisabled}
+        >
+          <span>Advanced settings</span>
+          <span className="text-slate-500" aria-hidden>
+            {advancedOpen ? '∧' : '∨'}
+          </span>
+        </button>
+        {advancedOpen ? (
+          <div className="border-t border-slate-200 bg-white px-3 py-3 space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-800 mb-1">Expiry Date</label>
+              <input
+                type="date"
+                value={expiryDate}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setExpiryDate(e.target.value)}
+                disabled={controlsDisabled}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Optional. Leave blank to use the default link lifetime (7 days). If set, the link
+                stops working after this date (shown in the email).
+              </p>
+            </div>
+            <label className="flex items-start gap-2 text-sm text-gray-800 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={disableAfterPayment}
+                onChange={(e) => setDisableAfterPayment(e.target.checked)}
+                disabled={controlsDisabled}
+              />
+              <span>
+                <span className="font-semibold">Disable Payment Link After Payment</span>
+                <span className="block text-xs text-gray-500 font-normal">
+                  After FIUU confirms payment, the link shows as already paid (recommended).
+                </span>
+              </span>
+            </label>
+            <button
+              type="button"
+              onClick={handlePreview}
+              disabled={controlsDisabled || previewLoading || remaining <= 0}
+              className="w-full rounded-md bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {previewLoading ? 'Preparing preview…' : 'Preview'}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {orderid ? (

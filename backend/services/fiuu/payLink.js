@@ -22,8 +22,35 @@ export function buildPayLinkExpiry(ttlMs = DEFAULT_LINK_TTL_MS) {
 }
 
 /**
- * Public URL for email "Pay now" — hits API bridge that immediately POSTs to FIUU.
+ * Parse staff-chosen expiry date (YYYY-MM-DD) to ISO end-of-day UTC-ish (23:59:59.999 local interpretation as date).
+ * Falls back to default TTL when empty/invalid.
  */
+export function resolvePayLinkExpiresAt(expiresOnYmd) {
+  const raw = String(expiresOnYmd || '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const end = new Date(`${raw}T23:59:59.999`);
+    if (!Number.isNaN(end.getTime()) && end.getTime() > Date.now() - 60_000) {
+      return end.toISOString();
+    }
+  }
+  return buildPayLinkExpiry();
+}
+
+export function attachPayLinkToMetadata(
+  metadata = {},
+  { token, expiresAt, expiresOnYmd, disableAfterPayment = true } = {}
+) {
+  const pay_link_token = token || generatePayLinkToken();
+  const pay_link_expires_at = expiresAt || resolvePayLinkExpiresAt(expiresOnYmd);
+  return {
+    ...metadata,
+    pay_link_token,
+    pay_link_expires_at,
+    disable_after_payment: disableAfterPayment !== false,
+  };
+}
+
+/** Public URL for email "Pay now" — hits API bridge that immediately POSTs to FIUU. */
 export function buildFiuuPublicPayPageUrl(token) {
   const apiBase = String(getFiuuPublicApiBaseUrl() || '').replace(/\/$/, '');
   if (!apiBase) {
@@ -35,16 +62,6 @@ export function buildFiuuPublicPayPageUrl(token) {
     );
   }
   return `${apiBase}/payments/fiuu/go/${encodeURIComponent(token)}`;
-}
-
-export function attachPayLinkToMetadata(metadata = {}, { token, expiresAt } = {}) {
-  const pay_link_token = token || generatePayLinkToken();
-  const pay_link_expires_at = expiresAt || buildPayLinkExpiry();
-  return {
-    ...metadata,
-    pay_link_token,
-    pay_link_expires_at,
-  };
 }
 
 export async function findGatewayPaymentByPayToken(token) {
@@ -87,6 +104,7 @@ export function buildPublicPayPayload(row) {
 
   const status = String(row.status || 'pending');
   const expired = status === 'pending' && isPayLinkExpired(row);
+  const disableAfterPayment = row.metadata?.disable_after_payment !== false;
   let formFields = row.raw_request;
   if (typeof formFields === 'string') {
     try {
@@ -105,6 +123,10 @@ export function buildPublicPayPayload(row) {
       ? `${getFiuuPayBaseUrl()}${merchantId}/${channelPath}`
       : null;
 
+  // Only pending, non-expired links open FIUU. Paid/expired always show a status page
+  // (disable_after_payment is stored for email copy / future policy; default blocks reopen).
+  const openOk = status === 'pending' && !expired;
+
   return {
     orderid: row.orderid,
     status: expired ? 'expired' : status,
@@ -114,9 +136,10 @@ export function buildPublicPayPayload(row) {
     target_type: row.target_type,
     invoice_id: row.invoice_id || null,
     ack_receipt_id: String(row.target_type || '') === 'ack_receipt' ? row.target_id : null,
-    payUrl: status === 'pending' && !expired ? payUrl : null,
-    formFields: status === 'pending' && !expired ? formFields : null,
+    payUrl: openOk ? payUrl : null,
+    formFields: openOk ? formFields : null,
     expires_at: row.metadata?.pay_link_expires_at || null,
+    disable_after_payment: disableAfterPayment,
   };
 }
 
