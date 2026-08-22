@@ -175,8 +175,9 @@ app.use(`${API_VERSION}/installment-invoices`, installmentInvoicesRoutes);
 app.use(`${API_VERSION}/acknowledgement-receipts`, acknowledgementReceiptsRoutes);
 app.use(`${API_VERSION}/guardians`, guardiansRoutes);
 app.use(`${API_VERSION}/phasesessions`, phasesessionsRoutes);
-app.use(`${API_VERSION}/payments`, paymentsRoutes);
+// FIUU must mount before /payments — payments.js applies verifyFirebaseToken to all /payments/*
 app.use(`${API_VERSION}/payments/fiuu`, fiuuPaymentsRoutes);
+app.use(`${API_VERSION}/payments`, paymentsRoutes);
 app.use(`${API_VERSION}/reservations`, reservationsRoutes);
 app.use(`${API_VERSION}/dashboard`, dashboardRoutes);
 app.use(`${API_VERSION}/calendar`, calendarRoutes);

@@ -52,6 +52,8 @@ Create body extras:
 | GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — HTML auto-POSTs to FIUU (same tab) |
 | GET | `/api/sms/payments/fiuu/public/:token` | JSON payload (optional CMS landing / diagnostics) |
 
+`server.js` mounts `/payments/fiuu` **before** `/payments` so public `go`/`public` are not blocked by payments Firebase auth.
+
 Optional CMS route `/pay/fiuu/:token` remains for diagnostics; **emails use the API `/go/:token` URL**.
 
 ## Webhooks (no Firebase auth)
