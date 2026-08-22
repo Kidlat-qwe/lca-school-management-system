@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { appAlert } from '../../utils/appAlert';
 import {
   createFiuuInvoicePayment,
+  createFiuuArPayment,
   pollFiuuPaymentStatus,
   submitFiuuPaymentForm,
 } from '../../utils/fiuuPayment';
@@ -12,14 +13,20 @@ const formatCurrency = (value) => {
 };
 
 /**
- * Staff-assisted FIUU QRPH payment panel for invoice full balance.
+ * Staff-assisted FIUU QRPH payment panel.
+ * mode="invoice" (default): full invoice balance.
+ * mode="ar": Merchandise/Package AR create (onStart builds body via createFiuuArPayment).
  */
 export default function FiuuPayOnlinePanel({
+  mode = 'invoice',
   invoice,
   studentId,
+  amount: amountProp,
+  arPayloadBuilder,
   onPaid,
   onCancel,
 }) {
+  const isAr = mode === 'ar';
   const [phase, setPhase] = useState('idle');
   const [orderid, setOrderid] = useState('');
   const [description, setDescription] = useState('');
@@ -27,7 +34,9 @@ export default function FiuuPayOnlinePanel({
   const [error, setError] = useState('');
   const pollAbort = useRef(false);
 
-  const remaining = Number(invoice?.amount ?? 0);
+  const remaining = isAr
+    ? Number(amountProp ?? 0)
+    : Number(invoice?.amount ?? 0);
 
   useEffect(() => {
     pollAbort.current = false;
@@ -37,17 +46,33 @@ export default function FiuuPayOnlinePanel({
   }, []);
 
   const startPayment = useCallback(async () => {
-    if (!invoice?.invoice_id || !studentId) {
-      appAlert('Select a student before paying via FIUU.');
-      return;
-    }
     setError('');
     setPhase('creating');
     try {
-      const data = await createFiuuInvoicePayment({
-        invoice_id: invoice.invoice_id,
-        student_id: parseInt(studentId, 10),
-      });
+      let data;
+      if (isAr) {
+        if (typeof arPayloadBuilder !== 'function') {
+          appAlert('Unable to start FIUU AR payment.');
+          setPhase('error');
+          return;
+        }
+        const body = arPayloadBuilder();
+        if (!body) {
+          setPhase('idle');
+          return;
+        }
+        data = await createFiuuArPayment(body);
+      } else {
+        if (!invoice?.invoice_id || !studentId) {
+          appAlert('Select a student before paying via FIUU.');
+          setPhase('idle');
+          return;
+        }
+        data = await createFiuuInvoicePayment({
+          invoice_id: invoice.invoice_id,
+          student_id: parseInt(studentId, 10),
+        });
+      }
       setOrderid(data.orderid);
       setDescription(data.description || '');
       setAmount(data.amount);
@@ -57,7 +82,14 @@ export default function FiuuPayOnlinePanel({
       if (pollAbort.current) return;
       if (status.status === 'paid') {
         setPhase('paid');
-        onPaid?.({ orderid: data.orderid, payment_id: status.payment_id, amount: data.amount });
+        onPaid?.({
+          orderid: data.orderid,
+          payment_id: status.payment_id,
+          amount: data.amount,
+          ack_receipt_id: data.ack_receipt_id,
+          ack_receipt_number: data.ack_receipt_number,
+          ar_type: data.ar_type,
+        });
       }
     } catch (err) {
       if (pollAbort.current) return;
@@ -66,15 +98,20 @@ export default function FiuuPayOnlinePanel({
       setPhase('error');
       appAlert(msg);
     }
-  }, [invoice?.invoice_id, studentId, onPaid]);
+  }, [isAr, arPayloadBuilder, invoice?.invoice_id, studentId, onPaid]);
 
   return (
     <div className="space-y-4 rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
       <div>
-        <h3 className="text-sm font-semibold text-indigo-900">Pay via FIUU (QRPH)</h3>
+        <h3 className="text-sm font-semibold text-indigo-900">
+          {isAr ? 'AR payment (FIUU)' : 'Pay via FIUU (QRPH)'}
+        </h3>
         <p className="mt-1 text-xs text-indigo-800/90">
           Opens FIUU in a new tab. Parent scans with GCash, Maya, or any QR Ph app. CMS updates
           automatically when payment succeeds.
+          {isAr
+            ? ' No attachment is required. The acknowledgement receipt is verified after FIUU confirms payment.'
+            : ''}
         </p>
       </div>
 
@@ -85,7 +122,9 @@ export default function FiuuPayOnlinePanel({
         </div>
         <div>
           <span className="text-gray-500 text-xs">Payment type</span>
-          <p className="font-medium text-gray-900">Full Payment (FIUU)</p>
+          <p className="font-medium text-gray-900">
+            {isAr ? 'Acknowledgement receipt (FIUU)' : 'Full Payment (FIUU)'}
+          </p>
         </div>
       </div>
 
@@ -114,7 +153,8 @@ export default function FiuuPayOnlinePanel({
 
       {phase === 'paid' ? (
         <div className="text-sm text-green-800 bg-green-50 border border-green-200 rounded-md px-3 py-2">
-          Payment received ({formatCurrency(amount || remaining)}). Invoice will refresh.
+          Payment received ({formatCurrency(amount || remaining)}).{' '}
+          {isAr ? 'Acknowledgement receipt will refresh.' : 'Invoice will refresh.'}
         </div>
       ) : null}
 

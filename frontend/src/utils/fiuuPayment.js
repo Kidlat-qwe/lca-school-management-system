@@ -1,7 +1,7 @@
 import { apiRequest } from '../config/api';
 
 /**
- * Show Pay via FIUU on Record Payment (Admin/Superadmin).
+ * Show Pay via FIUU on Record Payment and AR Create Step 2 (Admin/Superadmin).
  * Set false to hide the tab while FIUU UAT is paused.
  */
 export const FIUU_PAYMENT_UI_ENABLED = true;
@@ -18,6 +18,15 @@ export async function createFiuuInvoicePayment({ invoice_id, student_id, channel
   const res = await apiRequest('/payments/fiuu/create', {
     method: 'POST',
     body: JSON.stringify({ invoice_id, student_id, channel }),
+  });
+  return res.data;
+}
+
+/** Merchandise / Package AR create → pending AR + FIUU hosted pay. */
+export async function createFiuuArPayment(body) {
+  const res = await apiRequest('/payments/fiuu/create-ar', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
   return res.data;
 }

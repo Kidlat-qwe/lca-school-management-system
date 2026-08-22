@@ -60,7 +60,13 @@ import {
 import { createLcgtEventArInvoiceAndPayment } from '../lib/lcgtEventArInvoice.js';
 
 const router = express.Router();
-const ALLOWED_AR_PAYMENT_METHODS = ['Cash', 'Online Banking', 'Credit Card', 'E-wallets'];
+const ALLOWED_AR_PAYMENT_METHODS = [
+  'Cash',
+  'Online Banking',
+  'Credit Card',
+  'E-wallets',
+  'FIUU Online',
+];
 
 /**
  * AR is fully consumed when it has a payment or is Applied to a different invoice.

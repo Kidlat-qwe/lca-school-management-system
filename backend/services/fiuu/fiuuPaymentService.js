@@ -26,11 +26,13 @@ import {
   applyGatewayInvoiceFullPayment,
   runPostCommitInstallmentJobs,
 } from './applyGatewayInvoicePayment.js';
+import { applyGatewayArPayment } from './applyGatewayArPayment.js';
+import { createFiuuArPayment } from './createFiuuArPayment.js';
 import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentEligibility.js';
 import { getClient } from '../../config/database.js';
 import { sendInvoicePaymentConfirmationByInvoiceId } from '../../utils/paymentConfirmationEmailService.js';
 
-export { isFiuuConfigured };
+export { isFiuuConfigured, createFiuuArPayment };
 
 export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
   const invRes = await query(
@@ -178,12 +180,22 @@ export async function getFiuuPaymentStatus(orderid) {
     amount: row.amount,
     fiuu_tran_id: row.fiuu_tran_id,
     fiuu_channel: row.fiuu_channel,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    ack_receipt_id:
+      String(row.target_type || '') === 'ack_receipt' ? row.target_id : undefined,
   };
 }
 
 async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
-  if (gatewayRow.status === 'paid' && gatewayRow.payment_id) {
-    return { alreadyProcessed: true, payment_id: gatewayRow.payment_id };
+  const isAckReceipt = String(gatewayRow.target_type || '') === 'ack_receipt';
+  if (gatewayRow.status === 'paid' && (gatewayRow.payment_id || isAckReceipt)) {
+    return {
+      alreadyProcessed: true,
+      payment_id: gatewayRow.payment_id,
+      ack_receipt_id: isAckReceipt ? gatewayRow.target_id : undefined,
+      invoice_id: gatewayRow.invoice_id,
+    };
   }
 
   const tranID = String(webhookPayload.tranID ?? '').trim();
@@ -197,39 +209,57 @@ async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
     );
     const current = locked.rows[0];
     if (!current) throw new Error('Gateway payment not found');
-    if (current.status === 'paid' && current.payment_id) {
-      applyResult = { alreadyProcessed: true, payment_id: current.payment_id };
+    const currentIsAck = String(current.target_type || '') === 'ack_receipt';
+    if (current.status === 'paid' && (current.payment_id || currentIsAck)) {
+      applyResult = {
+        alreadyProcessed: true,
+        payment_id: current.payment_id,
+        ack_receipt_id: currentIsAck ? current.target_id : undefined,
+        invoice_id: current.invoice_id,
+      };
       return;
     }
 
-    applyResult = await applyGatewayInvoiceFullPayment(client, {
-      invoice_id: current.invoice_id,
-      student_id: current.student_id,
-      payable_amount: current.amount,
-      reference_number: tranID,
-      payment_method: 'FIUU Online',
-      fiuu_channel: channel || getFiuuDefaultChannel(),
-      created_by: current.created_by,
-      issue_date: new Date(),
-      remarks: current.description_sent,
-    });
+    if (currentIsAck) {
+      applyResult = await applyGatewayArPayment(client, {
+        ack_receipt_id: current.target_id,
+        reference_number: tranID,
+        fiuu_channel: channel || getFiuuDefaultChannel(),
+        created_by: current.created_by,
+        issue_date: new Date().toISOString().slice(0, 10),
+      });
+    } else {
+      applyResult = await applyGatewayInvoiceFullPayment(client, {
+        invoice_id: current.invoice_id,
+        student_id: current.student_id,
+        payable_amount: current.amount,
+        reference_number: tranID,
+        payment_method: 'FIUU Online',
+        fiuu_channel: channel || getFiuuDefaultChannel(),
+        created_by: current.created_by,
+        issue_date: new Date(),
+        remarks: current.description_sent,
+      });
+    }
 
     await client.query(
       `UPDATE gateway_paymentstbl
        SET status = 'paid', fiuu_tran_id = $1, fiuu_channel = $2, raw_webhook = $3,
-           payment_id = $4, paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-       WHERE gateway_payment_id = $5`,
+           payment_id = $4, invoice_id = COALESCE($5, invoice_id),
+           paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE gateway_payment_id = $6`,
       [
         tranID || null,
         channel || null,
         JSON.stringify(webhookPayload),
-        applyResult.payment_id,
+        applyResult.payment_id || null,
+        applyResult.invoice_id || null,
         current.gateway_payment_id,
       ]
     );
   });
 
-  if (applyResult && !applyResult.alreadyProcessed) {
+  if (applyResult && !applyResult.alreadyProcessed && !isAckReceipt) {
     await runPostCommitInstallmentJobs(applyResult);
     (async () => {
       try {

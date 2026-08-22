@@ -40,6 +40,8 @@ import { resolveAckReceiptLeaderPair } from '../../utils/enrollmentAckReceiptLis
 import { PaymentDiscountField } from '../../components/common/PaymentAdjustmentFields';
 import PaymentMethodSelect from '../../components/common/PaymentMethodSelect';
 import PaymentReferenceNumberField from '../../components/common/PaymentReferenceNumberField';
+import FiuuPayOnlinePanel from '../../components/payments/FiuuPayOnlinePanel';
+import { FIUU_PAYMENT_UI_ENABLED, fetchFiuuConfig } from '../../utils/fiuuPayment';
 import {
   isPaymentMethodSelected,
   PAYMENT_METHOD_OPTIONS,
@@ -297,6 +299,9 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   const [branchModalStep, setBranchModalStep] = useState(1);
   /** Package / Merchandise AR create wizard: 1 = details, 2 = payment */
   const [arCreateStep, setArCreateStep] = useState(1);
+  /** Step 2 entry: manual payment vs Pay via FIUU */
+  const [arCreatePaymentMode, setArCreatePaymentMode] = useState('manual');
+  const [fiuuEnabled, setFiuuEnabled] = useState(false);
   const [arType, setArType] = useState('');
   const [selectedPackage, setSelectedPackage] = useState(null);
   const [merchandiseSelections, setMerchandiseSelections] = useState([]);
@@ -662,6 +667,24 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
   }, [searchTerm]);
 
   useEffect(() => {
+    if (!showCreateModal || !FIUU_PAYMENT_UI_ENABLED) {
+      setFiuuEnabled(false);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchFiuuConfig()
+      .then((cfg) => {
+        if (!cancelled) setFiuuEnabled(Boolean(cfg?.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setFiuuEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showCreateModal]);
+
+  useEffect(() => {
     if (!statusHydratedRef.current) {
       statusHydratedRef.current = true;
       return;
@@ -753,6 +776,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setSelectedPackage(null);
     setMerchandiseSelections([]);
     setArCreateStep(1);
+    setArCreatePaymentMode('manual');
     setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData({
       prospect_student_name: '',
@@ -1089,6 +1113,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
     setSelectedPackage(null);
     setMerchandiseSelections(newType === 'Merchandise' ? [createEmptyMerchandiseRow()] : []);
     setArCreateStep(1);
+    setArCreatePaymentMode('manual');
     setEventParticipantType(LCGT_EVENT_PARTICIPANT_TYPES.STUDENT);
     setCreateFormData((prev) => ({
       ...prev,
@@ -1143,6 +1168,189 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
       return sum + price * (sel.quantity || 1);
     }, 0);
   };
+
+  const arCreateGrossPayable = () => {
+    if (arType === 'Merchandise') return merchandiseTotalAmount();
+    if (arType === 'Package') return parseFloat(createFormData.payment_amount || 0) || 0;
+    return 0;
+  };
+
+  const arCreateNetPayable = () => {
+    const gross = arCreateGrossPayable();
+    const discount =
+      createFormData.discount_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(createFormData.discount_amount) || 0);
+    const tip =
+      createFormData.tip_amount === ''
+        ? 0
+        : Math.max(0, parseFloat(createFormData.tip_amount) || 0);
+    return Math.max(0, gross - discount + tip);
+  };
+
+  const arFiuuBlockedForInstallmentSplit =
+    arType === 'Package' && createFormData.installment_option === 'downpayment_plus_phase1';
+
+  const showArFiuuTab =
+    FIUU_PAYMENT_UI_ENABLED &&
+    fiuuEnabled &&
+    (arType === 'Merchandise' || arType === 'Package') &&
+    arCreateStep === 2 &&
+    !arFiuuBlockedForInstallmentSplit;
+
+  const buildArFiuuCreatePayload = useCallback(() => {
+    const branchId =
+      isSuperadmin && selectedBranchId
+        ? parseInt(selectedBranchId, 10)
+        : !isSuperadmin && userBranchId
+          ? userBranchId
+          : null;
+    const tip =
+      createFormData.tip_amount === ''
+        ? undefined
+        : Math.max(0, parseFloat(createFormData.tip_amount || '0'));
+    const discount =
+      createFormData.discount_amount === ''
+        ? undefined
+        : Math.max(0, parseFloat(createFormData.discount_amount || '0'));
+    const issue_date = (createFormData.issue_date || '').trim() || todayManilaYMD();
+
+    if (!(createFormData.issue_date || '').trim()) {
+      appAlert(arType === 'Merchandise' ? 'Payment date is required' : 'Issue date is required');
+      return null;
+    }
+
+    if (arType === 'Merchandise') {
+      const merchandise_items = merchandiseSelections
+        .filter((s) => s.selectedMerchandiseId)
+        .map((s) => ({
+          merchandise_id: s.selectedMerchandiseId,
+          quantity: s.quantity || 1,
+        }));
+      if (merchandise_items.length === 0) {
+        appAlert('Select at least one merchandise item.');
+        return null;
+      }
+      const payload = {
+        ar_type: 'Merchandise',
+        prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+        prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+        prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
+        prospect_student_notes: (createFormData.prospect_student_notes || '').trim() || undefined,
+        level_tag: (createFormData.level_tag || '').trim() || undefined,
+        merchandise_items,
+        tip_amount: tip,
+        discount_amount: discount === 0 ? undefined : discount,
+        issue_date,
+        branch_id: branchId,
+      };
+      if (!payload.level_tag) delete payload.level_tag;
+      if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
+      return payload;
+    }
+
+    if (arType === 'Package') {
+      if (!createFormData.package_id) {
+        appAlert('Package is required.');
+        return null;
+      }
+      const isInstallmentPkg =
+        !!selectedPackage &&
+        ((selectedPackage.package_type || '').toLowerCase() === 'installment' ||
+          (selectedPackage.package_type === 'Phase' &&
+            (selectedPackage.payment_option || '').toLowerCase() === 'installment'));
+      const payload = {
+        ar_type: 'Package',
+        prospect_student_name: (createFormData.prospect_student_name || '').trim(),
+        prospect_student_contact: (createFormData.prospect_student_contact || '').trim(),
+        prospect_student_email: (createFormData.prospect_student_email || '').trim() || undefined,
+        prospect_student_phone: (createFormData.prospect_student_phone || '').trim(),
+        prospect_student_notes: (createFormData.prospect_student_notes || '').trim() || undefined,
+        level_tag: (createFormData.level_tag || '').trim() || undefined,
+        package_id: parseInt(createFormData.package_id, 10),
+        tip_amount: tip,
+        discount_amount: discount === 0 ? undefined : discount,
+        issue_date,
+        branch_id: branchId,
+        installment_option: isInstallmentPkg
+          ? createFormData.installment_option || 'downpayment_only'
+          : undefined,
+      };
+      if (!payload.level_tag) delete payload.level_tag;
+      if (!payload.prospect_student_notes) delete payload.prospect_student_notes;
+      if (!payload.installment_option) delete payload.installment_option;
+      return payload;
+    }
+
+    appAlert('FIUU is only available for Merchandise and Package acknowledgement receipts.');
+    return null;
+  }, [
+    arType,
+    createFormData,
+    merchandiseSelections,
+    selectedPackage,
+    isSuperadmin,
+    selectedBranchId,
+    userBranchId,
+  ]);
+
+  const handleFiuuArPaymentSuccess = useCallback(
+    async ({ ack_receipt_id, ar_type: paidArType }) => {
+      try {
+        setShowCreateModal(false);
+        const ackId = ack_receipt_id;
+        if (!ackId) {
+          appAlert('FIUU payment succeeded. Refresh the list to see the acknowledgement receipt.');
+          await fetchReceipts(1);
+          resetCreateForm();
+          return;
+        }
+        const response = await apiRequest(`/acknowledgement-receipts/${ackId}`);
+        const created = response?.data;
+        if (!created?.ack_receipt_id) {
+          appAlert('FIUU payment succeeded.');
+          await fetchReceipts(1);
+          resetCreateForm();
+          return;
+        }
+        const isMerch = (paidArType || created.ar_type) === 'Merchandise';
+        if (isMerch) {
+          let invoiceArNumber = null;
+          if (created.invoice_id) {
+            try {
+              const invRes = await apiRequest(`/invoices/${created.invoice_id}`);
+              invoiceArNumber = invRes?.data?.invoice_ar_number ?? null;
+            } catch (fetchInvErr) {
+              console.error('Could not load invoice for AR summary modal:', fetchInvErr);
+            }
+          }
+          setMerchandiseArCreatedSummary({
+            receipt: created,
+            invoiceId: created.invoice_id ? Number(created.invoice_id) : null,
+            invoiceArNumber,
+            summaryMessage:
+              'Merchandise acknowledgement receipt paid via FIUU. Invoice is marked Paid, payment recorded, and stock updated.',
+          });
+        } else {
+          setPackageArCreatedSummary({
+            receipt: created,
+            pairedReceipt: created.paired_acknowledgement_receipt || null,
+            summaryMessage: 'Package acknowledgement receipt paid via FIUU and verified.',
+          });
+        }
+        resetCreateForm();
+        await fetchReceipts(1);
+      } catch (err) {
+        console.error('FIUU AR success refresh failed:', err);
+        appAlert(err.message || 'Payment succeeded but the receipt could not be loaded. Refresh the list.');
+        resetCreateForm();
+        await fetchReceipts(1);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   const addMerchandiseRow = () => {
     setMerchandiseSelections((prev) => [...prev, createEmptyMerchandiseRow()]);
@@ -4083,6 +4291,43 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           />
                         </div>
 
+                        {showArFiuuTab ? (
+                          <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-3">
+                            <button
+                              type="button"
+                              onClick={() => setArCreatePaymentMode('manual')}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                                arCreatePaymentMode === 'manual'
+                                  ? 'bg-gray-900 text-white'
+                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              Manual payment
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setArCreatePaymentMode('fiuu')}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                                arCreatePaymentMode === 'fiuu'
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                              }`}
+                            >
+                              Pay via FIUU
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {showArFiuuTab && arCreatePaymentMode === 'fiuu' ? (
+                          <FiuuPayOnlinePanel
+                            mode="ar"
+                            amount={arCreateNetPayable()}
+                            arPayloadBuilder={buildArFiuuCreatePayload}
+                            onPaid={handleFiuuArPaymentSuccess}
+                            onCancel={() => setArCreatePaymentMode('manual')}
+                          />
+                        ) : (
+                          <>
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div>
                             <label className="label-field">
@@ -4174,6 +4419,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             </div>
                           )}
                         </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -4493,6 +4740,71 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                           />
                         </div>
 
+                        <div>
+                          <label className="label-field">
+                            Issue Date <span className="text-red-500">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            name="issue_date"
+                            value={createFormData.issue_date}
+                            onChange={handleCreateInputChange}
+                            className={`input-field max-w-xs ${
+                              createFormErrors.issue_date ? 'border-red-500' : ''
+                            }`}
+                            required
+                            disabled={creating}
+                          />
+                          {createFormErrors.issue_date && (
+                            <p className="mt-1 text-sm text-red-600">{createFormErrors.issue_date}</p>
+                          )}
+                          <p className="mt-1 text-xs text-gray-500">Defaults to today (Manila time).</p>
+                        </div>
+
+                        {arFiuuBlockedForInstallmentSplit ? (
+                          <p className="text-xs text-amber-700 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                            Pay via FIUU is not available for Downpayment + Phase 1. Use Downpayment
+                            only, or pay manually.
+                          </p>
+                        ) : null}
+
+                        {showArFiuuTab ? (
+                          <div className="flex flex-wrap gap-2 border-b border-gray-100 pb-3">
+                            <button
+                              type="button"
+                              onClick={() => setArCreatePaymentMode('manual')}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                                arCreatePaymentMode === 'manual'
+                                  ? 'bg-gray-900 text-white'
+                                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                              }`}
+                            >
+                              Manual payment
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setArCreatePaymentMode('fiuu')}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                                arCreatePaymentMode === 'fiuu'
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                              }`}
+                            >
+                              Pay via FIUU
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {showArFiuuTab && arCreatePaymentMode === 'fiuu' ? (
+                          <FiuuPayOnlinePanel
+                            mode="ar"
+                            amount={arCreateNetPayable()}
+                            arPayloadBuilder={buildArFiuuCreatePayload}
+                            onPaid={handleFiuuArPaymentSuccess}
+                            onCancel={() => setArCreatePaymentMode('manual')}
+                          />
+                        ) : (
+                          <>
                         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                           <div>
                             <label className="label-field">
@@ -4521,30 +4833,6 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                                 AR page before enrollment.
                               </p>
                             )}
-                          </div>
-                          <div>
-                            <label className="label-field">
-                              Issue Date <span className="text-red-500">*</span>
-                            </label>
-                            <input
-                              type="date"
-                              name="issue_date"
-                              value={createFormData.issue_date}
-                              onChange={handleCreateInputChange}
-                              className={`input-field ${
-                                createFormErrors.issue_date ? 'border-red-500' : ''
-                              }`}
-                              required
-                              disabled={creating}
-                            />
-                            {createFormErrors.issue_date && (
-                              <p className="mt-1 text-sm text-red-600">
-                                {createFormErrors.issue_date}
-                              </p>
-                            )}
-                            <p className="mt-1 text-xs text-gray-500">
-                              Defaults to today (Manila time).
-                            </p>
                           </div>
                         </div>
 
@@ -4608,6 +4896,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             </p>
                           )}
                         </div>
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -4627,6 +4917,7 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                       type="button"
                       onClick={() => {
                         setArCreateStep(1);
+                        setArCreatePaymentMode('manual');
                         setCreateFormErrors((prev) => {
                           const next = { ...prev };
                           delete next.tip_amount;
@@ -4671,7 +4962,8 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                     >
                       Next
                     </button>
-                  ) : arType ? (
+                  ) : arType &&
+                    !(showArFiuuTab && arCreatePaymentMode === 'fiuu') ? (
                     <button
                       type="submit"
                       className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${

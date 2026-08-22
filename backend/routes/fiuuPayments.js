@@ -4,6 +4,7 @@ import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import {
   createFiuuInvoicePayment,
+  createFiuuArPayment,
   getFiuuPaymentStatus,
   handleFiuuWebhookPayload,
   isFiuuConfigured,
@@ -51,6 +52,44 @@ router.post(
         created_by: createdBy,
         initiator_name: req.user.fullName || req.user.full_name,
         channel: req.body.channel,
+      });
+      res.status(201).json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/create-ar
+ * Admin/Superadmin: create pending Merchandise/Package AR and start FIUU QR payment.
+ */
+router.post(
+  '/create-ar',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [
+    body('ar_type').isIn(['Merchandise', 'Package']).withMessage('ar_type must be Merchandise or Package'),
+    body('prospect_student_name').notEmpty().withMessage('prospect_student_name is required'),
+    body('prospect_student_contact').notEmpty().withMessage('prospect_student_contact is required'),
+    body('prospect_student_phone').notEmpty().withMessage('prospect_student_phone is required'),
+    body('issue_date').notEmpty().withMessage('issue_date is required'),
+    body('channel').optional().isString(),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const createdBy = req.user.userId || req.user.user_id;
+      const userBranchId = req.user.branchId || req.user.branch_id || null;
+      const data = await createFiuuArPayment({
+        arPayload: req.body,
+        created_by: createdBy,
+        initiator_name: req.user.fullName || req.user.full_name,
+        channel: req.body.channel,
+        userBranchId,
       });
       res.status(201).json({ success: true, data });
     } catch (err) {
