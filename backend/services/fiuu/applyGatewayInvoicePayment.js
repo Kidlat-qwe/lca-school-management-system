@@ -469,6 +469,76 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
     }
   }
 
+  // Full payment (non-installment): enroll from CLASS_ID / PHASE_* in remarks — same as manual Record Payment.
+  if (
+    newInvoiceStatus === 'Paid' &&
+    !invoice.installmentinvoiceprofiles_id &&
+    invoice.invoice_description &&
+    !invoice.invoice_description.includes('Reservation Fee') &&
+    !String(invoice.remarks || '').includes('PACKAGE_CHANGE_TO_FULLPAYMENT')
+  ) {
+    try {
+      let classId = null;
+      if (invoice.remarks && invoice.remarks.includes('CLASS_ID:')) {
+        const match = invoice.remarks.match(/CLASS_ID:(\d+)/);
+        if (match) classId = parseInt(match[1], 10);
+      }
+
+      if (classId) {
+        const classResult = await client.query(
+          `SELECT c.class_id, c.program_id, cu.number_of_phase
+           FROM classestbl c
+           LEFT JOIN programstbl p ON c.program_id = p.program_id
+           LEFT JOIN curriculumstbl cu ON p.curriculum_id = cu.curriculum_id
+           WHERE c.class_id = $1`,
+          [classId]
+        );
+
+        if (classResult.rows.length > 0) {
+          const classData = classResult.rows[0];
+          const totalPhases = classData.number_of_phase || 1;
+          let phaseStart = 1;
+          let phaseEnd = totalPhases;
+          if (invoice.remarks && invoice.remarks.includes('PHASE_START:')) {
+            const startMatch = invoice.remarks.match(/PHASE_START:(\d+)/);
+            if (startMatch) phaseStart = parseInt(startMatch[1], 10) || 1;
+          }
+          if (invoice.remarks && invoice.remarks.includes('PHASE_END:')) {
+            const endMatch = invoice.remarks.match(/PHASE_END:(\d+)/);
+            if (endMatch) phaseEnd = parseInt(endMatch[1], 10) || phaseStart;
+          }
+          if (phaseStart < 1) phaseStart = 1;
+          if (phaseEnd > totalPhases) phaseEnd = totalPhases;
+          if (phaseEnd < phaseStart) phaseEnd = phaseStart;
+
+          const changedPhaseRows = await enrollStudentForFullPaymentPhases({
+            client,
+            studentId: student_id,
+            classId,
+            phaseStart,
+            phaseEnd,
+            sourceLabel: 'System (Auto-enrolled via FIUU full payment)',
+            invoiceId: invoice.invoice_id || invoice_id,
+          });
+
+          if (changedPhaseRows > 0) {
+            console.log(
+              `✅ FIUU full payment: Auto-enrolled/reactivated ${changedPhaseRows} phase row(s) for student ${student_id} in phases ${phaseStart}-${phaseEnd} of class ${classId}`
+            );
+          }
+
+          await syncInstallmentProfileForRejoinInvoice({
+            client,
+            invoice,
+            studentId: student_id,
+          });
+        }
+      }
+    } catch (fullPaymentError) {
+      console.error('FIUU: Error auto-enrolling student for full payment:', fullPaymentError);
+    }
+  }
+
   await tryIssuePackageMerchandiseOnFirstPayment(client, {
     invoice,
     studentId: student_id,

@@ -7,6 +7,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 - **Admin / Superadmin** invoice **full balance** via FIUU **QRPH**.
 - **Admin / Superadmin** Merchandise / Package **AR Create → Step 2** (`POST /payments/fiuu/create-ar`).
 - **Primary UX:** email a **Pay now** link that opens FIUU (API `/payments/fiuu/go/:token` auto-POSTs). Invoice stays **Unpaid** / AR stays **Unverified** until the FIUU webhook confirms success.
+- On successful **full payment** webhook: auto-enroll student into class phases from invoice `CLASS_ID` / `PHASE_*` remarks (same as manual Record Payment). Installment profiles use the existing installment enrollment paths.
 - **Optional:** staff can still **Open FIUU now** at the counter.
 - Manual Cash / E-wallet recording unchanged.
 
