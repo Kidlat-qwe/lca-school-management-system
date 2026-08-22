@@ -5,6 +5,7 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { deactivateInstallmentProfileForClassDrop } from '../utils/billingNotificationEligibility.js';
 import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
+import { queueFirstEnrollmentWelcomeEmail } from '../utils/firstEnrollmentWelcomeEmail/index.js';
 
 const router = express.Router();
 
@@ -398,6 +399,12 @@ router.post(
       });
 
       await client.query('COMMIT');
+
+      queueFirstEnrollmentWelcomeEmail({
+        studentId: student_id,
+        enrollmentStatus: programEnrollmentStatus,
+        classstudentId: result.rows[0]?.classstudent_id,
+      });
 
       res.status(201).json({
         success: true,

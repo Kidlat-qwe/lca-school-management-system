@@ -329,6 +329,7 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
           phaseStart: rejoinPhase,
           phaseEnd: rejoinPhase,
           sourceLabel: 'System (Auto-enrolled via FIUU rejoin payment)',
+          invoiceId: invoice.invoice_id,
         });
         await syncInstallmentProfileForRejoinInvoice({ client, invoice, studentId: student_id });
       }

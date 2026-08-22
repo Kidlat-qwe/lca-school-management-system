@@ -643,17 +643,31 @@ export function filterMerchandiseByStudentGender(items, studentGender) {
 }
 
 /**
- * Size dropdown label: "Medium · Men (12)"
+ * Second segment of enroll size labels — piece/logo type when set (Polo, ACC, …),
+ * otherwise gender (Male, Unisex, …).
+ * @param {object|null|undefined} item
+ * @returns {string}
+ */
+export function formatUniformStockDescriptorLabel(item) {
+  const pieceType = String(item?.type || '').trim();
+  if (pieceType && isUniformMerchandiseName(item?.merchandise_name)) {
+    return pieceType;
+  }
+  return formatMerchandiseGenderLabel(item?.gender);
+}
+
+/**
+ * Size dropdown label: "Medium · Polo (12)" or "XS · ACC (5)"
  * @param {object} item
  * @param {number|null|undefined} availableQty
  */
 export function formatUniformSizeOptionLabel(item, availableQty = null) {
   const size = item?.size || 'Size';
-  const genderLabel = formatMerchandiseGenderLabel(item?.gender);
+  const descriptor = formatUniformStockDescriptorLabel(item);
   if (availableQty == null || Number.isNaN(Number(availableQty))) {
-    return `${size} · ${genderLabel}`;
+    return `${size} · ${descriptor}`;
   }
-  return `${size} · ${genderLabel} (${Number(availableQty)})`;
+  return `${size} · ${descriptor} (${Number(availableQty)})`;
 }
 
 /**
@@ -675,9 +689,11 @@ export function formatUniformSameSizePairOptionLabel(
     if (!row?.hasTop && row?.hasBottom) return `${size} (Bottom only — no Top stock)`;
     return `${size} (incomplete)`;
   }
-  const genderLabel = formatMerchandiseGenderLabel(
-    row.gender ?? row.topItem?.gender ?? row.bottomItem?.gender
-  );
+  const genderLabel = formatUniformStockDescriptorLabel({
+    merchandise_name: row.topItem?.merchandise_name ?? row.bottomItem?.merchandise_name,
+    type: row.topItem?.type ?? row.bottomItem?.type,
+    gender: row.gender ?? row.topItem?.gender ?? row.bottomItem?.gender,
+  });
   const topOk = topAvailableQty != null && !Number.isNaN(Number(topAvailableQty));
   const botOk = bottomAvailableQty != null && !Number.isNaN(Number(bottomAvailableQty));
   if (topOk && botOk) {

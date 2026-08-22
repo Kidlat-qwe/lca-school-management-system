@@ -28,6 +28,7 @@ import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
 } from './enrollmentStatus.js';
+import { queueFirstEnrollmentWelcomeEmail } from './firstEnrollmentWelcomeEmail/index.js';
 
 const ACTIVE_PHASE_STATUSES = [
   'new',
@@ -280,6 +281,12 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
     console.log(
       `✅ Promoted pending_enrollment → ${installmentEnrollStatus} for student ${studentId} class ${profile.class_id} phase ${targetPhase}`
     );
+    queueFirstEnrollmentWelcomeEmail({
+      studentId,
+      enrollmentStatus: installmentEnrollStatus,
+      classstudentId: promoted.rows[0]?.classstudent_id,
+      invoiceId: invoice?.invoice_id ?? null,
+    });
     await ensureIntermediatePhaseEnrollments({
       client,
       studentId,
@@ -322,15 +329,23 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
     sourceLabel,
   });
 
-  await client.query(
+  const inserted = await client.query(
     `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-     VALUES ($1, $2, $3, $4, $5)`,
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING classstudent_id`,
     [studentId, profile.class_id, sourceLabel, targetPhase, installmentEnrollStatus]
   );
 
   console.log(
     `✅ Auto-enrolled student ${studentId} in Phase ${targetPhase} after installment payment (status: ${installmentEnrollStatus})`
   );
+
+  queueFirstEnrollmentWelcomeEmail({
+    studentId,
+    enrollmentStatus: installmentEnrollStatus,
+    classstudentId: inserted.rows[0]?.classstudent_id,
+    invoiceId: invoice?.invoice_id ?? null,
+  });
 
   await markCompletedIfFullyPaid();
 }

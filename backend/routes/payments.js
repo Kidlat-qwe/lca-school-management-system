@@ -2810,6 +2810,7 @@ router.post(
                 phaseStart: rejoinPhase,
                 phaseEnd: rejoinPhase,
                 sourceLabel: 'System (Auto-enrolled via rejoin payment)',
+                invoiceId: invoice.invoice_id,
               });
               await syncInstallmentProfileForRejoinInvoice({
                 client,
@@ -3117,6 +3118,7 @@ router.post(
                 phaseStart,
                 phaseEnd,
                 sourceLabel: 'System (Auto-enrolled via full payment)',
+                invoiceId: invoice.invoice_id || invoice_id,
               });
 
               if (changedPhaseRows > 0) {
@@ -3678,6 +3680,7 @@ router.put(
                     phaseStart,
                     phaseEnd,
                     sourceLabel: 'System (Auto-enrolled via full payment)',
+                    invoiceId: invoice.invoice_id,
                   });
 
                   if (changedPhaseRows > 0) {
@@ -3719,6 +3722,7 @@ router.put(
                     phaseStart: rejoinPhase,
                     phaseEnd: rejoinPhase,
                     sourceLabel: 'System (Auto-enrolled via rejoin payment)',
+                    invoiceId: invoice.invoice_id,
                   });
                   await syncInstallmentProfileForRejoinInvoice({
                     client,

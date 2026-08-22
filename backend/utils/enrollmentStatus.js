@@ -19,6 +19,8 @@
  *   completed          – student finished their enrolled phases / class (set by cron).
  */
 
+import { queueFirstEnrollmentWelcomeEmail } from './firstEnrollmentWelcomeEmail/index.js';
+
 export const PROGRAM_ENROLLMENT_STATUS = Object.freeze({
   RESERVED:           'reserved',
   PENDING_ENROLLMENT: 'pending_enrollment',
@@ -482,6 +484,12 @@ export async function promotePendingEnrollmentIfPhaseInvoicePaid(
     console.log(
       `✅ Promoted pending_enrollment → ${enrollStatus} for student ${sid} class ${classId} phase ${targetPhase} (orphan installment invoice ${invoice.invoice_id})`
     );
+    queueFirstEnrollmentWelcomeEmail({
+      studentId: sid,
+      enrollmentStatus: enrollStatus,
+      classstudentId: promoted.rows[0]?.classstudent_id,
+      invoiceId: invoice?.invoice_id ?? null,
+    });
     return true;
   }
   return false;

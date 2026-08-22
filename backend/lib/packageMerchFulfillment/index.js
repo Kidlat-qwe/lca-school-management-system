@@ -60,9 +60,11 @@ function runQuery(db, text, params) {
 }
 
 function stockQty(row) {
-  if (!row || row.quantity == null || row.quantity === undefined) return null;
-  const n = parseInt(row.quantity, 10);
-  return Number.isFinite(n) ? n : null;
+  if (!row) return 0;
+  const raw = row.quantity;
+  if (raw === null || raw === undefined || raw === '') return 0;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 
 function uniformTypeAliases(category) {
@@ -107,9 +109,8 @@ function resolveStockRowForLine(line, branchId, stockById, stockByBranch) {
       if (!aliases.includes(rowType)) continue;
     }
     const qty = stockQty(row);
-    const score = qty == null ? 999999 : qty;
-    if (score > bestQty) {
-      bestQty = score;
+    if (qty > bestQty) {
+      bestQty = qty;
       best = row;
     }
   }
@@ -246,7 +247,7 @@ export async function listPendingPackageMerch(db, { branchId } = {}) {
 
       const available = stockQty(stock);
       const needed = Math.max(1, parseInt(String(line.quantity ?? 1), 10) || 1);
-      const qtyOnHand = available === null ? 0 : available;
+      const qtyOnHand = available;
       const hasStockNow = qtyOnHand >= needed;
       const canIssueNow = hasFirstPayment && hasStockNow;
 

@@ -63,3 +63,4 @@ Keep in sync with backend `PACKAGE_UNIFORM_TYPE_NAMES`.
 - `isSchoolUniformMerchandiseName` / `isPeUniformMerchandiseName` / `isUniformMerchandiseName`
 - `UNIFORM_SIZE_OPTIONS` — RHET sizes
 - `formatUniformSizeDisplayLabel(size)` — optional friendly label
+- `formatUniformSizeOptionLabel` / `formatUniformStockDescriptorLabel` — enroll size dropdown uses piece/logo **type** when set (e.g. `XS · ACC (5)` for Shirt), else gender

@@ -30,6 +30,7 @@ import {
 import { generateAckReceiptPdfBuffer } from '../lib/ackReceiptPdfGenerator.js';
 import { invoiceHasRejectedPayment } from '../utils/invoicePaymentStatus.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../utils/installmentEnrollmentSync.js';
+import { queueFirstEnrollmentWelcomeEmail } from '../utils/firstEnrollmentWelcomeEmail/index.js';
 import { collectPhilippineMobiles } from '../utils/sms/semaphoreSmsService.js';
 import { isArInvoiceOnlyGhostListRow } from '../utils/arInvoiceOnlyListRows.js';
 import { shouldSyncPaymentLogApprovalOnArVerify } from '../lib/paymentLogArApproval.js';
@@ -2588,10 +2589,12 @@ router.post(
               // If student is not enrolled, enroll in all phases for full payment
               if (existingEnrollmentCheck.rows.length === 0) {
                 const arFullStatus = await detEnrollmentStatus({ db: client, studentId: student_id, classId, enrollmentType: 'full_payment' });
+                let welcomeClassstudentId = null;
                 for (let phase = phaseStart; phase <= phaseEnd; phase += 1) {
-                  await client.query(
+                  const inserted = await client.query(
                     `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-                     VALUES ($1, $2, $3, $4, $5)`,
+                     VALUES ($1, $2, $3, $4, $5)
+                     RETURNING classstudent_id`,
                     [
                       student_id,
                       classId,
@@ -2600,7 +2603,17 @@ router.post(
                       arFullStatus,
                     ]
                   );
+                  if (welcomeClassstudentId == null) {
+                    welcomeClassstudentId = inserted.rows[0]?.classstudent_id;
+                  }
                 }
+                queueFirstEnrollmentWelcomeEmail({
+                  studentId: student_id,
+                  enrollmentStatus: arFullStatus,
+                  classstudentId: welcomeClassstudentId,
+                  invoiceId: invoice_id,
+                  ackReceiptId: attachAckId || ack?.ack_receipt_id || null,
+                });
               }
             }
           }

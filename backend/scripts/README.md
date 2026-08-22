@@ -201,6 +201,17 @@ node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production
 node backend/scripts/repairLucretiusManuelPhase5DueUngenerate6.js --production --apply
 ```
 
+### `repairFalsePackageMerchReleaseNullQty.js`
+
+Remove **false** `merchandise_release_logtbl` rows from package first payment when stock
+quantity was **null/0** but a release was still logged (Workbooks at 0 stock showing
+qty **1** in Merchandise Logs). After delete, the item returns to **Pending issue**.
+
+```bash
+node backend/scripts/repairFalsePackageMerchReleaseNullQty.js --payment-id=516 --merchandise-name=Workbooks
+node backend/scripts/repairFalsePackageMerchReleaseNullQty.js --payment-id=516 --merchandise-name=Workbooks --apply
+```
+
 ### `repairPsalmDavidAwoyemiInstallmentDescription.js`
 
 **Psalm-David E. Awoyemi** (`lindauwagbale@yahoo.com`, user **610**, profile **427**, Cavite).

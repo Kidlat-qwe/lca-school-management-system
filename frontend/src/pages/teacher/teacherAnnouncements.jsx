@@ -730,25 +730,25 @@ const TeacherAnnouncements = () => {
 
       {/* Create/Edit Modal (portaled so overlay covers header) */}
       {isModalOpen && createPortal(
-        <div className="fixed inset-0 z-[9999] overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-            <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeModal}></div>
-            <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-3xl sm:w-full">
-              <form onSubmit={handleSubmit}>
-                <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">
-                    {editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}
-                  </h3>
-                  
-                  {error && (
-                    <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                      {error}
-                    </div>
-                  )}
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeModal}></div>
+          <div className="relative z-10 flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white text-left shadow-xl">
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <div className="shrink-0 border-b border-gray-200 px-4 py-3">
+                <h3 className="text-lg font-medium text-gray-900">
+                  {editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}
+                </h3>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+                {error && (
+                  <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {error}
+                  </div>
+                )}
 
-                  <div className="space-y-4">
+                <div className="space-y-3">
                     <div>
-                      <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="title" className="mb-1 block text-sm font-medium text-gray-700">
                         Title <span className="text-red-500">*</span>
                       </label>
                       <input
@@ -758,7 +758,7 @@ const TeacherAnnouncements = () => {
                         value={formData.title}
                         onChange={handleInputChange}
                         required
-                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                           formErrors.title ? 'border-red-500' : 'border-gray-300'
                         }`}
                       />
@@ -768,7 +768,7 @@ const TeacherAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label htmlFor="email_subject" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="email_subject" className="mb-1 block text-sm font-medium text-gray-700">
                         Subject{' '}
                         {(editingAnnouncement || (formData.send_email && formData.status === 'Active')) && (
                           <span className="text-red-500">*</span>
@@ -783,7 +783,7 @@ const TeacherAnnouncements = () => {
                         required={editingAnnouncement || (formData.send_email && formData.status === 'Active')}
                         disabled={!editingAnnouncement && !formData.send_email}
                         placeholder="Email subject line"
-                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 disabled:text-gray-500 ${
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500 ${
                           formErrors.email_subject ? 'border-red-500' : 'border-gray-300'
                         }`}
                       />
@@ -802,10 +802,11 @@ const TeacherAnnouncements = () => {
                       }
                       status={formData.status}
                       showEditHint={Boolean(editingAnnouncement)}
+                      compact
                     />
 
                     <div>
-                      <label htmlFor="body" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="body" className="mb-1 block text-sm font-medium text-gray-700">
                         Description <span className="text-red-500">*</span>
                       </label>
                       <textarea
@@ -814,8 +815,8 @@ const TeacherAnnouncements = () => {
                         value={formData.body}
                         onChange={handleInputChange}
                         required
-                        rows={6}
-                        className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                        rows={3}
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                           formErrors.body ? 'border-red-500' : 'border-gray-300'
                         }`}
                       />
@@ -825,10 +826,10 @@ const TeacherAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className="mb-1 block text-sm font-medium text-gray-700">
                         Recipient Groups <span className="text-red-500">*</span>
                       </label>
-                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
                         {RECIPIENT_GROUPS.map((group) => (
                           <label key={group.value} className="flex items-center space-x-2">
                             <input
@@ -846,9 +847,9 @@ const TeacherAnnouncements = () => {
                       )}
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="status" className="mb-1 block text-sm font-medium text-gray-700">
                           Status <span className="text-red-500">*</span>
                         </label>
                         <select
@@ -857,7 +858,7 @@ const TeacherAnnouncements = () => {
                           value={formData.status}
                           onChange={handleInputChange}
                           required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.status ? 'border-red-500' : 'border-gray-300'
                           }`}
                         >
@@ -873,7 +874,7 @@ const TeacherAnnouncements = () => {
                       </div>
 
                       <div>
-                        <label htmlFor="priority" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="priority" className="mb-1 block text-sm font-medium text-gray-700">
                           Priority <span className="text-red-500">*</span>
                         </label>
                         <select
@@ -882,7 +883,7 @@ const TeacherAnnouncements = () => {
                           value={formData.priority}
                           onChange={handleInputChange}
                           required
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.priority ? 'border-red-500' : 'border-gray-300'
                           }`}
                         >
@@ -899,7 +900,7 @@ const TeacherAnnouncements = () => {
                     </div>
 
                     <div>
-                      <label htmlFor="branch_id" className="block text-sm font-medium text-gray-700 mb-2">
+                      <label htmlFor="branch_id" className="mb-1 block text-sm font-medium text-gray-700">
                         Branch
                       </label>
                       <input
@@ -907,13 +908,13 @@ const TeacherAnnouncements = () => {
                         id="branch_id"
                         value={userInfo?.branchName || 'Your Branch'}
                         disabled
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-600 cursor-not-allowed"
+                        className="w-full cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-600"
                       />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
-                        <label htmlFor="start_date" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="start_date" className="mb-1 block text-sm font-medium text-gray-700">
                           Start Date
                         </label>
                         <input
@@ -922,7 +923,7 @@ const TeacherAnnouncements = () => {
                           name="start_date"
                           value={formData.start_date}
                           onChange={handleInputChange}
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.start_date ? 'border-red-500' : 'border-gray-300'
                           }`}
                         />
@@ -932,7 +933,7 @@ const TeacherAnnouncements = () => {
                       </div>
 
                       <div>
-                        <label htmlFor="end_date" className="block text-sm font-medium text-gray-700 mb-2">
+                        <label htmlFor="end_date" className="mb-1 block text-sm font-medium text-gray-700">
                           End Date
                         </label>
                         <input
@@ -941,7 +942,7 @@ const TeacherAnnouncements = () => {
                           name="end_date"
                           value={formData.end_date}
                           onChange={handleInputChange}
-                          className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 ${
+                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
                             formErrors.end_date ? 'border-red-500' : 'border-gray-300'
                           }`}
                         />
@@ -950,26 +951,25 @@ const TeacherAnnouncements = () => {
                         )}
                       </div>
                     </div>
-                  </div>
                 </div>
-                <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full inline-flex justify-center rounded-lg border border-transparent shadow-sm px-4 py-2 bg-primary-600 text-base font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
-                  >
-                    {submitting ? 'Saving...' : editingAnnouncement ? 'Update' : 'Create'}
-                  </button>
+              </div>
+              <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end">
                   <button
                     type="button"
                     onClick={closeModal}
-                    className="mt-3 w-full inline-flex justify-center rounded-lg border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                    className="inline-flex w-full justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
                   >
                     Cancel
                   </button>
-                </div>
-              </form>
-            </div>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="inline-flex w-full justify-center rounded-lg border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
+                  >
+                    {submitting ? 'Saving...' : editingAnnouncement ? 'Update' : 'Create'}
+                  </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body

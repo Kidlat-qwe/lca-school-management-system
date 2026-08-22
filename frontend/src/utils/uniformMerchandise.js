@@ -47,6 +47,7 @@ export {
   findUniformStockByNameSizeCategory,
   merchandiseGendersForStudent,
   formatMerchandiseGenderLabel,
+  formatUniformStockDescriptorLabel,
   isMerchandiseGenderMatchForStudent,
   filterMerchandiseByStudentGender,
   formatUniformSizeOptionLabel,

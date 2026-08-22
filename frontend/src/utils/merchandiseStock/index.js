@@ -51,11 +51,11 @@ export function lookupMerchandiseQuantity(merchandiseList, merchandiseId) {
   return parseMerchandiseQuantity(item);
 }
 
-/** True when quantity is untracked or strictly greater than zero. */
+/** True when quantity is tracked and strictly greater than zero. */
 export function merchandiseHasAvailableStock(item) {
   if (!item) return false;
-  if (item.quantity === null || item.quantity === undefined) return true;
-  return (parseInt(item.quantity, 10) || 0) > 0;
+  const qty = parseMerchandiseQuantity(item);
+  return qty !== null && qty > 0;
 }
 
 /** Prefer the first in-stock variant; fall back to the first row when all are out of stock. */

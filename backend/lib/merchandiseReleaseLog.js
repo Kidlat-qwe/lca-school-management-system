@@ -143,6 +143,18 @@ export function isCmsMerchandiseTypeShellRow(row) {
   );
 }
 
+/**
+ * On-hand units for issuance / pending issue. Null or blank quantity on a concrete
+ * SKU is treated as 0 (not unlimited). CMS type shells are always 0.
+ */
+export function effectiveMerchandiseQuantity(row) {
+  if (!row || isCmsMerchandiseTypeShellRow(row)) return 0;
+  const raw = row.quantity;
+  if (raw === null || raw === undefined || raw === '') return 0;
+  const n = parseInt(String(raw), 10);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
+}
+
 function merchNamesMatch(a, b) {
   const stripWaived = (value) =>
     String(value || '')
@@ -189,8 +201,7 @@ export async function resolveMerchandiseWithAvailableStock(
     if (!row) return false;
     if (Number(branchId) !== Number(row.branch_id)) return false;
     if (isCmsMerchandiseTypeShellRow(row)) return false;
-    if (row.quantity === null || row.quantity === undefined) return true;
-    return (parseInt(row.quantity, 10) || 0) >= needed;
+    return effectiveMerchandiseQuantity(row) >= needed;
   };
 
   const pickZeroStockRow = (rows, fallback) => {
@@ -720,18 +731,16 @@ export async function issuePackageMerchandiseLines(client, params) {
       continue;
     }
     const row = stockRes.rows[0];
-    if (row.quantity !== null && row.quantity !== undefined) {
-      const available = parseInt(row.quantity, 10) || 0;
-      if (available < qty) {
-        pendingCount += qty;
-        continue;
-      }
-      const newQuantity = Math.max(0, available - qty);
-      await client.query(`UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`, [
-        newQuantity,
-        merchId,
-      ]);
+    const available = effectiveMerchandiseQuantity(row);
+    if (available < qty) {
+      pendingCount += qty;
+      continue;
     }
+    const newQuantity = Math.max(0, available - qty);
+    await client.query(`UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`, [
+      newQuantity,
+      merchId,
+    ]);
 
     await insertMerchandiseReleaseLog(client, {
       releaseBatchId,

@@ -2,6 +2,7 @@ import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
 } from './enrollmentStatus.js';
+import { queueFirstEnrollmentWelcomeEmail } from './firstEnrollmentWelcomeEmail/index.js';
 
 /**
  * Enroll or reactivate a student across a phase range after full payment (or conversion).
@@ -13,8 +14,12 @@ export async function enrollStudentForFullPaymentPhases({
   phaseStart,
   phaseEnd,
   sourceLabel,
+  invoiceId = null,
+  ackReceiptId = null,
 }) {
   let insertedOrReactivated = 0;
+  let welcomeClassstudentId = null;
+  let welcomeEnrollmentStatus = null;
   for (let phase = phaseStart; phase <= phaseEnd; phase++) {
     const activePhase = await client.query(
       `SELECT classstudent_id
@@ -67,6 +72,10 @@ export async function enrollStudentForFullPaymentPhases({
          WHERE classstudent_id = $3`,
         [fullPayStatus, sourceLabel, reservedPhase.rows[0].classstudent_id]
       );
+      if (fullPayStatus === PROGRAM_ENROLLMENT_STATUS.NEW && welcomeClassstudentId == null) {
+        welcomeClassstudentId = reservedPhase.rows[0].classstudent_id;
+        welcomeEnrollmentStatus = fullPayStatus;
+      }
       insertedOrReactivated += 1;
       continue;
     }
@@ -95,15 +104,34 @@ export async function enrollStudentForFullPaymentPhases({
          WHERE classstudent_id = $3`,
         [fullPayStatus, sourceLabel, droppedPhase.rows[0].classstudent_id]
       );
+      if (fullPayStatus === PROGRAM_ENROLLMENT_STATUS.NEW && welcomeClassstudentId == null) {
+        welcomeClassstudentId = droppedPhase.rows[0].classstudent_id;
+        welcomeEnrollmentStatus = fullPayStatus;
+      }
     } else {
-      await client.query(
+      const inserted = await client.query(
         `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
-         VALUES ($1, $2, $3, $4, $5)`,
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING classstudent_id`,
         [studentId, classId, sourceLabel, phase, fullPayStatus]
       );
+      if (fullPayStatus === PROGRAM_ENROLLMENT_STATUS.NEW && welcomeClassstudentId == null) {
+        welcomeClassstudentId = inserted.rows[0]?.classstudent_id;
+        welcomeEnrollmentStatus = fullPayStatus;
+      }
     }
 
     insertedOrReactivated += 1;
+  }
+
+  if (welcomeEnrollmentStatus === PROGRAM_ENROLLMENT_STATUS.NEW) {
+    queueFirstEnrollmentWelcomeEmail({
+      studentId,
+      enrollmentStatus: welcomeEnrollmentStatus,
+      classstudentId: welcomeClassstudentId,
+      invoiceId,
+      ackReceiptId,
+    });
   }
 
   return insertedOrReactivated;

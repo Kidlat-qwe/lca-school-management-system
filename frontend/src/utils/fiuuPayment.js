@@ -1,10 +1,10 @@
 import { apiRequest } from '../config/api';
 
 /**
- * Hide Pay via FIUU on Record Payment until the option is fully ready.
- * Set true to show the Admin/Superadmin invoice modal tab again.
+ * Show Pay via FIUU on Record Payment (Admin/Superadmin).
+ * Set false to hide the tab while FIUU UAT is paused.
  */
-export const FIUU_PAYMENT_UI_ENABLED = false;
+export const FIUU_PAYMENT_UI_ENABLED = true;
 
 export async function fetchFiuuConfig() {
   if (!FIUU_PAYMENT_UI_ENABLED) {

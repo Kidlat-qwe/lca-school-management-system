@@ -54,6 +54,7 @@ import {
   filterMerchandiseByStudentGender,
   formatMerchandiseGenderLabel,
   formatUniformSizeOptionLabel,
+  formatUniformStockDescriptorLabel,
   isSchoolUniformMerchandiseName,
   getUniformCategory,
   listUniformStockCategories,
@@ -12034,7 +12035,7 @@ const resolvedBranchId =
                                                                 );
                                                                 return selectedMeta ? (
                                                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-gray-700 ring-1 ring-gray-200">
-                                                                    {formatMerchandiseGenderLabel(selectedMeta.gender)}
+                                                                    {formatUniformStockDescriptorLabel(selectedMeta)}
                                                                   </span>
                                                                 ) : null;
                                                               })()}
@@ -12455,7 +12456,7 @@ const resolvedBranchId =
                                                             );
                                                             return selectedMeta ? (
                                                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white text-gray-700 ring-1 ring-gray-200">
-                                                                {formatMerchandiseGenderLabel(selectedMeta.gender)}
+                                                                {formatUniformStockDescriptorLabel(selectedMeta)}
                                                               </span>
                                                             ) : null;
                                                           })()}
