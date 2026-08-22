@@ -122,6 +122,7 @@ export function buildPublicPayPayload(row) {
 
 /**
  * HTML that auto-POSTs to FIUU hosted pay (same tab). Used by emailed Pay now link.
+ * Always includes a visible Continue button — Helmet CSP may block inline scripts.
  */
 export function buildFiuuAutoPostHtml(payload) {
   if (!payload?.payUrl || !payload?.formFields) {
@@ -154,16 +155,25 @@ export function buildFiuuAutoPostHtml(payload) {
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Redirecting to FIUU…</title>
 </head>
-<body style="font-family:system-ui,sans-serif;padding:2rem;text-align:center;color:#374151;">
-  <p>Opening secure FIUU payment…</p>
+<body style="font-family:system-ui,sans-serif;padding:2rem;max-width:28rem;margin:0 auto;text-align:center;color:#374151;">
+  <p style="margin:0 0 1rem;">Opening secure FIUU payment…</p>
   <form id="fiuuPay" method="POST" action="${escapeHtmlAttr(payload.payUrl)}">
     ${inputs}
+    <button type="submit"
+      style="display:inline-block;background:#4f46e5;color:#fff;border:0;border-radius:8px;
+             font-weight:600;font-size:14px;padding:12px 22px;cursor:pointer;">
+      Continue to FIUU
+    </button>
   </form>
-  <script>document.getElementById('fiuuPay').submit();</script>
-  <noscript>
-    <p>JavaScript is required. Click Continue to pay.</p>
-    <button type="submit" form="fiuuPay">Continue to FIUU</button>
-  </noscript>
+  <p style="margin:1rem 0 0;font-size:12px;color:#6b7280;">
+    If you are not redirected automatically, tap the button above.
+  </p>
+  <script>
+    (function () {
+      var f = document.getElementById('fiuuPay');
+      if (f) f.submit();
+    })();
+  </script>
 </body>
 </html>`;
 }

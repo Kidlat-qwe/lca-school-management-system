@@ -49,7 +49,7 @@ Create body extras:
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — HTML auto-POSTs to FIUU (same tab) |
+| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — HTML auto-POSTs to FIUU (same tab); CSP allows inline script + visible Continue button |
 | GET | `/api/sms/payments/fiuu/public/:token` | JSON payload (optional CMS landing / diagnostics) |
 
 `server.js` mounts `/payments/fiuu` **before** `/payments` so public `go`/`public` are not blocked by payments Firebase auth.

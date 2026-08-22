@@ -41,9 +41,19 @@ router.get(
   async (req, res, next) => {
     try {
       const html = await getPublicFiuuGoHtmlByToken(req.params.token);
+      // Helmet already set CSP (script-src 'self'). Browsers enforce ALL CSP headers,
+      // so a second header cannot relax it — remove Helmet's, then allow auto-submit.
+      res.removeHeader('Content-Security-Policy');
+      res.removeHeader('Content-Security-Policy-Report-Only');
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; base-uri 'none'"
+      );
       res.status(200).type('html').send(html);
     } catch (err) {
       if (err.statusCode) {
+        res.removeHeader('Content-Security-Policy');
+        res.removeHeader('Content-Security-Policy-Report-Only');
         return res
           .status(err.statusCode)
           .type('html')

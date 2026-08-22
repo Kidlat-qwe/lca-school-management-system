@@ -61,8 +61,16 @@ import { verifyEmailConnection, getEmailConfigSummary } from './utils/emailTrans
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Security middleware
-app.use(helmet());
+// Security middleware — disable CSP on FIUU email pay bridge (needs inline auto-submit script).
+// Browsers enforce every CSP header; Helmet's default script-src 'self' would block the form submit.
+app.use((req, res, next) => {
+  const path = `${req.path || ''} ${req.originalUrl || ''}`;
+  const isFiuuGo = path.includes('/payments/fiuu/go/');
+  if (isFiuuGo) {
+    return helmet({ contentSecurityPolicy: false })(req, res, next);
+  }
+  return helmet()(req, res, next);
+});
 
 // CORS configuration - Support Replit, local dev, and deployed frontend (Linode)
 const getAllowedOrigins = () => {
