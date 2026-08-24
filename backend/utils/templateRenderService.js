@@ -38,10 +38,9 @@ export function getEmailBrandLogoUrl() {
     }
   }
 
-  // cms.lca-app.com serves both; prefer hyphen asset when available on Dev frontend public/.
-  const host = origin.replace(/^https?:\/\//i, '').toLowerCase();
+  // Prefer space-named asset on Dev too (smaller than LCA-Icon.png in public/).
   if (host.includes('lca-app.com')) {
-    return `${origin}/LCA-Icon.png`;
+    return `${origin}/LCA%20Icon.png`;
   }
   return `${origin}${DEFAULT_LOGO_PATH}`;
 }

@@ -48,7 +48,7 @@ router.get(
       res.removeHeader('Content-Security-Policy-Report-Only');
       res.setHeader(
         'Content-Security-Policy',
-        "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'none'; base-uri 'none'"
+        "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https: http: data:; base-uri 'none'"
       );
       res.status(200).type('html').send(html);
     } catch (err) {

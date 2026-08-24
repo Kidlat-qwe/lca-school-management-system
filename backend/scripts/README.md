@@ -239,6 +239,15 @@ node backend/scripts/repairLucretiusManuelPhase5Balance4606.js --production
 node backend/scripts/repairLucretiusManuelPhase5Balance4606.js --production --apply
 ```
 
+### `repairMatteoAbenionPhase2Balance8901.js`
+
+**Matteo Arvian Abenion** (`macandao23@gmail.com`). Phase 2 **INV-2084** (₱9,890, partial ₱989) → **INV-2439**. Balance leaf had correct remaining **₱8,901** plus **stacked Late Payment Penalty (10%)** lines that inflated amount to **₱26,384.60** / balance **₱25,395.60**. Rebuilds INV-2439 to a single **₱8,901** remaining line (no penalties).
+
+```bash
+node backend/scripts/repairMatteoAbenionPhase2Balance8901.js --production
+node backend/scripts/repairMatteoAbenionPhase2Balance8901.js --production --apply
+```
+
 ### `repairVitoFernandoPhaseDatesDrop6.js`
 
 **Vito Javier Fernando** (`kret_26@yahoo.com`, student **527**, profile **310**, class **67** `VMP_Playgroup_TTh_11:00AM`). Phase 5 class start is **May 26**; invoices were billed a month late so August showed **Active / re-enrolled**. Realign issue/due (keep payment dates), drop Phase 6, stop further generation.

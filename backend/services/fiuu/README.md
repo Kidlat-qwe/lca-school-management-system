@@ -64,7 +64,7 @@ Invoice **Pay via FIUU** also has Tip / Discount payment adjustments (same seman
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — branded LCA page; auto-POSTs to FIUU when payable; paid/expired show school logo + status message |
+| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — branded LCA page (CSP allows `img-src https:` for logo); auto-POSTs to FIUU when payable; paid/expired show school logo + status |
 | GET | `/api/sms/payments/fiuu/public/:token` | JSON payload (optional CMS landing / diagnostics) |
 
 `server.js` mounts `/payments/fiuu` **before** `/payments` so public `go`/`public` are not blocked by payments Firebase auth.
