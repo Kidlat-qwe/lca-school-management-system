@@ -249,7 +249,7 @@ const formatBodyHtml = (body) => {
 
 /**
  * Build branded HTML for announcement notification emails.
- * Layout matches a marketing-style post: hero image first, then the message.
+ * Layout: yellow brand header → message/description → attached image (when present).
  */
 export const buildAnnouncementEmailHtml = ({
   title,
@@ -268,7 +268,7 @@ export const buildAnnouncementEmailHtml = ({
 
   const heroImage = showHeroImage
     ? `
-      <div style="margin:-30px -30px 20px -30px;line-height:0;">
+      <div style="margin:20px -30px -30px -30px;line-height:0;">
         <img
           src="${escapeHtml(imageSrc)}"
           alt="${escapeHtml(title || 'Announcement')}"
@@ -280,9 +280,9 @@ export const buildAnnouncementEmailHtml = ({
 
   const inner = `
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#1f2937">
-      ${heroImage}
       ${formatBodyHtml(body)}
       ${fileLink}
+      ${heroImage}
     </div>
   `;
 

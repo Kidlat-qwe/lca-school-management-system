@@ -173,3 +173,8 @@ export function lessonPlanWriteColumns(payload) {
     reflection_improvements: payload.reflection_improvements ?? '',
   };
 }
+
+export {
+  notifyTeacherOfLessonPlanReview,
+  notifyVerifiersOfLessonPlanSubmission,
+} from './notifications.js';

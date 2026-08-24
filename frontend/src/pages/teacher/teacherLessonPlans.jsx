@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { appAlert } from '../../utils/appAlert';
-import {
-  LessonPlanHeader,
-  LESSON_PLAN_SCHOOL_ADDRESS,
-} from '../../components/lessonPlanHeader';
+import { LessonPlanHeader } from '../../components/lessonPlanHeader';
 
 const createEmptyForm = () => ({
   lesson_date: new Date().toISOString().slice(0, 10),
@@ -64,6 +61,8 @@ export default function TeacherLessonPlans() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [sheetFlash, setSheetFlash] = useState(false);
+  const flashTimerRef = useRef(null);
 
   const preparedBy =
     userInfo?.full_name || userInfo?.fullName || userInfo?.email || 'Current Teacher';
@@ -116,6 +115,21 @@ export default function TeacherLessonPlans() {
     };
   }, [fetchPlans]);
 
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
+
+  const flashLessonPlanSheet = () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setSheetFlash(false);
+    requestAnimationFrame(() => {
+      setSheetFlash(true);
+      flashTimerRef.current = setTimeout(() => setSheetFlash(false), 1600);
+    });
+  };
+
   const handleInputChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -124,6 +138,7 @@ export default function TeacherLessonPlans() {
     setSelectedPlan(null);
     setFormData(createEmptyForm());
     setError('');
+    flashLessonPlanSheet();
   };
 
   const handleSelectPlan = (plan) => {
@@ -146,6 +161,7 @@ export default function TeacherLessonPlans() {
       reflection_improvements: plan.reflection_improvements || '',
     });
     setError('');
+    flashLessonPlanSheet();
   };
 
   const saveLessonPlan = async ({ submit = false } = {}) => {
@@ -204,14 +220,29 @@ export default function TeacherLessonPlans() {
 
       {/* PageWrapper */}
       <div className="grid grid-cols-1 gap-6 min-[1101px]:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
+        <style>{`
+          @keyframes lessonPlanSheetFlash {
+            0%, 100% {
+              border-color: #eeeeee;
+              box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            }
+            50% {
+              border-color: #ef4444;
+              box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.35), 0 10px 30px rgba(0, 0, 0, 0.08);
+            }
+          }
+        `}</style>
         {/* LessonPlanSheet */}
         <div
           className="rounded-md border border-[#eeeeee] bg-white px-[42px] py-[34px] text-[#111111] shadow-[0_10px_30px_rgba(0,0,0,0.08)] max-md:px-5 max-md:py-6"
-          style={sheetFont}
+          style={{
+            ...sheetFont,
+            ...(sheetFlash
+              ? { animation: 'lessonPlanSheetFlash 0.45s ease-in-out 3' }
+              : null),
+          }}
         >
-          <LessonPlanHeader
-            address={meta?.branch?.branch_address || LESSON_PLAN_SCHOOL_ADDRESS}
-          />
+          <LessonPlanHeader />
 
           <h2 className="mb-[22px] mt-[18px] text-center text-[20px] font-semibold text-[#111111]">
             Lesson Plan

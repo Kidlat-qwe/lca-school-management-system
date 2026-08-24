@@ -1,16 +1,15 @@
+/**
+ * Lesson-plan document header — layout/sizing matched to TeacherLessonPlans.jsx.
+ * School address and DepEd meta are hardcoded for all branches.
+ */
 import {
   LESSON_PLAN_HEADER_META,
   LESSON_PLAN_SCHOOL_ADDRESS,
   LESSON_PLAN_SCHOOL_NAME,
 } from './constants';
 
-/**
- * Lesson-plan document header — layout/sizing matched to TeacherLessonPlans.jsx
- * (SheetHeader / LogoGroup / SchoolDetails).
- */
-export default function LessonPlanHeader({ address = LESSON_PLAN_SCHOOL_ADDRESS }) {
+export default function LessonPlanHeader() {
   const { region, division, district, school_id } = LESSON_PLAN_HEADER_META;
-  const displayAddress = address || LESSON_PLAN_SCHOOL_ADDRESS;
 
   return (
     <div
@@ -37,7 +36,9 @@ export default function LessonPlanHeader({ address = LESSON_PLAN_SCHOOL_ADDRESS 
         <h1 className="m-0 text-[30px] font-bold leading-[1.2] text-[#111111]">
           {LESSON_PLAN_SCHOOL_NAME}
         </h1>
-        <p className="m-0 text-[15px] leading-[1.4] text-[#555555]">{displayAddress}</p>
+        <p className="m-0 text-[15px] leading-[1.4] text-[#555555]">
+          {LESSON_PLAN_SCHOOL_ADDRESS}
+        </p>
         <div className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-x-3 md:gap-y-2">
           <span className="text-[13px] leading-[1.35] text-[#444444]">
             <strong className="font-semibold text-[#111111]">Region:</strong> {region}

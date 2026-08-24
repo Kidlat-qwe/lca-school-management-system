@@ -27,4 +27,12 @@
 
 Review UI: Superadmin **Lesson Plans** page (`/superadmin/lesson-plans`), shown only to configured verifiers. Settings only manages the verifier list.
 
+## Notifications
+
+| Event | Recipients | `navigation_key` |
+|-------|------------|------------------|
+| Teacher submits | Configured verifiers (fallback: all Superadmins) | `lesson-plans` |
+| Verifier approves | Teacher who authored the plan | `lesson-plans` |
+| Verifier requests revision | Teacher who authored the plan | `lesson-plans` |
+
 Migration: `141_create_lesson_plan_tables.sql`

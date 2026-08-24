@@ -21,7 +21,7 @@ Branch scoping follows the announcement’s `branch_id`. When `branch_id` is nul
 
 **Email subject:** uses `announcementstbl.email_subject` when set. If it is empty, the mail subject falls back to `[Announcement] ${title}`.
 
-**Image attachments:** when `attachment_url` is an image, the email shows it as a hosted hero image at the top (`<img src="…">`, 7-day signed S3 URL). The announcement description (`body`) is below the image. Priority is not included. Non-image files remain a download link only. Creating an announcement with no attachment is valid (`attachment_url` may be `null` or omitted).
+**Image attachments:** when `attachment_url` is an image, the email shows the announcement description (`body`) first, then the hosted image below it (`<img src="…">`, 7-day signed S3 URL). Priority is not included. Non-image files remain a download link under the message. Creating an announcement with no attachment is valid (`attachment_url` may be `null` or omitted).
 
 ## Usage
 

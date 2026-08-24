@@ -8,6 +8,8 @@ import {
   lessonPlanWriteColumns,
   mapLessonPlanRow,
   normalizeLessonPlanBody,
+  notifyTeacherOfLessonPlanReview,
+  notifyVerifiersOfLessonPlanSubmission,
   validateLessonPlanPayload,
 } from '../lib/lessonPlans/index.js';
 
@@ -62,25 +64,15 @@ router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next)
         grade_levels: GRADE_LEVEL_OPTIONS,
         subjects_by_grade: SUBJECT_OPTIONS_BY_GRADE,
         prepared_by: req.user.fullName || req.user.full_name || req.user.email || '',
-        branch: branch
-          ? {
-              branch_id: branch.branch_id,
-              branch_name: branch.branch_name,
-              branch_address: branch.branch_address,
-              region: 'Region III',
-              district: '5th District',
-              division: 'Bulacan',
-              school_id: '411093',
-            }
-          : {
-              branch_id: null,
-              branch_name: 'Little Champions Academy, Inc.',
-              branch_address: '',
-              region: 'Region III',
-              district: '5th District',
-              division: 'Bulacan',
-              school_id: '411093',
-            },
+        branch: {
+          branch_id: branch?.branch_id ?? null,
+          branch_name: 'Little Champions Academy, Inc.',
+          branch_address: 'North Centrum Building, Guiguinto Bulacan 3015',
+          region: 'Region III',
+          district: '5th District',
+          division: 'Bulacan',
+          school_id: '411093',
+        },
       },
     });
   } catch (error) {
@@ -362,7 +354,21 @@ router.post(
       const created = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [
         result.rows[0].lesson_plan_id,
       ]);
-      res.status(201).json({ success: true, data: mapLessonPlanRow(created.rows[0]) });
+      const plan = mapLessonPlanRow(created.rows[0]);
+
+      if (status === 'submitted') {
+        try {
+          await notifyVerifiersOfLessonPlanSubmission({
+            lessonPlan: { ...plan, branch_id: branchId, teacher_user_id: teacherId },
+            createdBy: teacherId,
+            teacherName: req.user.fullName || req.user.full_name || req.user.email || 'Teacher',
+          });
+        } catch (notifyErr) {
+          console.error('[lesson-plans] submit notification failed:', notifyErr.message);
+        }
+      }
+
+      res.status(201).json({ success: true, data: plan });
     } catch (error) {
       next(error);
     }
@@ -491,7 +497,23 @@ router.post(
         [id]
       );
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
-      res.json({ success: true, data: mapLessonPlanRow(updated.rows[0]) });
+      const plan = mapLessonPlanRow(updated.rows[0]);
+
+      try {
+        await notifyVerifiersOfLessonPlanSubmission({
+          lessonPlan: {
+            ...plan,
+            branch_id: existing.rows[0].branch_id,
+            teacher_user_id: teacherId,
+          },
+          createdBy: teacherId,
+          teacherName: req.user.fullName || req.user.full_name || req.user.email || 'Teacher',
+        });
+      } catch (notifyErr) {
+        console.error('[lesson-plans] submit notification failed:', notifyErr.message);
+      }
+
+      res.json({ success: true, data: plan });
     } catch (error) {
       next(error);
     }
@@ -517,9 +539,11 @@ router.post(
         });
       }
       const id = parseInt(req.params.id, 10);
-      const existing = await query(`SELECT status FROM lessonplanstbl WHERE lesson_plan_id = $1`, [
-        id,
-      ]);
+      const existing = await query(
+        `SELECT lesson_plan_id, status, teacher_user_id, branch_id, topic, grade_level, subject
+         FROM lessonplanstbl WHERE lesson_plan_id = $1`,
+        [id]
+      );
       if (!existing.rows[0]) {
         return res.status(404).json({ success: false, message: 'Lesson plan not found' });
       }
@@ -543,7 +567,20 @@ router.post(
         [userId, id]
       );
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
-      res.json({ success: true, data: mapLessonPlanRow(updated.rows[0]) });
+      const plan = mapLessonPlanRow(updated.rows[0]);
+
+      try {
+        await notifyTeacherOfLessonPlanReview({
+          lessonPlan: existing.rows[0],
+          createdBy: userId,
+          verifierName: req.user.fullName || req.user.full_name || req.user.email || 'Verifier',
+          action: 'approved',
+        });
+      } catch (notifyErr) {
+        console.error('[lesson-plans] approve notification failed:', notifyErr.message);
+      }
+
+      res.json({ success: true, data: plan });
     } catch (error) {
       next(error);
     }
@@ -572,9 +609,11 @@ router.post(
         });
       }
       const id = parseInt(req.params.id, 10);
-      const existing = await query(`SELECT status FROM lessonplanstbl WHERE lesson_plan_id = $1`, [
-        id,
-      ]);
+      const existing = await query(
+        `SELECT lesson_plan_id, status, teacher_user_id, branch_id, topic, grade_level, subject
+         FROM lessonplanstbl WHERE lesson_plan_id = $1`,
+        [id]
+      );
       if (!existing.rows[0]) {
         return res.status(404).json({ success: false, message: 'Lesson plan not found' });
       }
@@ -599,7 +638,21 @@ router.post(
         [reason, userId, id]
       );
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
-      res.json({ success: true, data: mapLessonPlanRow(updated.rows[0]) });
+      const plan = mapLessonPlanRow(updated.rows[0]);
+
+      try {
+        await notifyTeacherOfLessonPlanReview({
+          lessonPlan: existing.rows[0],
+          createdBy: userId,
+          verifierName: req.user.fullName || req.user.full_name || req.user.email || 'Verifier',
+          action: 'revision_requested',
+          revisionReason: reason,
+        });
+      } catch (notifyErr) {
+        console.error('[lesson-plans] revision notification failed:', notifyErr.message);
+      }
+
+      res.json({ success: true, data: plan });
     } catch (error) {
       next(error);
     }

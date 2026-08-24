@@ -15,16 +15,21 @@ N/A — this module is teacher-authored lesson plans.
 
 Teacher page styling matches `TeacherLessonPlans.jsx` (sheet padding, header grid `270px | 1fr`, logo sizes, peach buttons, Poppins).
 
-Header title is always **Little Champions Academy, Inc.** Default address: North Centrum Building, Guiguinto Bulacan 3015 (branch address used when available).
-
-Fixed for all branches:
+Hardcoded for all branches (never use per-branch address):
 
 | Field | Value |
 |-------|--------|
+| School name | Little Champions Academy, Inc. |
+| Address | North Centrum Building, Guiguinto Bulacan 3015 |
 | Region | Region III |
 | Division | Bulacan |
 | District | 5th District |
 | School ID | 411093 |
+
+## Notifications
+
+- Teacher submit → system notification to configured lesson-plan verifiers (`navigation_key: lesson-plans`)
+- Verifier approve / request revision → system notification to the teacher
 
 ## Superadmin review
 

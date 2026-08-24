@@ -239,6 +239,7 @@ function buildBrandedPayPageHtml({ title, heading, message, bodyHtml = '', statu
           <tr>
             <td style="padding:28px 28px 20px;text-align:center;border-bottom:1px solid #f1f5f9;">
               <img src="${logoUrl}" alt="${schoolName}" width="64" height="64"
+                referrerpolicy="no-referrer"
                 style="display:block;margin:0 auto 12px;width:64px;height:64px;border:0;border-radius:50%;object-fit:cover;" />
               <div style="font-size:17px;font-weight:700;color:#0f172a;line-height:1.3;">${schoolName}</div>
               <div style="font-size:12px;color:#64748b;margin-top:4px;">Secure payment</div>

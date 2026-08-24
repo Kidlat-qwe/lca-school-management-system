@@ -30,6 +30,11 @@ function getNotificationBasePath(navigationKey, userInfo) {
       if (userType === 'Admin') return '/admin/merchandise';
       return getAnnouncementsPathForUser(userInfo);
 
+    case 'lesson-plans':
+      if (userType === 'Superadmin') return '/superadmin/lesson-plans';
+      if (userType === 'Teacher') return '/teacher/lesson-plans';
+      return getAnnouncementsPathForUser(userInfo);
+
     case 'daily-summary-sales':
       return getDailySummaryBasePath(userInfo);
 
@@ -64,6 +69,13 @@ function inferNotificationNavigation(notification) {
   }
   if (title.includes('merchandise request') || title.includes('stock request')) {
     return { navigationKey: 'merchandise', navigationQuery: 'notificationTab=requests' };
+  }
+  if (
+    title.includes('lesson plan submitted') ||
+    title.includes('lesson plan approved') ||
+    title.includes('lesson plan revision')
+  ) {
+    return { navigationKey: 'lesson-plans', navigationQuery: '' };
   }
   if (title.includes('cash deposit summary')) {
     return {

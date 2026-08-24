@@ -8,11 +8,42 @@ import { getEffectiveSettings, getSettingDefinition } from './settingsService.js
 
 export const DEFAULT_SCHOOL_NAME = 'Little Champions Academy, Inc.';
 const MANILA_TZ = 'Asia/Manila';
-const DEFAULT_EMAIL_LOGO_URL = 'https://cms.little-champion.com/LCA%20Icon.png';
+/** Space-encoded filename — works on cms.little-champion.com; hyphen-only path returns SPA HTML there. */
+const DEFAULT_LOGO_PATH = '/LCA%20Icon.png';
+const DEFAULT_EMAIL_LOGO_ORIGIN = 'https://cms.little-champion.com';
 
+/**
+ * Absolute URL for school logo in emails and public HTML (FIUU /go pages).
+ * Prefer EMAIL_LOGO_URL; else build from FIUU_FRONTEND_RETURN_URL / CORS so Dev uses cms.lca-app.com.
+ */
 export function getEmailBrandLogoUrl() {
   const fromEnv = String(process.env.EMAIL_LOGO_URL || '').trim();
-  return fromEnv || DEFAULT_EMAIL_LOGO_URL;
+  if (fromEnv) return fromEnv;
+
+  const frontendHint =
+    String(process.env.FIUU_FRONTEND_RETURN_URL || '').trim() ||
+    String(process.env.PUBLIC_FRONTEND_URL || '').trim() ||
+    String(process.env.CORS_ORIGIN || '')
+      .split(',')
+      .map((s) => s.trim())
+      .find(Boolean) ||
+    '';
+
+  let origin = DEFAULT_EMAIL_LOGO_ORIGIN;
+  if (frontendHint) {
+    try {
+      origin = new URL(frontendHint).origin;
+    } catch {
+      /* keep default */
+    }
+  }
+
+  // cms.lca-app.com serves both; prefer hyphen asset when available on Dev frontend public/.
+  const host = origin.replace(/^https?:\/\//i, '').toLowerCase();
+  if (host.includes('lca-app.com')) {
+    return `${origin}/LCA-Icon.png`;
+  }
+  return `${origin}${DEFAULT_LOGO_PATH}`;
 }
 
 export function escapeHtml(value) {

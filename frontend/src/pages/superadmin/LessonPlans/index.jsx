@@ -408,7 +408,7 @@ export default function SuperadminLessonPlans() {
       {selectedPlan &&
         createPortal(
           <div
-            className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-black/50 p-4 sm:p-6"
+            className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-black/55 p-3 sm:p-5 lg:p-8"
             onClick={() => {
               setSelectedPlan(null);
               setShowRevisionModal(false);
@@ -417,7 +417,7 @@ export default function SuperadminLessonPlans() {
             role="presentation"
           >
             <div
-              className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+              className="relative flex max-h-[94vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-md bg-[#f3f4f6] shadow-2xl"
               onClick={(e) => e.stopPropagation()}
               role="dialog"
               aria-modal="true"
@@ -430,95 +430,106 @@ export default function SuperadminLessonPlans() {
                   setShowRevisionModal(false);
                   setRevisionReason('');
                 }}
-                className="absolute right-2 top-1 z-10 flex h-9 w-9 items-center justify-center text-3xl font-bold leading-none text-red-600 hover:text-red-800"
+                className="absolute right-3 top-2 z-20 flex h-10 w-10 items-center justify-center text-[34px] font-bold leading-none text-[#d32f2f] hover:text-red-800"
                 aria-label="Close"
               >
                 ×
               </button>
 
               <div
-                className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 sm:p-8"
+                className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 lg:p-8"
                 style={{
                   scrollbarWidth: 'thin',
                   scrollbarColor: '#cbd5e0 #f7fafc',
                   WebkitOverflowScrolling: 'touch',
                 }}
               >
-                <LessonPlanHeader address={selectedPlan.branch_address || ''} />
+                {/* Document sheet — matches teacher lesson plan visual */}
+                <div
+                  className="mx-auto w-full max-w-[960px] rounded-md border border-[#eeeeee] bg-white px-5 py-6 text-[#111111] shadow-[0_10px_30px_rgba(0,0,0,0.08)] sm:px-10 sm:py-9 lg:px-[42px] lg:py-[34px]"
+                  style={{ fontFamily: '"Poppins", "Inter", "Segoe UI", sans-serif' }}
+                >
+                  <LessonPlanHeader />
 
-                <h3 className="mb-3 text-center text-lg font-medium text-gray-900">Lesson Plan</h3>
-                <div className="mb-4 border-t-2 border-gray-900" />
+                  <h3 className="mb-[22px] mt-[18px] text-center text-[20px] font-semibold text-[#111111]">
+                    Lesson Plan
+                  </h3>
+                  <div className="mb-4 border-t-2 border-[#111111]" />
 
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <span
-                    className={`rounded-full px-2.5 py-1 text-xs font-bold uppercase ${statusBadgeClass(
-                      selectedPlan.status
-                    )}`}
-                  >
-                    {formatStatus(selectedPlan.status)}
-                  </span>
-                  <span className="text-sm text-gray-500">
-                    Prepared by {selectedPlan.teacher_name || 'Unknown'}
-                  </span>
+                  <div className="mb-4 flex flex-wrap items-center gap-3">
+                    <span
+                      className={`rounded-full px-2.5 py-1.5 text-xs font-bold capitalize ${statusBadgeClass(
+                        selectedPlan.status
+                      )}`}
+                    >
+                      {formatStatus(selectedPlan.status)}
+                    </span>
+                    <span className="text-[15px] text-[#666666]">
+                      Prepared by {selectedPlan.teacher_name || 'Unknown'}
+                    </span>
+                  </div>
+
+                  <div className="mb-2 grid grid-cols-1 gap-x-[34px] gap-y-3 sm:grid-cols-2">
+                    <p className="text-[16px] text-[#111111]">
+                      <span className="font-medium">Lesson Date</span>{' '}
+                      <span className="font-normal">{selectedPlan.lesson_date || '—'}</span>
+                    </p>
+                    <p className="text-[16px] text-[#111111]">
+                      <span className="font-medium">Grade Level</span>{' '}
+                      <span className="font-normal">{selectedPlan.grade_level || '—'}</span>
+                    </p>
+                    <p className="col-span-full text-[16px] text-[#111111]">
+                      <span className="font-medium">Subject</span>{' '}
+                      <span className="font-normal">{selectedPlan.subject || '—'}</span>
+                    </p>
+                    <p className="col-span-full text-[16px] text-[#111111]">
+                      <span className="font-medium">Topic</span>{' '}
+                      <span className="font-normal">{selectedPlan.topic || '—'}</span>
+                    </p>
+                  </div>
+
+                  {INTRO_SECTIONS.map(([title, key]) => (
+                    <section key={key} className="py-3">
+                      <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">{title}</h4>
+                      <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+                        {selectedPlan[key] || '—'}
+                      </p>
+                    </section>
+                  ))}
+
+                  <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
+                    Lesson Flow
+                  </h4>
+                  {LESSON_FLOW_SECTIONS.map(([title, key]) => (
+                    <section key={key} className="py-3">
+                      <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">{title}</h4>
+                      <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+                        {selectedPlan[key] || '—'}
+                      </p>
+                    </section>
+                  ))}
+
+                  <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
+                    Teacher&apos;s Reflection
+                  </h4>
+                  {REFLECTION_SECTIONS.map(([title, key]) => (
+                    <section key={key} className="py-3">
+                      <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">{title}</h4>
+                      <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+                        {selectedPlan[key] || '—'}
+                      </p>
+                    </section>
+                  ))}
                 </div>
-
-                <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <p className="text-sm text-gray-900">
-                    <strong className="font-medium">Date:</strong> {selectedPlan.lesson_date}
-                  </p>
-                  <p className="text-sm text-gray-900">
-                    <strong className="font-medium">Grade Level:</strong>{' '}
-                    {selectedPlan.grade_level}
-                  </p>
-                  <p className="text-sm text-gray-900 sm:col-span-2">
-                    <strong className="font-medium">Subject:</strong> {selectedPlan.subject}
-                  </p>
-                  <p className="text-sm text-gray-900 sm:col-span-2">
-                    <strong className="font-medium">Topic:</strong> {selectedPlan.topic}
-                  </p>
-                </div>
-
-                {INTRO_SECTIONS.map(([title, key]) => (
-                  <section key={key} className="py-2">
-                    <h4 className="mb-1 text-base font-medium text-gray-900">{title}</h4>
-                    <p className="whitespace-pre-wrap text-sm text-gray-800">
-                      {selectedPlan[key] || '—'}
-                    </p>
-                  </section>
-                ))}
-
-                <h4 className="mt-4 border-t-2 border-gray-900 pt-3 text-lg font-bold text-gray-900">
-                  Lesson Flow
-                </h4>
-                {LESSON_FLOW_SECTIONS.map(([title, key]) => (
-                  <section key={key} className="py-2">
-                    <h4 className="mb-1 text-base font-medium text-gray-900">{title}</h4>
-                    <p className="whitespace-pre-wrap text-sm text-gray-800">
-                      {selectedPlan[key] || '—'}
-                    </p>
-                  </section>
-                ))}
-
-                <h4 className="mt-4 border-t-2 border-gray-900 pt-3 text-lg font-bold text-gray-900">
-                  Teacher&apos;s Reflection
-                </h4>
-                {REFLECTION_SECTIONS.map(([title, key]) => (
-                  <section key={key} className="py-2">
-                    <h4 className="mb-1 text-base font-medium text-gray-900">{title}</h4>
-                    <p className="whitespace-pre-wrap text-sm text-gray-800">
-                      {selectedPlan[key] || '—'}
-                    </p>
-                  </section>
-                ))}
               </div>
 
               {canReview && (
-                <div className="flex shrink-0 flex-col gap-2 border-t border-gray-200 bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-8">
+                <div className="flex shrink-0 flex-col gap-2 border-t border-[#eeeeee] bg-white px-5 py-4 sm:flex-row sm:justify-end sm:px-8">
                   <button
                     type="button"
                     disabled={reviewing}
                     onClick={() => setShowRevisionModal(true)}
-                    className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-50"
+                    className="rounded-lg border border-[#eeeeee] bg-white px-4 py-[11px] text-sm font-semibold text-[#333333] hover:bg-[#fff0e6] disabled:opacity-50"
                   >
                     Request revision
                   </button>
@@ -526,7 +537,7 @@ export default function SuperadminLessonPlans() {
                     type="button"
                     disabled={reviewing}
                     onClick={handleApprove}
-                    className="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                    className="rounded-lg border border-[#ffddc9] bg-[#ffddc9] px-4 py-[11px] text-sm font-semibold text-[#333333] hover:bg-[#fff0e6] disabled:opacity-50"
                   >
                     {reviewing ? 'Saving…' : 'Approve'}
                   </button>
