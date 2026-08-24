@@ -16,6 +16,17 @@ Single unified dashboard for teachers (`TeacherDashboardView`). No separate dail
 - `/teacher/daily-attendance-dashboard` — full daily stats, rates, charts, take/update attendance
 - `/teacher/monthly-attendance-dashboard` — monthly summary, daily trend chart, full session list
 
+## Lesson Plans (`/teacher/lesson-plans`)
+
+UI styling matches the QA `TeacherLessonPlans.jsx` sheet (Poppins, header grid, peach primary buttons, submissions sidebar).
+
+- Fixed school header meta (Region III, Bulacan, 5th District, School ID 411093)
+- Save draft / submit for Superadmin verification
+- Prepared by = logged-in teacher
+- Superadmin → Settings → Lesson Plans configures verifiers; review is on `/superadmin/lesson-plans`
+
+**API:** `/api/sms/lesson-plans`
+
 **APIs:**
 
 - `GET /dashboard/operational-attendance-sessions` (teacher-scoped via auth)

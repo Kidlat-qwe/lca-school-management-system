@@ -6,16 +6,18 @@ Resolves email addresses for announcement **recipient groups** and sends branded
 
 | Group | Email source |
 |-------|----------------|
-| Students | `userstbl.email` where `user_type = 'Student'` |
+| Students | `userstbl.email` where `user_type = 'Student'` **and** actively enrolled (`new` / `re_enrolled` / `upsell` / `rejoin`, `removed_at` null) |
 | Teachers | `userstbl.email` where `user_type = 'Teacher'` |
 | Admin | `userstbl.email` where `user_type = 'Admin'` |
 | Finance | `userstbl.email` where `user_type = 'Finance'` (branch finance + network finance with no branch) |
 | Superadmin | All `Superadmin` users (network-wide) |
 | Superfinance | All `Superfinance` users (network-wide) |
-| Guardians | `guardianstbl.email` linked through the student’s branch |
+| Guardians | `guardianstbl.email` only when linked student is actively enrolled |
 | All | Expands to every group above |
 
 Branch scoping follows the announcement’s `branch_id`. When `branch_id` is null, recipients are resolved network-wide.
+
+**Academic audience (optional):** `program_ids` / `class_ids` further narrow **Students**, **Guardians**, and **Teachers**. Empty = all programs/classes. Students and Guardians always require active enrollment (same statuses as Reports Active / class ops). Admin / Finance / Super* are not filtered by program/class.
 
 **Email subject:** uses `announcementstbl.email_subject` when set. If it is empty, the mail subject falls back to `[Announcement] ${title}`.
 

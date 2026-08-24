@@ -7,7 +7,9 @@ import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 import AnnouncementAttachmentPreview, { isAnnouncementImageFile } from '../../components/announcementAttachment';
-import AnnouncementSendEmailToggle from '../../components/announcementSendEmailToggle';
+import AnnouncementFormModal, {
+  announcementNeedsAcademicAudience,
+} from '../../components/announcementFormModal';
 
 const RECIPIENT_GROUPS = [
   { value: 'Students', label: 'Students' },
@@ -64,6 +66,8 @@ const AdminAnnouncements = () => {
     email_subject: '',
     body: '',
     recipient_groups: [],
+    program_ids: null,
+    class_ids: null,
     status: 'Active',
     priority: 'Medium',
     branch_id: '',
@@ -298,6 +302,8 @@ const AdminAnnouncements = () => {
       email_subject: '',
       body: '',
       recipient_groups: [],
+      program_ids: null,
+      class_ids: null,
       status: 'Active',
       priority: 'Medium',
       branch_id: userBranchId ? userBranchId.toString() : '',
@@ -343,12 +349,15 @@ const AdminAnnouncements = () => {
       email_subject: announcement.email_subject || '',
       body: announcement.body || '',
       recipient_groups: (announcement.recipient_groups || []).filter((group) => group !== 'All'),
+      program_ids: (announcement.program_ids || []).map(Number).filter((n) => Number.isFinite(n) && n > 0),
+      class_ids: (announcement.class_ids || []).map(Number).filter((n) => Number.isFinite(n) && n > 0),
       status: announcement.status || 'Active',
       priority: announcement.priority || 'Medium',
       branch_id: userBranchId ? userBranchId.toString() : '',
       start_date: formatDateForInput(announcement.start_date),
       end_date: formatDateForInput(announcement.end_date),
       attachment_url: announcement.attachment_url || '',
+      send_email: true,
     });
     setAttachmentFileName(announcement.attachment_url ? 'Attached file' : '');
     clearAttachmentLocalPreview();
@@ -365,6 +374,8 @@ const AdminAnnouncements = () => {
       email_subject: '',
       body: '',
       recipient_groups: [],
+      program_ids: null,
+      class_ids: null,
       status: 'Active',
       priority: 'Medium',
       branch_id: '',
@@ -445,17 +456,23 @@ const AdminAnnouncements = () => {
   const handleRecipientGroupToggle = (group) => {
     setFormData((prev) => {
       const currentGroups = prev.recipient_groups || [];
-      if (currentGroups.includes(group)) {
-        return {
-          ...prev,
-          recipient_groups: currentGroups.filter(g => g !== group),
-        };
-      } else {
-        return {
-          ...prev,
-          recipient_groups: [...currentGroups, group],
-        };
-      }
+      const recipient_groups = currentGroups.includes(group)
+        ? currentGroups.filter((g) => g !== group)
+        : [...currentGroups, group];
+      const needsAudience = announcementNeedsAcademicAudience(recipient_groups);
+      return {
+        ...prev,
+        recipient_groups,
+        program_ids: needsAudience ? prev.program_ids : null,
+        class_ids: needsAudience ? prev.class_ids : null,
+      };
+    });
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      delete next.recipient_groups;
+      delete next.program_ids;
+      delete next.class_ids;
+      return next;
     });
   };
 
@@ -479,6 +496,16 @@ const AdminAnnouncements = () => {
 
     if (!formData.recipient_groups || formData.recipient_groups.length === 0) {
       errors.recipient_groups = 'At least one recipient group is required';
+    }
+
+    const needsAcademicAudience = announcementNeedsAcademicAudience(formData.recipient_groups);
+    if (needsAcademicAudience) {
+      if (formData.program_ids == null) {
+        errors.program_ids = 'Select All programs or at least one program';
+      }
+      if (formData.class_ids == null) {
+        errors.class_ids = 'Select All classes or at least one class';
+      }
     }
 
     if (!formData.status) {
@@ -516,6 +543,8 @@ const AdminAnnouncements = () => {
         email_subject: formData.email_subject.trim(),
         body: formData.body.trim(),
         recipient_groups: (formData.recipient_groups || []).filter((group) => group !== 'All'),
+        program_ids: Array.isArray(formData.program_ids) ? formData.program_ids : [],
+        class_ids: Array.isArray(formData.class_ids) ? formData.class_ids : [],
         status: formData.status,
         priority: formData.priority,
         branch_id: userBranchId || null,
@@ -564,6 +593,45 @@ const AdminAnnouncements = () => {
     }
   };
 
+  const handleSaveDraft = async () => {
+    setSubmitting(true);
+    setError('');
+    try {
+      const userBranchId = userInfo?.branchId || userInfo?.branch_id;
+      const payload = {
+        title: formData.title.trim(),
+        email_subject: (formData.email_subject || '').trim() || null,
+        body: formData.body.trim(),
+        recipient_groups: (formData.recipient_groups || []).filter((group) => group !== 'All'),
+        program_ids: Array.isArray(formData.program_ids) ? formData.program_ids : [],
+        class_ids: Array.isArray(formData.class_ids) ? formData.class_ids : [],
+        status: 'Draft',
+        priority: formData.priority || 'Medium',
+        branch_id: userBranchId || null,
+        start_date: formData.start_date && formData.start_date.trim() !== '' ? formData.start_date : null,
+        end_date: formData.end_date && formData.end_date.trim() !== '' ? formData.end_date : null,
+        attachment_url:
+          formData.attachment_url && formData.attachment_url.trim()
+            ? formData.attachment_url.trim()
+            : null,
+        send_email: false,
+      };
+
+      await apiRequest('/announcements', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      closeModal();
+      fetchAnnouncements();
+    } catch (err) {
+      console.error('Error saving draft announcement:', err);
+      setError(err.response?.data?.message || err.message || 'Failed to save draft');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const getStatusBadgeColor = (status) => {
     switch (status) {
       case 'Active':
@@ -593,6 +661,11 @@ const AdminAnnouncements = () => {
   const formatRecipientGroups = (groups) => {
     if (!groups || groups.length === 0) return 'N/A';
     return groups.join(', ');
+  };
+
+  const formatAudienceList = (ids, allLabel = 'All') => {
+    if (!ids || ids.length === 0) return allLabel;
+    return `${ids.length} selected`;
   };
 
   const truncateText = (text, maxLength = 40) => {
@@ -1006,297 +1079,46 @@ const AdminAnnouncements = () => {
         </div>
       </div>
 
-      {/* Create/Edit Modal (portaled so overlay covers header) */}
-      {isModalOpen && createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4">
-          <div className="fixed inset-0 backdrop-blur-sm bg-black/5" onClick={closeModal}></div>
-          <div className="relative z-10 flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white text-left shadow-xl">
-            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-              <div className="shrink-0 border-b border-gray-200 px-4 py-3">
-                <h3 className="text-lg font-medium text-gray-900">
-                  {editingAnnouncement ? 'Edit Announcement' : 'Create Announcement'}
-                </h3>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-                {error && (
-                  <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    {error}
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                    <div>
-                      <label htmlFor="title" className="mb-1 block text-sm font-medium text-gray-700">
-                        Title <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        id="title"
-                        name="title"
-                        value={formData.title}
-                        onChange={handleInputChange}
-                        required
-                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                          formErrors.title ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                      />
-                      {formErrors.title && (
-                        <p className="mt-1 text-sm text-red-600">{formErrors.title}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label htmlFor="email_subject" className="mb-1 block text-sm font-medium text-gray-700">
-                        Subject{' '}
-                        {(editingAnnouncement || (formData.send_email && formData.status === 'Active')) && (
-                          <span className="text-red-500">*</span>
-                        )}
-                      </label>
-                      <input
-                        type="text"
-                        id="email_subject"
-                        name="email_subject"
-                        value={formData.email_subject}
-                        onChange={handleInputChange}
-                        required={editingAnnouncement || (formData.send_email && formData.status === 'Active')}
-                        disabled={!editingAnnouncement && !formData.send_email}
-                        placeholder="Email subject line"
-                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:text-gray-500 ${
-                          formErrors.email_subject ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                      />
-                      {formErrors.email_subject && (
-                        <p className="mt-1 text-sm text-red-600">{formErrors.email_subject}</p>
-                      )}
-                    </div>
-
-                    <AnnouncementSendEmailToggle
-                      checked={formData.send_email}
-                      onChange={(value) =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          send_email: value,
-                        }))
-                      }
-                      status={formData.status}
-                      showEditHint={Boolean(editingAnnouncement)}
-                      compact
-                    />
-
-                    <div>
-                      <label htmlFor="body" className="mb-1 block text-sm font-medium text-gray-700">
-                        Description <span className="text-red-500">*</span>
-                      </label>
-                      <textarea
-                        id="body"
-                        name="body"
-                        value={formData.body}
-                        onChange={handleInputChange}
-                        required
-                        rows={3}
-                        className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                          formErrors.body ? 'border-red-500' : 'border-gray-300'
-                        }`}
-                      />
-                      {formErrors.body && (
-                        <p className="mt-1 text-sm text-red-600">{formErrors.body}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Attachment (optional)
-                      </label>
-                      <input
-                        ref={attachmentInputRef}
-                        type="file"
-                        accept=".pdf,.doc,.docx,image/*,.txt,.csv"
-                        onChange={handleAttachmentChange}
-                        className="w-full text-sm text-gray-600 file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-primary-700 hover:file:bg-primary-100"
-                      />
-                      {attachmentUploading && (
-                        <p className="mt-1 text-sm text-gray-500">Uploading...</p>
-                      )}
-                      {attachmentFileName && !attachmentUploading && (
-                        <div className="mt-2 space-y-1.5">
-                          {(formData.attachment_url || attachmentLocalPreviewUrl) && (
-                            <AnnouncementAttachmentPreview
-                              url={formData.attachment_url}
-                              localPreviewUrl={attachmentLocalPreviewUrl}
-                              compact
-                            />
-                          )}
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm text-gray-600">{attachmentFileName}</span>
-                            <button
-                              type="button"
-                              onClick={removeAttachment}
-                              className="shrink-0 text-sm text-red-600 hover:text-red-700"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      {!attachmentFileName && attachmentLocalPreviewUrl && attachmentUploading && (
-                        <div className="mt-2">
-                          <AnnouncementAttachmentPreview localPreviewUrl={attachmentLocalPreviewUrl} compact />
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-sm font-medium text-gray-700">
-                        Recipient Groups <span className="text-red-500">*</span>
-                      </label>
-                      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                        {RECIPIENT_GROUPS.map((group) => (
-                          <label key={group.value} className="flex items-center space-x-2">
-                            <input
-                              type="checkbox"
-                              checked={formData.recipient_groups.includes(group.value)}
-                              onChange={() => handleRecipientGroupToggle(group.value)}
-                              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                            />
-                            <span className="text-sm text-gray-700">{group.label}</span>
-                          </label>
-                        ))}
-                      </div>
-                      <p className="mt-1 text-xs text-gray-500">
-                        Branch roles apply to your branch. Superadmin and Superfinance receive it network-wide.
-                      </p>
-                      {formErrors.recipient_groups && (
-                        <p className="mt-1 text-sm text-red-600">{formErrors.recipient_groups}</p>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label htmlFor="status" className="mb-1 block text-sm font-medium text-gray-700">
-                          Status <span className="text-red-500">*</span>
-                        </label>
-                        <select
-                          id="status"
-                          name="status"
-                          value={formData.status}
-                          onChange={handleInputChange}
-                          required
-                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                            formErrors.status ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                        >
-                          {STATUS_OPTIONS.map((status) => (
-                            <option key={status.value} value={status.value}>
-                              {status.label}
-                            </option>
-                          ))}
-                        </select>
-                        {formErrors.status && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.status}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label htmlFor="priority" className="mb-1 block text-sm font-medium text-gray-700">
-                          Priority <span className="text-red-500">*</span>
-                        </label>
-                        <select
-                          id="priority"
-                          name="priority"
-                          value={formData.priority}
-                          onChange={handleInputChange}
-                          required
-                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                            formErrors.priority ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                        >
-                          {PRIORITY_OPTIONS.map((priority) => (
-                            <option key={priority.value} value={priority.value}>
-                              {priority.label}
-                            </option>
-                          ))}
-                        </select>
-                        {formErrors.priority && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.priority}</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label htmlFor="branch_id" className="mb-1 block text-sm font-medium text-gray-700">
-                        Branch
-                      </label>
-                      <input
-                        type="text"
-                        id="branch_id"
-                        value={userInfo?.branchName || 'Your Branch'}
-                        disabled
-                        className="w-full cursor-not-allowed rounded-lg border border-gray-300 bg-gray-100 px-3 py-1.5 text-sm text-gray-600"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label htmlFor="start_date" className="mb-1 block text-sm font-medium text-gray-700">
-                          Start Date
-                        </label>
-                        <input
-                          type="date"
-                          id="start_date"
-                          name="start_date"
-                          value={formData.start_date}
-                          onChange={handleInputChange}
-                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                            formErrors.start_date ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                        />
-                        {formErrors.start_date && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.start_date}</p>
-                        )}
-                      </div>
-
-                      <div>
-                        <label htmlFor="end_date" className="mb-1 block text-sm font-medium text-gray-700">
-                          End Date
-                        </label>
-                        <input
-                          type="date"
-                          id="end_date"
-                          name="end_date"
-                          value={formData.end_date}
-                          onChange={handleInputChange}
-                          className={`w-full rounded-lg border px-3 py-1.5 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500 ${
-                            formErrors.end_date ? 'border-red-500' : 'border-gray-300'
-                          }`}
-                        />
-                        {formErrors.end_date && (
-                          <p className="mt-1 text-sm text-red-600">{formErrors.end_date}</p>
-                        )}
-                      </div>
-                    </div>
-                </div>
-              </div>
-              <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={closeModal}
-                    className="inline-flex w-full justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 sm:w-auto"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="inline-flex w-full justify-center rounded-lg border border-transparent bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:opacity-50 sm:w-auto"
-                  >
-                    {submitting ? 'Saving...' : editingAnnouncement ? 'Update' : 'Create'}
-                  </button>
-              </div>
-            </form>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* Create/Edit Modal (portaled landscape wizard) */}
+      <AnnouncementFormModal
+        isOpen={isModalOpen}
+        onClose={closeModal}
+        onSubmit={handleSubmit}
+        onSaveDraft={handleSaveDraft}
+        formData={formData}
+        formErrors={formErrors}
+        setFormErrors={setFormErrors}
+        onInputChange={handleInputChange}
+        onRecipientGroupToggle={handleRecipientGroupToggle}
+        onAudienceChange={({ program_ids, class_ids }) => {
+          setFormData((prev) => ({ ...prev, program_ids, class_ids }));
+          setFormErrors((prev) => {
+            const next = { ...prev };
+            delete next.program_ids;
+            delete next.class_ids;
+            return next;
+          });
+        }}
+        onSendEmailChange={(value) =>
+          setFormData((prev) => ({
+            ...prev,
+            send_email: value,
+          }))
+        }
+        recipientGroups={RECIPIENT_GROUPS}
+        statusOptions={STATUS_OPTIONS}
+        priorityOptions={PRIORITY_OPTIONS}
+        editingAnnouncement={editingAnnouncement}
+        submitting={submitting}
+        error={error}
+        attachmentInputRef={attachmentInputRef}
+        attachmentUploading={attachmentUploading}
+        attachmentFileName={attachmentFileName}
+        attachmentLocalPreviewUrl={attachmentLocalPreviewUrl}
+        onAttachmentChange={handleAttachmentChange}
+        onRemoveAttachment={removeAttachment}
+        branchLabel={userInfo?.branchName || 'Your Branch'}
+      />
 
       {/* View Details Modal (portaled so overlay covers header) */}
       {isViewModalOpen && viewingAnnouncement && createPortal(
@@ -1373,6 +1195,24 @@ const AdminAnnouncements = () => {
                       </label>
                       <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
                         {viewingAnnouncement.branch_name || 'All Branches'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Programs
+                      </label>
+                      <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
+                        {formatAudienceList(viewingAnnouncement.program_ids, 'All programs')}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Classes
+                      </label>
+                      <div className="text-sm text-gray-900 bg-gray-50 px-4 py-2 rounded-lg">
+                        {formatAudienceList(viewingAnnouncement.class_ids, 'All classes')}
                       </div>
                     </div>
 

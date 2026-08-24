@@ -43,6 +43,7 @@ import cashDepositSummariesRoutes from './routes/cashDepositSummaries.js';
 import systemLogsRoutes from './routes/systemLogs.js';
 import inventoryWebhooksRoutes from './routes/inventoryWebhooks.js';
 import fiuuPaymentsRoutes, { fiuuWebhookRouter } from './routes/fiuuPayments.js';
+import lessonPlansRoutes from './routes/lessonPlans.js';
 
 // Import middleware
 import { activityLogger } from './middleware/activityLogger.js';
@@ -201,6 +202,7 @@ app.use(`${API_VERSION}/reports`, reportsRoutes);
 app.use(`${API_VERSION}/daily-summary-sales`, dailySummarySalesRoutes);
 app.use(`${API_VERSION}/cash-deposit-summaries`, cashDepositSummariesRoutes);
 app.use(`${API_VERSION}/system-logs`, systemLogsRoutes);
+app.use(`${API_VERSION}/lesson-plans`, lessonPlansRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

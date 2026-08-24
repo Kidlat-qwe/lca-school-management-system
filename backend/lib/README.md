@@ -236,9 +236,18 @@ Staff Student History **Full payment** tab. See `studentFullPaymentInvoices/READ
 
 `GET /api/sms/invoices/student/:studentId/full-payment` returns one settlement card per native full-payment invoice or installment→full-payment conversion (not installment phase rows).
 
+## `lessonPlans/`
+
+Teacher lesson plan helpers (status flow, grade/subject options, row mapping). See `lessonPlans/README.md`.
+API: `routes/lessonPlans.js` → `/api/sms/lesson-plans`.
+
+## `announcementAudienceFilter/`
+
+Program / class scoping for announcement emails and Student/Teacher board visibility. Empty arrays = all programs/classes; Students/Guardians still require active enrollment (`new` / `re_enrolled` / `upsell` / `rejoin`, not removed). See `announcementAudienceFilter/README.md`.
+
 ## `announcementRecipientEmails/`
 
-Resolves emails for announcement recipient groups and sends branded notification emails when a board announcement is created with **Active** status. Guardians receive mail at `guardianstbl.email`. See `announcementRecipientEmails/README.md`.
+Resolves emails for announcement recipient groups and sends branded notification emails when a board announcement is created with **Active** status. Guardians receive mail at `guardianstbl.email`. Optional `program_ids` / `class_ids` narrow Students, Guardians, and Teachers. See `announcementRecipientEmails/README.md`.
 
 ## `arAttachInstallmentFollowUp.js`
 

@@ -32,6 +32,7 @@ import {
   attachPayLinkToMetadata,
   buildFiuuPublicPayPageUrl,
   buildPublicPayPayload,
+  buildPublicPayPayloadForRow,
   buildFiuuAutoPostHtml,
   findGatewayPaymentByPayToken,
   resolvePayLinkExpiresAt,
@@ -291,13 +292,13 @@ async function resolveInvoicePayLinkRecipients(studentId, recipientEmail, studen
 
 export async function getPublicFiuuPayByToken(token) {
   const row = await findGatewayPaymentByPayToken(token);
-  return buildPublicPayPayload(row);
+  return buildPublicPayPayloadForRow(row);
 }
 
 /** HTML bridge for email "Pay now" — auto-POSTs to FIUU in the same tab. */
 export async function getPublicFiuuGoHtmlByToken(token) {
   const row = await findGatewayPaymentByPayToken(token);
-  const payload = buildPublicPayPayload(row);
+  const payload = await buildPublicPayPayloadForRow(row);
   return buildFiuuAutoPostHtml(payload);
 }
 

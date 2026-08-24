@@ -38,6 +38,7 @@ import Report from './pages/superadmin/Report';
 import CalendarSchedule from './pages/superadmin/CalendarSchedule';
 import Holidays from './pages/superadmin/Holidays';
 import Announcements from './pages/superadmin/Announcements';
+import SuperadminLessonPlans from './pages/superadmin/LessonPlans';
 import Settings from './pages/superadmin/Settings';
 import SystemLogs from './pages/superadmin/SystemLogs';
 import AdminFinancialDashboard from './pages/admin/adminFinancialDashboard';
@@ -77,6 +78,7 @@ import TeacherAnnouncements from './pages/teacher/teacherAnnouncements';
 import TeacherStudentList from './pages/teacher/teacherStudentList';
 import TeacherProgram from './pages/teacher/teacherProgram';
 import TeacherCurriculum from './pages/teacher/teacherCurriculum';
+import TeacherLessonPlans from './pages/teacher/teacherLessonPlans';
 import StudentDashboard from './pages/student/studentDashboard';
 import StudentCalendar from './pages/student/studentCalendar';
 import StudentClasses from './pages/student/studentClasses';
@@ -154,6 +156,7 @@ function App() {
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="announcements" element={<Announcements />} />
+            <Route path="lesson-plans" element={<SuperadminLessonPlans />} />
             <Route path="settings" element={<Settings />} />
             <Route path="system-logs" element={<SystemLogs />} />
           </Route>
@@ -225,6 +228,7 @@ function App() {
             <Route path="student-list" element={<TeacherStudentList />} />
             <Route path="program" element={<TeacherProgram />} />
             <Route path="curriculum" element={<TeacherCurriculum />} />
+            <Route path="lesson-plans" element={<TeacherLessonPlans />} />
           </Route>
           
           {/* Student Routes */}

@@ -4,6 +4,19 @@ This directory contains SQL migration files for database schema changes.
 
 ## Migration Files
 
+### 141_create_lesson_plan_tables.sql
+- **Purpose**: Teacher lesson plans + Superadmin verifier config
+- **Changes**:
+  - `lessonplanstbl` (draft / submitted / approved / revision_requested)
+  - `lesson_plan_verifierstbl` (Superadmin user_ids who may verify)
+
+### 140_add_program_class_filters_to_announcementstbl.sql
+- **Purpose**: Optional program/class audience filters on announcements (email + Student/Teacher board)
+- **Changes**:
+  - Adds `program_ids integer[]` (empty = all programs)
+  - Adds `class_ids integer[]` (empty = all classes)
+  - GIN indexes on both columns
+
 ### 002_add_day_of_week_to_roomschedtbl.sql
 - **Purpose**: Adds `day_of_week` column to `roomschedtbl` table to support day-based room scheduling
 - **Changes**:

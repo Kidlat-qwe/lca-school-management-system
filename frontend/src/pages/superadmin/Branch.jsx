@@ -333,11 +333,22 @@ const Branch = () => {
               </div>
 
               {/* Branch Title */}
-              <h3 className="text-lg font-semibold text-gray-900 pr-12">
-                {branch.branch_name}
-              </h3>
+              <div
+                className={`flex items-start gap-2.5 pr-12 ${
+                  branch.branch_nickname ? 'mb-1' : 'mb-4'
+                }`}
+              >
+                <img
+                  src="/LCA Icon.png"
+                  alt="Little Champions Academy"
+                  className="mt-0.5 h-8 w-8 shrink-0 rounded-full object-contain"
+                />
+                <h3 className="min-w-0 text-lg font-semibold leading-snug text-gray-900">
+                  {branch.branch_name}
+                </h3>
+              </div>
               {branch.branch_nickname && (
-                <p className="text-xs font-medium text-gray-500 mb-4 pr-12">
+                <p className="mb-4 pl-[42px] pr-12 text-xs font-medium text-gray-500">
                   Nickname: {branch.branch_nickname}
                 </p>
               )}

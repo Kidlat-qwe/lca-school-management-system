@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { apiRequest } from '../config/api';
 
 const Sidebar = ({ isOpen, onClose }) => {
   const location = useLocation();
@@ -38,7 +39,29 @@ const Sidebar = ({ isOpen, onClose }) => {
   // Track only the currently expanded menu (accordion behavior - only one open at a time)
   const [expandedMenu, setExpandedMenu] = useState(null);
   /** When a sidebar child has its own submenu, e.g. `Dashboard:Operational Dashboard` */
+  const [isLessonPlanVerifier, setIsLessonPlanVerifier] = useState(false);
   const [expandedNestedMenu, setExpandedNestedMenu] = useState(null);
+
+  useEffect(() => {
+    if (userType !== 'Superadmin') {
+      setIsLessonPlanVerifier(false);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest('/lesson-plans/verifiers/me');
+        if (!cancelled) {
+          setIsLessonPlanVerifier(Boolean(res.data?.is_verifier));
+        }
+      } catch {
+        if (!cancelled) setIsLessonPlanVerifier(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userType, userInfo?.user_id, userInfo?.userId, location.pathname]);
 
   const allMenuItems = [
     {
@@ -187,6 +210,22 @@ const Sidebar = ({ isOpen, onClose }) => {
       roles: ['Superadmin', 'Admin', 'Teacher', 'Student', 'Finance'],
     },
     {
+      name: 'Lesson Plans',
+      path: '/superadmin/lesson-plans',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+      ),
+      roles: ['Superadmin'],
+      requiresLessonPlanVerifier: true,
+    },
+    {
       name: 'Branch',
       path: '/superadmin/branch',
       icon: (
@@ -272,6 +311,16 @@ const Sidebar = ({ isOpen, onClose }) => {
         </svg>
       ),
       roles: ['Teacher'], // Only for Teacher
+    },
+    {
+      name: 'Lesson Plans',
+      path: '/teacher/lesson-plans',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      ),
+      roles: ['Teacher'],
     },
     {
       name: 'Packages',
@@ -417,7 +466,11 @@ const Sidebar = ({ isOpen, onClose }) => {
 
   // Filter menu items based on user role and set correct paths
   const menuItems = allMenuItems
-    .filter(item => item.roles.includes(userType))
+    .filter((item) => {
+      if (!item.roles.includes(userType)) return false;
+      if (item.requiresLessonPlanVerifier && !isLessonPlanVerifier) return false;
+      return true;
+    })
     .map(item => {
       // Handle dynamic paths based on user role
       let itemPath = item.path;

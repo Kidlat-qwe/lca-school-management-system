@@ -4,6 +4,12 @@ import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middle
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { sendAnnouncementCreatedEmails } from '../lib/announcementRecipientEmails/index.js';
+import {
+  normalizeAudienceIdList,
+  sqlAnnouncementMatchesStudentAudience,
+  sqlAnnouncementMatchesTeacherAudience,
+  userTypeUsesAcademicAudience,
+} from '../lib/announcementAudienceFilter/index.js';
 
 const router = express.Router();
 
@@ -102,6 +108,8 @@ router.get(
           a.email_subject,
           a.body,
           a.recipient_groups,
+          a.program_ids,
+          a.class_ids,
           a.navigation_key,
           a.navigation_query,
           a.status,
@@ -123,6 +131,19 @@ router.get(
       `;
       const params = [];
       let paramCount = 0;
+
+      // Students/Teachers only see announcements for their programs/classes.
+      const listUserId = req.user.userId || req.user.user_id;
+      const listUserType = req.user.userType || req.user.user_type;
+      if (userTypeUsesAcademicAudience(listUserType) && listUserId) {
+        paramCount++;
+        params.push(listUserId);
+        if (listUserType === 'Student') {
+          sql += ` AND ${sqlAnnouncementMatchesStudentAudience(paramCount)}`;
+        } else {
+          sql += ` AND ${sqlAnnouncementMatchesTeacherAudience(paramCount)}`;
+        }
+      }
 
       // Filter by branch (non-superadmin users are limited to their branch)
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
@@ -185,6 +206,16 @@ router.get(
       `;
       const countParams = [];
       let countParamCount = 0;
+
+      if (userTypeUsesAcademicAudience(listUserType) && listUserId) {
+        countParamCount++;
+        countParams.push(listUserId);
+        if (listUserType === 'Student') {
+          countSql += ` AND ${sqlAnnouncementMatchesStudentAudience(countParamCount)}`;
+        } else {
+          countSql += ` AND ${sqlAnnouncementMatchesTeacherAudience(countParamCount)}`;
+        }
+      }
 
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         countParamCount++;
@@ -291,6 +322,8 @@ router.get(
           a.navigation_key,
           a.navigation_query,
           a.recipient_groups,
+          a.program_ids,
+          a.class_ids,
           a.status,
           a.priority,
           a.branch_id,
@@ -338,6 +371,21 @@ router.get(
               OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
             )
           )
+      `;
+
+      if (userType === 'Student') {
+        sql += ` AND (
+          a.target_user_id = $1
+          OR ${sqlAnnouncementMatchesStudentAudience(1)}
+        )`;
+      } else if (userType === 'Teacher') {
+        sql += ` AND (
+          a.target_user_id = $1
+          OR ${sqlAnnouncementMatchesTeacherAudience(1)}
+        )`;
+      }
+
+      sql += `
         ORDER BY 
           a.created_at DESC,
           CASE a.priority 
@@ -387,8 +435,8 @@ router.post(
         String(userType || '').trim().toLowerCase()
       );
 
-      const result = await query(
-        `WITH visible_announcements AS (
+      let readAllSql = `
+         WITH visible_announcements AS (
            SELECT a.announcement_id
            FROM announcementstbl a
            WHERE a.status = 'Active'
@@ -422,6 +470,13 @@ router.post(
                  OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
                )
              )
+      `;
+      if (userType === 'Student') {
+        readAllSql += ` AND (a.target_user_id = $1 OR ${sqlAnnouncementMatchesStudentAudience(1)})`;
+      } else if (userType === 'Teacher') {
+        readAllSql += ` AND (a.target_user_id = $1 OR ${sqlAnnouncementMatchesTeacherAudience(1)})`;
+      }
+      readAllSql += `
          )
          INSERT INTO announcement_readstbl (announcement_id, user_id)
          SELECT v.announcement_id, $1
@@ -431,9 +486,15 @@ router.post(
           AND ar.user_id = $1
          WHERE ar.announcement_id IS NULL
          ON CONFLICT (announcement_id, user_id) DO NOTHING
-         RETURNING announcement_id`,
-        [userId, recipientGroup, userBranchId, today, suppressEndOfShiftNotifications]
-      );
+         RETURNING announcement_id`;
+
+      const result = await query(readAllSql, [
+        userId,
+        recipientGroup,
+        userBranchId,
+        today,
+        suppressEndOfShiftNotifications,
+      ]);
 
       res.json({
         success: true,
@@ -472,6 +533,8 @@ router.get(
           a.email_subject,
           a.body,
           a.recipient_groups,
+          a.program_ids,
+          a.class_ids,
           a.status,
           a.priority,
           a.branch_id,
@@ -519,9 +582,17 @@ router.post(
     body('title').notEmpty().trim().withMessage('Title is required'),
     body('body').notEmpty().trim().withMessage('Description is required'),
     body('recipient_groups')
-      .isArray({ min: 1 })
+      .custom((value, { req }) => {
+        const status = req.body?.status || 'Active';
+        if (status === 'Draft') {
+          if (value == null || value === '') return true;
+          return Array.isArray(value);
+        }
+        return Array.isArray(value) && value.length >= 1;
+      })
       .withMessage('At least one recipient group is required'),
     body('recipient_groups.*')
+      .optional()
       .isIn(VALID_RECIPIENT_GROUPS)
       .withMessage(`Recipient group must be one of: ${VALID_RECIPIENT_GROUPS.join(', ')}`),
     body('status').optional().isIn(['Active', 'Inactive', 'Draft']).withMessage('Invalid status'),
@@ -550,6 +621,10 @@ router.post(
       .isLength({ max: 255 })
       .withMessage('Subject must be at most 255 characters'),
     body('send_email').optional().isBoolean().withMessage('send_email must be true or false'),
+    body('program_ids').optional().isArray().withMessage('program_ids must be an array'),
+    body('program_ids.*').optional().isInt({ min: 1 }).withMessage('Each program_id must be a positive integer'),
+    body('class_ids').optional().isArray().withMessage('class_ids must be an array'),
+    body('class_ids.*').optional().isInt({ min: 1 }).withMessage('Each class_id must be a positive integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -570,7 +645,12 @@ router.post(
         end_date,
         attachment_url,
         send_email = true,
+        program_ids,
+        class_ids,
       } = req.body;
+
+      const programIds = normalizeAudienceIdList(program_ids);
+      const classIds = normalizeAudienceIdList(class_ids);
 
       // Validate date range
       if (start_date && end_date && new Date(start_date) > new Date(end_date)) {
@@ -601,16 +681,16 @@ router.post(
         `
         INSERT INTO announcementstbl (
           title, email_subject, body, recipient_groups, status, priority, branch_id,
-          created_by, start_date, end_date, attachment_url
+          created_by, start_date, end_date, attachment_url, program_ids, class_ids
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
         `,
         [
           title.trim(),
           email_subject && String(email_subject).trim() ? String(email_subject).trim() : null,
           body.trim(),
-          recipient_groups,
+          recipient_groups || [],
           status,
           priority,
           finalBranchId,
@@ -618,6 +698,8 @@ router.post(
           start_date || null,
           end_date || null,
           attachment_url && String(attachment_url).trim() ? String(attachment_url).trim() : null,
+          programIds,
+          classIds,
         ]
       );
 
@@ -726,6 +808,10 @@ router.put(
       .trim()
       .isLength({ max: 255 })
       .withMessage('Subject must be at most 255 characters'),
+    body('program_ids').optional().isArray().withMessage('program_ids must be an array'),
+    body('program_ids.*').optional().isInt({ min: 1 }).withMessage('Each program_id must be a positive integer'),
+    body('class_ids').optional().isArray().withMessage('class_ids must be an array'),
+    body('class_ids.*').optional().isInt({ min: 1 }).withMessage('Each class_id must be a positive integer'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin', 'Teacher'),
@@ -746,6 +832,8 @@ router.put(
         start_date,
         end_date,
         attachment_url,
+        program_ids,
+        class_ids,
       } = req.body;
 
       // Check if announcement exists
@@ -826,6 +914,18 @@ router.put(
         paramCount++;
         updates.push(`recipient_groups = $${paramCount}`);
         params.push(recipient_groups);
+      }
+
+      if (program_ids !== undefined) {
+        paramCount++;
+        updates.push(`program_ids = $${paramCount}`);
+        params.push(normalizeAudienceIdList(program_ids));
+      }
+
+      if (class_ids !== undefined) {
+        paramCount++;
+        updates.push(`class_ids = $${paramCount}`);
+        params.push(normalizeAudienceIdList(class_ids));
       }
 
       if (status !== undefined) {

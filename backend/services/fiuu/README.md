@@ -49,6 +49,7 @@ Create / preview body extras:
 - `pay_link_expires_on` (YYYY-MM-DD) — optional Advanced settings expiry; blank → email shows **N/A** and link does not auto-expire
 
 Paid links are **always** disabled after FIUU webhook success (`/go/:token` shows already paid).
+Any email pay link for an invoice that is already **Paid** (or AR no longer Unverified) is also blocked — including older pending tokens after manual payment.
 
 ## Advanced settings (staff UI)
 
@@ -63,7 +64,7 @@ Invoice **Pay via FIUU** also has Tip / Discount payment adjustments (same seman
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — HTML auto-POSTs to FIUU (same tab); CSP allows inline script + visible Continue button |
+| GET | `/api/sms/payments/fiuu/go/:token` | **Email Pay now** — branded LCA page; auto-POSTs to FIUU when payable; paid/expired show school logo + status message |
 | GET | `/api/sms/payments/fiuu/public/:token` | JSON payload (optional CMS landing / diagnostics) |
 
 `server.js` mounts `/payments/fiuu` **before** `/payments` so public `go`/`public` are not blocked by payments Firebase auth.
