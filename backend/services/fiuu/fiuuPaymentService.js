@@ -160,8 +160,10 @@ export async function createFiuuInvoicePayment({
   const orderid = buildInvoiceOrderId(invoice_id);
   const amount = formatFiuuAmount(chargeAmt);
   const currency = getFiuuCurrency();
-  // Default QRPH; if client enables auto-debit on /go we switch form to CREDIT for tokenization.
-  const fiuuChannel = channel || getFiuuDefaultChannel();
+  // Installment: Card only so FIUU shows save-card toggle (tokenization). token_status=0 → off by default.
+  const fiuuChannel = offerAutodebit
+    ? channel || 'CREDIT'
+    : channel || getFiuuDefaultChannel();
   const refLabel = invoice.invoice_description || `INV-${invoice_id}`;
   const description = formatFiuuDescription({
     typeLabel: 'Invoice',
@@ -189,6 +191,10 @@ export async function createFiuuInvoicePayment({
     channel: fiuuChannel,
     CustID: buildFiuuCustId(student_id),
   };
+  // FIUU HPP: 0 = save-card toggle off by default (client can turn on). Card payment only.
+  if (offerAutodebit) {
+    formFields.token_status = '0';
+  }
 
   const returnUrl = getFiuuReturnUrl();
   const notifyUrl = getFiuuNotifyUrl();
@@ -327,16 +333,11 @@ export async function getPublicFiuuPayByToken(token) {
   return buildPublicPayPayloadForRow(row);
 }
 
-/** HTML bridge for email "Pay now" — consent gate (if needed) then auto-POST to FIUU. */
+/** HTML bridge for email "Pay now" — auto-POST to FIUU (Card save-toggle is on FIUU page). */
 export async function getPublicFiuuGoHtmlByToken(token) {
   const row = await findGatewayPaymentByPayToken(token);
   const payload = await buildPublicPayPayloadForRow(row);
-  // Relative URL so consent POSTs to the same host that served /go (local or Coolify).
-  const consentActionUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/consent`;
-  return buildFiuuAutoPostHtml(payload, {
-    consentActionUrl,
-    terms: getAutodebitTermsPayload(),
-  });
+  return buildFiuuAutoPostHtml(payload);
 }
 
 /**

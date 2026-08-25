@@ -1,6 +1,7 @@
 /**
  * Tokenized pay links for guardian self-pay.
  * Email opens API /go/:token → HTML auto-POSTs to FIUU (not the CMS SPA).
+ * Installment save-card / auto-debit opt-in is on the FIUU Card page only.
  */
 import crypto from 'crypto';
 import { query } from '../../config/database.js';
@@ -129,7 +130,6 @@ export async function isTargetBillAlreadySettled(row) {
         [ackId]
       );
       const status = String(ack.rows[0]?.status || '');
-      // Unverified = awaiting pay; Verified / Applied / similar = already settled.
       if (status && status !== 'Unverified') return true;
     } catch (err) {
       console.error('[fiuu-pay-link] AR settle check failed:', err?.message || err);
@@ -158,7 +158,6 @@ export function buildPublicPayPayload(row, { billAlreadySettled = false } = {}) 
   }
 
   let status = String(row.status || 'pending');
-  // Treat CMS-settled bill as paid for all tokens (even pending gateway rows).
   if (billAlreadySettled && status === 'pending') {
     status = 'paid';
   }
@@ -182,7 +181,6 @@ export function buildPublicPayPayload(row, { billAlreadySettled = false } = {}) 
       ? `${getFiuuPayBaseUrl()}${merchantId}/${channelPath}`
       : null;
 
-  // Only pending, non-expired, unpaid-bill links open FIUU.
   const openOk = status === 'pending' && !expired;
 
   return {
@@ -200,16 +198,7 @@ export function buildPublicPayPayload(row, { billAlreadySettled = false } = {}) 
     disable_after_payment: disableAfterPayment,
     bill_already_settled: Boolean(billAlreadySettled),
     autodebit_eligible: Boolean(row.metadata?.autodebit_eligible),
-    autodebit_staff_opt_in: Boolean(row.metadata?.autodebit_staff_opt_in),
-    parent_autodebit_decision: row.metadata?.parent_autodebit_decision || null,
     autodebit_class_name: row.metadata?.autodebit_class_name || null,
-    autodebit_terms_version: row.metadata?.autodebit_terms_version || null,
-    needs_parent_autodebit_decision: Boolean(
-      openOk &&
-        row.metadata?.autodebit_eligible &&
-        (row.metadata?.autodebit_offered !== false) &&
-        !row.metadata?.parent_autodebit_decision
-    ),
   };
 }
 
@@ -281,9 +270,9 @@ function buildBrandedPayPageHtml({ title, heading, message, bodyHtml = '', statu
 /**
  * HTML that auto-POSTs to FIUU hosted pay (same tab). Used by emailed Pay now link.
  * Always includes a visible Continue button — Helmet CSP may block inline scripts.
- * When staff offered auto-debit, parent must accept/decline T&Cs before FIUU.
+ * Installment save-card / auto-debit opt-in is on the FIUU Card page only (token_status).
  */
-export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms = null } = {}) {
+export function buildFiuuAutoPostHtml(payload) {
   if (!payload?.payUrl || !payload?.formFields) {
     const isPaid = payload?.status === 'paid';
     const isExpired = payload?.status === 'expired';
@@ -296,191 +285,6 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
           ? 'This payment link has expired. Please contact the school for a new link.'
           : 'This payment link is not available. Please contact the school if you need help.',
       statusTone: isPaid ? 'success' : isExpired ? 'warning' : 'neutral',
-    });
-  }
-
-  if (payload.needs_parent_autodebit_decision && consentActionUrl) {
-    const classLabel = escapeHtmlAttr(
-      payload.autodebit_class_name || 'this class installment plan'
-    );
-    const termsTitle = escapeHtmlAttr(terms?.title || 'Auto-debit terms');
-    const termsBody = String(terms?.body || '')
-      .split(/\n\n/)
-      .map(
-        (p) =>
-          `<p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:#475569;">${escapeHtmlAttr(p)}</p>`
-      )
-      .join('');
-    const action = escapeHtmlAttr(consentActionUrl);
-
-    const bodyHtml = `
-              <div style="margin-top:16px;text-align:left;">
-                <p style="margin:0 0 14px;font-size:13px;color:#334155;line-height:1.5;">
-                  Optional auto-debit is available for <strong>${classLabel}</strong> only
-                  (not other classes). It stays <strong>off</strong> unless you turn it on.
-                </p>
-
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
-                            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;margin-bottom:14px;">
-                  <div style="font-size:13px;color:#0f172a;line-height:1.4;padding-right:8px;">
-                    <div style="font-weight:700;margin-bottom:4px;">Enable auto-debit for this class</div>
-                    <div style="font-size:12px;color:#64748b;">Default is off. Turning it on shows Terms first.</div>
-                  </div>
-                  <button type="button" id="autodebitToggle" role="switch" aria-checked="false"
-                    style="flex-shrink:0;width:52px;height:30px;border-radius:999px;border:0;cursor:pointer;
-                           background:#cbd5e1;position:relative;padding:0;">
-                    <span id="autodebitKnob"
-                      style="position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;
-                             background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:left 0.15s;"></span>
-                  </button>
-                </div>
-
-                <p id="autodebitStatus" style="margin:0 0 14px;font-size:12px;color:#64748b;">
-                  Auto-debit is <strong>off</strong>. You will pay this invoice only.
-                </p>
-
-                <button type="button" id="continuePayBtn"
-                  style="display:block;width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
-                         font-weight:600;font-size:14px;padding:12px 16px;cursor:pointer;">
-                  Continue to payment
-                </button>
-
-                <form id="declineForm" method="POST" action="${action}" style="display:none;">
-                  <input type="hidden" name="decision" value="decline" />
-                  <input type="hidden" name="terms_accepted" value="1" />
-                </form>
-                <form id="acceptForm" method="POST" action="${action}" style="display:none;">
-                  <input type="hidden" name="decision" value="accept" />
-                  <input type="hidden" name="terms_accepted" value="1" />
-                </form>
-              </div>
-
-              <div id="termsModal" style="display:none;position:fixed;inset:0;z-index:50;
-                   background:rgba(15,23,42,0.55);align-items:center;justify-content:center;padding:16px;">
-                <div role="dialog" aria-modal="true" aria-labelledby="termsModalTitle"
-                  style="width:100%;max-width:420px;background:#fff;border-radius:12px;overflow:hidden;
-                         box-shadow:0 20px 40px rgba(15,23,42,0.25);max-height:90vh;display:flex;flex-direction:column;">
-                  <div style="padding:16px 18px 10px;border-bottom:1px solid #f1f5f9;">
-                    <div id="termsModalTitle" style="font-size:15px;font-weight:700;color:#0f172a;">${termsTitle}</div>
-                    <p style="margin:6px 0 0;font-size:12px;color:#64748b;line-height:1.4;">
-                      Please read carefully before enabling auto-debit.
-                    </p>
-                  </div>
-                  <div style="padding:14px 18px;overflow:auto;flex:1;">
-                    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
-                      <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">What happens if you turn this on</div>
-                      <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.5;color:#334155;">
-                        <li>Your card may be saved securely (tokenized) by FIUU for future use.</li>
-                        <li>Future installment invoices for <strong>${classLabel}</strong> only may be charged to that card.</li>
-                        <li>Other classes are never included.</li>
-                        <li>You can leave this off and pay each invoice with a link instead.</li>
-                      </ul>
-                    </div>
-                    ${termsBody}
-                  </div>
-                  <div style="padding:12px 18px 16px;border-top:1px solid #f1f5f9;display:flex;flex-direction:column;gap:8px;">
-                    <button type="button" id="termsAgreeBtn"
-                      style="width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
-                             font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      I agree — enable auto-debit
-                    </button>
-                    <button type="button" id="termsCancelBtn"
-                      style="width:100%;background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:8px;
-                             font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      Cancel — keep auto-debit off
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <script>
-                (function () {
-                  var enabled = false;
-                  var termsAccepted = false;
-                  var toggle = document.getElementById('autodebitToggle');
-                  var knob = document.getElementById('autodebitKnob');
-                  var status = document.getElementById('autodebitStatus');
-                  var modal = document.getElementById('termsModal');
-                  var continueBtn = document.getElementById('continuePayBtn');
-                  var agreeBtn = document.getElementById('termsAgreeBtn');
-                  var cancelBtn = document.getElementById('termsCancelBtn');
-                  var acceptForm = document.getElementById('acceptForm');
-                  var declineForm = document.getElementById('declineForm');
-
-                  function paintToggle() {
-                    toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
-                    toggle.style.background = enabled ? '#16a34a' : '#cbd5e1';
-                    knob.style.left = enabled ? '25px' : '3px';
-                    if (enabled && termsAccepted) {
-                      status.innerHTML = 'Auto-debit is <strong>on</strong> for this class only (Terms accepted).';
-                      status.style.color = '#166534';
-                      continueBtn.textContent = 'Continue with auto-debit';
-                    } else {
-                      status.innerHTML = 'Auto-debit is <strong>off</strong>. You will pay this invoice only.';
-                      status.style.color = '#64748b';
-                      continueBtn.textContent = 'Continue to payment';
-                    }
-                  }
-
-                  function openModal() {
-                    modal.style.display = 'flex';
-                  }
-                  function closeModal() {
-                    modal.style.display = 'none';
-                  }
-
-                  toggle.addEventListener('click', function () {
-                    if (enabled) {
-                      enabled = false;
-                      termsAccepted = false;
-                      paintToggle();
-                      return;
-                    }
-                    // Turning ON → Terms modal first (never auto-enable).
-                    openModal();
-                  });
-
-                  agreeBtn.addEventListener('click', function () {
-                    enabled = true;
-                    termsAccepted = true;
-                    closeModal();
-                    paintToggle();
-                  });
-
-                  cancelBtn.addEventListener('click', function () {
-                    enabled = false;
-                    termsAccepted = false;
-                    closeModal();
-                    paintToggle();
-                  });
-
-                  modal.addEventListener('click', function (e) {
-                    if (e.target === modal) {
-                      enabled = false;
-                      termsAccepted = false;
-                      closeModal();
-                      paintToggle();
-                    }
-                  });
-
-                  continueBtn.addEventListener('click', function () {
-                    if (enabled && termsAccepted) {
-                      acceptForm.submit();
-                    } else {
-                      declineForm.submit();
-                    }
-                  });
-
-                  paintToggle();
-                })();
-              </script>`;
-
-    return buildBrandedPayPageHtml({
-      title: 'Auto-debit option',
-      heading: 'Before you pay',
-      message: 'Auto-debit stays off unless you turn it on and accept the Terms.',
-      bodyHtml,
-      statusTone: 'neutral',
     });
   }
 
@@ -516,7 +320,9 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
   return buildBrandedPayPageHtml({
     title: 'Redirecting to FIUU…',
     heading: 'Opening secure payment',
-    message: 'Please wait while we connect you to FIUU.',
+    message: payload.autodebit_eligible
+      ? 'On the card page you can optionally save your card for future installment payments for this class only.'
+      : 'Please wait while we connect you to FIUU.',
     bodyHtml,
     statusTone: 'neutral',
   });

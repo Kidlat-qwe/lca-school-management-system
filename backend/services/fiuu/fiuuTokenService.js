@@ -39,20 +39,25 @@ export function extractFiuuTokenFromWebhook(payload = {}) {
     extraP.CustID ?? extraP.custID ?? extraP.custId ?? payload.CustID ?? ''
   ).trim();
 
-  const bin4 = String(extraP.bin4 ?? extraP.last4 ?? extraP.card_last4 ?? '').trim();
+  const bin4 = String(
+    extraP.bin4 ?? extraP.last4 ?? extraP.card_last4 ?? extraP.cclast4 ?? ''
+  ).trim();
   const bin = String(extraP.bin ?? '').trim();
-  const cardLast4 =
-    bin4 ||
-    (bin.length >= 4 ? bin.slice(-4) : '') ||
-    String(extraP.card_number ?? '').replace(/\D/g, '').slice(-4);
 
   return {
     token,
     custId,
     cardBrand: String(
-      extraP.card_brand ?? extraP.cardBrand ?? extraP.brand ?? ''
+      extraP.card_brand ??
+        extraP.cardBrand ??
+        extraP.brand ??
+        extraP.ccbrand ??
+        ''
     ).trim(),
-    cardLast4,
+    cardLast4:
+      bin4 ||
+      (bin.length >= 4 ? bin.slice(-4) : '') ||
+      String(extraP.card_number ?? '').replace(/\D/g, '').slice(-4),
     expMonth: String(extraP.expMonth ?? extraP.exp_month ?? '').trim().slice(0, 2),
     expYear: String(extraP.expYear ?? extraP.exp_year ?? '').trim().slice(0, 4),
     extraP,
@@ -262,9 +267,10 @@ export async function captureFiuuTokenFromWebhook({
       `[fiuu-token] Saved token for student ${studentId} (id=${row.fiuu_payment_token_id}, last4=${row.card_last4 || 'n/a'})`
     );
 
-    // Bind token to class-scoped auto-debit consent when client opted in on pay link.
-    if (meta.parent_autodebit_opt_in) {
+    // FIUU Card "store payment details" toggle ON → token returned → class-scoped consent.
+    if (meta.autodebit_eligible) {
       try {
+        const nowIso = new Date().toISOString();
         await upsertAutodebitConsentFromGateway({
           student_id: studentId,
           installmentinvoiceprofiles_id:
@@ -276,11 +282,11 @@ export async function captureFiuuTokenFromWebhook({
           gateway_payment_id: gatewayRow.gateway_payment_id,
           fiuu_payment_token_id: row.fiuu_payment_token_id,
           staff_opt_in: true,
-          staff_accepted_at: meta.autodebit_staff_accepted_at || new Date().toISOString(),
+          staff_accepted_at: meta.autodebit_staff_accepted_at || nowIso,
           staff_accepted_by: meta.autodebit_staff_accepted_by || null,
           parent_opt_in: true,
-          parent_accepted_at: meta.parent_autodebit_accepted_at || new Date().toISOString(),
-          parent_accepted_via: meta.parent_autodebit_accepted_via || 'pay_link',
+          parent_accepted_at: nowIso,
+          parent_accepted_via: 'fiuu_card_token_toggle',
           terms_version: meta.autodebit_terms_version || undefined,
           client,
         });

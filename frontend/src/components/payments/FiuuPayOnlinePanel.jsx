@@ -186,20 +186,8 @@ export default function FiuuPayOnlinePanel({
         }
 
         if (openNow) {
-          const offerOnLink =
-            Boolean(data.autodebit?.eligible || data.autodebit?.offered_on_pay_link) ||
-            isInstallmentLike;
-          // Installment: open the pay link so the client chooses auto-debit there.
-          if (offerOnLink && data.pay_link_url) {
-            window.open(data.pay_link_url, '_blank', 'noopener,noreferrer');
-            setPhase('waiting');
-            appAlert(
-              'Payment page opened for the client. They can choose optional auto-debit there, then pay on FIUU.'
-            );
-          } else {
-            submitFiuuPaymentForm(data.payUrl, data.formFields);
-            setPhase('waiting');
-          }
+          submitFiuuPaymentForm(data.payUrl, data.formFields);
+          setPhase('waiting');
           const status = await pollFiuuPaymentStatus(data.orderid);
           if (pollAbort.current) return;
           if (status.status === 'paid') {
@@ -333,7 +321,7 @@ export default function FiuuPayOnlinePanel({
           Send a payment link to the guardian/client email. They open the link and pay on FIUU
           (GCash, Maya, or QR Ph). CMS stays unpaid until FIUU confirms payment.
           {isInstallmentLike
-            ? ' For installment plans, the client can optionally enable auto-debit for this class on the payment page.'
+            ? ' Installment uses Card payment — on FIUU the client can optionally save their card for future invoices for this class only.'
             : ''}
         </p>
       </div>
@@ -536,7 +524,7 @@ export default function FiuuPayOnlinePanel({
               disabled={actionsDisabled || phase === 'waiting'}
               className="px-4 py-2 text-sm font-medium text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {phase === 'waiting' ? 'Waiting…' : isInstallmentLike ? 'Open pay page' : 'Open FIUU now'}
+              {phase === 'waiting' ? 'Waiting…' : 'Open FIUU now'}
             </button>
             <button
               type="button"

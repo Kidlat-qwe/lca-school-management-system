@@ -7,10 +7,10 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 - **Admin / Superadmin** invoice balance via FIUU **QRPH** / Card (HPP).
 - **Admin / Superadmin** Merchandise / Package **AR Create → Step 2**.
 - **Primary UX:** email **Pay now** → `/payments/fiuu/go/:token` → FIUU. Bill stays unpaid until webhook.
-- **Installment auto-debit consent:** optional, class/profile-scoped.
-  - Staff only sends/opens the pay link — **the client decides** on `/go`.
-  - Toggle defaults **OFF**; turning ON opens a Terms modal before enable.
-  - Consent + token bound to **one** installment profile / class.
+- **Installment auto-debit / save card:** on **FIUU Card page only** (not CMS `/go` T&Cs).
+  - Installment create uses `CREDIT` + `token_status=0` (FIUU save-card toggle off by default).
+  - Token in webhook `extraP` → store token + activate class-scoped consent.
+  - MIT auto-charge later still needs FIUU Recurring API.
 
 ## Setup
 
@@ -31,11 +31,11 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 
 | Rule | Detail |
 |---|---|
-| Optional | Default is pay-this-invoice-only |
+| Optional | FIUU Card save-card toggle (`token_status=0` = off by default) |
 | Scope | One installment profile / class |
-| Dual consent | Client accepts Terms on pay link (staff only offers the link) |
+| Opt-in signal | Token returned from FIUU after Card pay |
 | Paid link | `/go` shows already paid (no re-charge) |
-| Channel | Opt-in prefers `CREDIT` for tokenization |
+| Channel | Installment uses `CREDIT` (Card only) |
 
 ## API (authenticated)
 
