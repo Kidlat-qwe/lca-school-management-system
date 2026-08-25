@@ -21,7 +21,9 @@ Single unified dashboard for teachers (`TeacherDashboardView`). No separate dail
 UI styling matches the QA `TeacherLessonPlans.jsx` sheet (Poppins, header grid, peach primary buttons, submissions sidebar).
 
 - Fixed school header meta (Region III, Bulacan, 5th District, School ID 411093)
-- Save draft / submit for Superadmin verification
+- Save draft / submit for verification (Teacher's Reflection locked at submit)
+- After verifier approves → status **`awaiting_reflection`** (UI: Awaiting Reflection); reflections unlock **only on the lesson date** (Manila); saving marks **`completed`** (no re-approval)
+- When status is **`revision_requested`**, structured revision notes appear **under each flagged field** (highlight + note); general/legacy notes stay above the action buttons
 - Prepared by = logged-in teacher
 - Superadmin → Settings → Lesson Plans configures Superadmin + Admin verifiers; review is on `/superadmin/lesson-plans` or `/admin/lesson-plans` (Admin = designated branch only)
 

@@ -142,7 +142,7 @@ export async function notifyTeacherOfLessonPlanReview({
     : 'Lesson Plan Revision Requested';
 
   let body = isApproved
-    ? `${verifierName || 'A verifier'} approved your lesson plan "${topic}".`
+    ? `${verifierName || 'A verifier'} approved your lesson plan "${topic}". Status is now Awaiting Reflection — complete Teacher's Reflection on the lesson date to mark it Completed.`
     : `${verifierName || 'A verifier'} requested a revision on your lesson plan "${topic}".`;
 
   if (!isApproved && revisionReason) {

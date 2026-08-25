@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { appAlert } from '../../utils/appAlert';
@@ -22,14 +22,113 @@ const createEmptyForm = () => ({
   reflection_improvements: '',
 });
 
-const formatStatus = (status) => (status || 'draft').replace(/_/g, ' ');
+const formatStatus = (status) => {
+  if (status === 'awaiting_reflection') return 'Awaiting Reflection';
+  if (status === 'completed') return 'Completed';
+  if (status === 'revision_requested') return 'Revision requested';
+  return (status || 'draft').replace(/_/g, ' ');
+};
 
 const statusBadgeStyle = (status) => {
-  if (status === 'approved') return { background: '#e8f5e9', color: '#2e7d32' };
+  if (status === 'completed') return { background: '#e8f5e9', color: '#2e7d32' };
+  if (status === 'awaiting_reflection') return { background: '#fff4e5', color: '#b26a00' };
   if (status === 'submitted') return { background: '#e3f2fd', color: '#1565c0' };
   if (status === 'revision_requested') return { background: '#fff4e5', color: '#b26a00' };
   return { background: '#f5f5f5', color: '#666666' };
 };
+
+/** Asia/Manila calendar date YYYY-MM-DD */
+function getManilaTodayYmd() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function isLessonDateToday(lessonDate, todayYmd = getManilaTodayYmd()) {
+  if (!lessonDate) return false;
+  return String(lessonDate).slice(0, 10) === todayYmd;
+}
+
+function parseRevisionFeedbackClient(raw) {
+  const text = raw == null ? '' : String(raw);
+  if (!text.trim()) return { items: [], general: null, legacy: true };
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && Number(parsed.v) === 1 && Array.isArray(parsed.items)) {
+      return {
+        items: parsed.items,
+        general: parsed.general || null,
+        legacy: false,
+      };
+    }
+  } catch {
+    /* legacy plain text */
+  }
+  return { items: [], general: text, legacy: true };
+}
+
+function getPlanRevisionFeedback(plan) {
+  return plan?.revision_feedback || parseRevisionFeedbackClient(plan?.revision_reason);
+}
+
+function getRevisionItemsForField(plan, fieldKey) {
+  const feedback = getPlanRevisionFeedback(plan);
+  const items = Array.isArray(feedback?.items) ? feedback.items : [];
+  return items.filter((item) => item?.field === fieldKey);
+}
+
+/** Inline revision notes placed directly under the matching form field. */
+function FieldRevisionNotes({ plan, fieldKey }) {
+  if (plan?.status !== 'revision_requested') return null;
+  const items = getRevisionItemsForField(plan, fieldKey);
+  if (!items.length) return null;
+
+  return (
+    <div className="col-span-full -mt-1 mb-1 space-y-1.5">
+      {items.map((item, idx) => (
+        <div
+          key={`${fieldKey}-${idx}`}
+          className="rounded-md border border-red-300 bg-red-100 px-2.5 py-2 text-[12px] text-red-900"
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-700">
+            Revision feedback
+          </p>
+          {item.highlight ? (
+            <blockquote className="mt-1 border-l-2 border-red-500 pl-2 text-[12px] italic text-red-950">
+              “{item.highlight}”
+            </blockquote>
+          ) : null}
+          {item.note ? (
+            <p className="mt-1 whitespace-pre-wrap leading-snug text-[13px] text-red-950">{item.note}</p>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** General / legacy revision note (not tied to a specific field). */
+function GeneralRevisionNotes({ plan }) {
+  if (plan?.status !== 'revision_requested') return null;
+  const feedback = getPlanRevisionFeedback(plan);
+  const general =
+    typeof feedback?.general === 'string' && feedback.general.trim()
+      ? feedback.general.trim()
+      : '';
+  if (!general) return null;
+
+  return (
+    <div className="mt-2.5 rounded-lg border border-red-300 bg-red-100 p-3 text-[13px] text-red-900">
+      <p className="mb-1 font-semibold text-red-700">
+        {feedback.legacy ? 'Revision feedback' : 'General revision feedback'}
+      </p>
+      <p className="whitespace-pre-wrap text-red-950">{general}</p>
+    </div>
+  );
+}
 
 /** Shared field chrome from TeacherLessonPlans.jsx Field styled-component */
 const fieldControlCls =
@@ -62,6 +161,7 @@ export default function TeacherLessonPlans() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [sheetFlash, setSheetFlash] = useState(false);
+  const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
   const flashTimerRef = useRef(null);
 
   const preparedBy =
@@ -71,6 +171,11 @@ export default function TeacherLessonPlans() {
     if (!selectedPlan) return true;
     return ['draft', 'revision_requested'].includes(selectedPlan.status);
   }, [selectedPlan]);
+
+  const canEditReflections = useMemo(() => {
+    if (!selectedPlan || selectedPlan.status !== 'awaiting_reflection') return false;
+    return isLessonDateToday(selectedPlan.lesson_date || formData.lesson_date, manilaToday);
+  }, [selectedPlan, formData.lesson_date, manilaToday]);
 
   const subjectOptions = useMemo(() => {
     if (!meta?.subjects_by_grade || !formData.grade_level) return [];
@@ -86,6 +191,13 @@ export default function TeacherLessonPlans() {
     selectedPlan?.status === 'revision_requested'
       ? 'Resubmit for Verification'
       : 'Submit for Verification';
+
+  useEffect(() => {
+    const tick = () => setManilaToday(getManilaTodayYmd());
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const fetchPlans = useCallback(async () => {
     const res = await apiRequest('/lesson-plans?limit=100');
@@ -169,10 +281,18 @@ export default function TeacherLessonPlans() {
       setSaving(true);
       setError('');
 
+      // Reflections are never saved during draft/submit — locked until lesson date after approval.
+      const payload = {
+        ...formData,
+        reflection_went_well: '',
+        reflection_challenges: '',
+        reflection_improvements: '',
+      };
+
       if (selectedPlan) {
         await apiRequest(`/lesson-plans/${selectedPlan.lesson_plan_id}`, {
           method: 'PUT',
-          body: JSON.stringify(formData),
+          body: JSON.stringify(payload),
         });
         if (submit) {
           await apiRequest(`/lesson-plans/${selectedPlan.lesson_plan_id}/submit`, {
@@ -188,7 +308,7 @@ export default function TeacherLessonPlans() {
         const res = await apiRequest('/lesson-plans', {
           method: 'POST',
           body: JSON.stringify({
-            ...formData,
+            ...payload,
             status: submit ? 'submitted' : 'draft',
           }),
         });
@@ -208,7 +328,52 @@ export default function TeacherLessonPlans() {
     }
   };
 
+  const saveReflectionsAndComplete = async () => {
+    if (!selectedPlan) return;
+    try {
+      setSaving(true);
+      setError('');
+      const res = await apiRequest(`/lesson-plans/${selectedPlan.lesson_plan_id}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          reflection_went_well: formData.reflection_went_well,
+          reflection_challenges: formData.reflection_challenges,
+          reflection_improvements: formData.reflection_improvements,
+        }),
+      });
+      setSelectedPlan(res.data);
+      setFormData((prev) => ({
+        ...prev,
+        reflection_went_well: res.data.reflection_went_well || '',
+        reflection_challenges: res.data.reflection_challenges || '',
+        reflection_improvements: res.data.reflection_improvements || '',
+      }));
+      await appAlert('Teacher reflection saved. Lesson plan marked as Completed.');
+      await fetchPlans();
+    } catch (err) {
+      setError(err.message || 'Failed to save teacher reflection');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const sheetFont = { fontFamily: '"Poppins", "Inter", "Segoe UI", sans-serif' };
+
+  const reflectionHint = (() => {
+    const lessonYmd = String(
+      (selectedPlan?.lesson_date || formData.lesson_date || '').slice(0, 10)
+    );
+    if (selectedPlan?.status === 'completed') {
+      return 'Teacher reflection is complete. This lesson plan is Completed.';
+    }
+    if (selectedPlan?.status === 'awaiting_reflection') {
+      if (canEditReflections) {
+        return `Unlocked today (${manilaToday}). Fill in all reflection fields and save to mark this plan Completed. No further verifier approval is required.`;
+      }
+      return `Locked. Teacher reflection opens only on the lesson date (${lessonYmd || '—'}) and locks again after that day. Today is ${manilaToday}.`;
+    }
+    return `Locked until the lesson date after a verifier approves this plan. You can only edit reflections on ${lessonYmd || 'the selected lesson date'} (not before or after).`;
+  })();
 
   return (
     <div className="space-y-5">
@@ -317,6 +482,7 @@ export default function TeacherLessonPlans() {
                 className={fieldControlCls}
               />
             </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="topic" />
 
             <label className={blockLabelCls}>
               Learning Objectives
@@ -329,6 +495,7 @@ export default function TeacherLessonPlans() {
                 className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
               />
             </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="learning_objectives" />
 
             <label className={blockLabelCls}>
               Materials/Resources
@@ -341,6 +508,7 @@ export default function TeacherLessonPlans() {
                 className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
               />
             </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="materials_resources" />
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
               Lesson Flow
@@ -354,21 +522,28 @@ export default function TeacherLessonPlans() {
               ['assessment', 'VI. Assessment', 3],
               ['closing_wrapping_up', 'VII. Closing/Wrapping Up', 3],
             ].map(([field, title, rows]) => (
-              <label key={field} className={blockLabelCls}>
-                {title}
-                <textarea
-                  disabled={!canEdit}
-                  rows={rows}
-                  value={formData[field]}
-                  onChange={(e) => handleInputChange(field, e.target.value)}
-                  className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
-                />
-              </label>
+              <Fragment key={field}>
+                <label className={blockLabelCls}>
+                  {title}
+                  <textarea
+                    disabled={!canEdit}
+                    rows={rows}
+                    value={formData[field]}
+                    onChange={(e) => handleInputChange(field, e.target.value)}
+                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={field} />
+              </Fragment>
             ))}
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
               Teacher&apos;s Reflection
             </h3>
+
+            <p className="col-span-full -mt-1 mb-1 text-[13px] leading-snug text-[#7a4b00]">
+              {reflectionHint}
+            </p>
 
             {[
               ['reflection_went_well', 'What went well?'],
@@ -378,7 +553,7 @@ export default function TeacherLessonPlans() {
               <label key={field} className={blockLabelCls}>
                 {title}
                 <textarea
-                  disabled={!canEdit}
+                  disabled={!canEditReflections}
                   rows={3}
                   value={formData[field]}
                   onChange={(e) => handleInputChange(field, e.target.value)}
@@ -393,35 +568,52 @@ export default function TeacherLessonPlans() {
             </label>
           </div>
 
-          {!canEdit && (
+          {!canEdit && !canEditReflections && selectedPlan?.status !== 'completed' && (
             <div className="mt-2.5 rounded-lg border border-[#ffddc9] bg-[#fff8f3] p-2.5 text-[13px] text-[#7a4b00]">
-              This lesson plan is approved / submitted and can no longer be edited.
+              {selectedPlan?.status === 'awaiting_reflection'
+                ? 'Lesson body is locked after verification. Teacher reflection unlocks only on the lesson date.'
+                : 'This lesson plan is submitted and can no longer be edited until a revision is requested.'}
             </div>
           )}
 
-          {selectedPlan?.status === 'revision_requested' && selectedPlan.revision_reason && (
-            <div className="mt-2.5 rounded-lg border border-[#ffddc9] bg-[#fff8f3] p-2.5 text-[13px] text-[#7a4b00]">
-              <strong>Revision reason:</strong> {selectedPlan.revision_reason}
+          {selectedPlan?.status === 'completed' && (
+            <div className="mt-2.5 rounded-lg border border-green-200 bg-green-50 p-2.5 text-[13px] text-green-800">
+              This lesson plan is Completed. No further verifier approval is needed.
             </div>
           )}
+
+          <GeneralRevisionNotes plan={selectedPlan} />
 
           <div className="mt-5 flex flex-wrap justify-end gap-3">
-            <button
-              type="button"
-              disabled={saving || !canEdit}
-              onClick={() => saveLessonPlan({ submit: false })}
-              className={btnSecondaryCls}
-            >
-              {saving ? 'Saving...' : 'Save Draft'}
-            </button>
-            <button
-              type="button"
-              disabled={saving || !canEdit}
-              onClick={() => saveLessonPlan({ submit: true })}
-              className={btnPrimaryCls}
-            >
-              {saving ? 'Submitting...' : submitButtonLabel}
-            </button>
+            {canEditReflections ? (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={saveReflectionsAndComplete}
+                className={btnPrimaryCls}
+              >
+                {saving ? 'Saving...' : 'Save Reflection & Mark Completed'}
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={saving || !canEdit}
+                  onClick={() => saveLessonPlan({ submit: false })}
+                  className={btnSecondaryCls}
+                >
+                  {saving ? 'Saving...' : 'Save Draft'}
+                </button>
+                <button
+                  type="button"
+                  disabled={saving || !canEdit}
+                  onClick={() => saveLessonPlan({ submit: true })}
+                  className={btnPrimaryCls}
+                >
+                  {saving ? 'Submitting...' : submitButtonLabel}
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -457,8 +649,9 @@ export default function TeacherLessonPlans() {
               <option value="all">All Statuses</option>
               <option value="draft">Draft</option>
               <option value="submitted">Submitted</option>
+              <option value="awaiting_reflection">Awaiting Reflection</option>
               <option value="revision_requested">Revision Requested</option>
-              <option value="approved">Approved</option>
+              <option value="completed">Completed</option>
             </select>
           </div>
 
@@ -501,9 +694,9 @@ export default function TeacherLessonPlans() {
                     >
                       {formatStatus(plan.status)}
                     </span>
-                    {plan.status === 'revision_requested' && plan.revision_reason && (
-                      <div className="mt-2.5 rounded-lg border border-[#ffddc9] bg-[#fff8f3] p-2.5 text-[13px] text-[#7a4b00]">
-                        <strong>Revision reason:</strong> {plan.revision_reason}
+                    {plan.status === 'revision_requested' && (
+                      <div className="mt-2.5 text-[12px] text-[#7a4b00]">
+                        Open the plan to view detailed revision feedback.
                       </div>
                     )}
                   </button>

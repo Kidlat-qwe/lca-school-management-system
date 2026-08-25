@@ -5,12 +5,20 @@ import { handleValidationErrors } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import {
   EDITABLE_STATUSES,
+  REFLECTION_EDITABLE_STATUSES,
+  buildRevisionFeedbackPayload,
+  clearReflectionFields,
+  isLessonDateToday,
   lessonPlanWriteColumns,
   mapLessonPlanRow,
   normalizeLessonPlanBody,
   notifyTeacherOfLessonPlanReview,
   notifyVerifiersOfLessonPlanSubmission,
+  serializeRevisionFeedback,
+  summarizeRevisionFeedbackForNotification,
   validateLessonPlanPayload,
+  validateReflectionPayload,
+  validateRevisionFeedbackPayload,
 } from '../lib/lessonPlans/index.js';
 
 const router = express.Router();
@@ -389,7 +397,8 @@ router.post(
       }
 
       const status = req.body.status === 'submitted' ? 'submitted' : 'draft';
-      const cols = lessonPlanWriteColumns(payload);
+      // Reflections stay empty until verifier approves and lesson date unlocks them.
+      const cols = lessonPlanWriteColumns(clearReflectionFields(payload));
       const teacherId = req.user.userId || req.user.user_id;
       const branchId = req.user.branchId || null;
 
@@ -463,7 +472,9 @@ router.post(
 
 /**
  * PUT /api/sms/lesson-plans/:id
- * Teacher updates when draft or revision_requested.
+ * - draft / revision_requested: full edit (reflections forced empty)
+ * - awaiting_reflection: Teacher's Reflection only, and only on the lesson date (Manila);
+ *   saving reflections marks the plan completed (no second verifier approval)
  */
 router.put(
   '/:id',
@@ -480,17 +491,64 @@ router.put(
       if (!existing.rows[0]) {
         return res.status(404).json({ success: false, message: 'Lesson plan not found' });
       }
-      if (!EDITABLE_STATUSES.has(existing.rows[0].status)) {
+
+      const currentStatus = existing.rows[0].status;
+
+      // --- Complete reflection after verifier approval (lesson date only) ---
+      if (REFLECTION_EDITABLE_STATUSES.has(currentStatus)) {
+        if (!isLessonDateToday(existing.rows[0].lesson_date)) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Teacher reflection can only be edited on the lesson date. It is locked before and after that day.',
+          });
+        }
+
+        const reflectionPayload = normalizeLessonPlanBody(req.body);
+        const reflectionErrors = validateReflectionPayload(reflectionPayload);
+        if (reflectionErrors.length) {
+          return res.status(400).json({
+            success: false,
+            message: reflectionErrors.join('; '),
+          });
+        }
+
+        await query(
+          `
+          UPDATE lessonplanstbl SET
+            reflection_went_well = $1,
+            reflection_challenges = $2,
+            reflection_improvements = $3,
+            status = 'completed',
+            updated_at = NOW()
+          WHERE lesson_plan_id = $4
+          `,
+          [
+            String(reflectionPayload.reflection_went_well || '').trim(),
+            String(reflectionPayload.reflection_challenges || '').trim(),
+            String(reflectionPayload.reflection_improvements || '').trim(),
+            id,
+          ]
+        );
+
+        const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
+        return res.json({ success: true, data: mapLessonPlanRow(updated.rows[0]) });
+      }
+
+      if (!EDITABLE_STATUSES.has(currentStatus)) {
         return res.status(400).json({
           success: false,
-          message: 'Only draft or revision-requested plans can be edited',
+          message:
+            'Only draft or revision-requested plans can be edited (or awaiting-reflection plans on the lesson date for reflection)',
         });
       }
 
-      const payload = normalizeLessonPlanBody({
-        ...mapLessonPlanRow(existing.rows[0]),
-        ...req.body,
-      });
+      const payload = clearReflectionFields(
+        normalizeLessonPlanBody({
+          ...mapLessonPlanRow(existing.rows[0]),
+          ...req.body,
+        })
+      );
       const errors = validateLessonPlanPayload(payload, { requireAll: true });
       if (errors.length) {
         return res.status(400).json({ success: false, message: errors.join('; ') });
@@ -571,12 +629,16 @@ router.post(
         });
       }
 
+      // Clear any reflection content at submit time (locked until lesson date after approval).
       await query(
         `
         UPDATE lessonplanstbl SET
           status = 'submitted',
           submitted_at = NOW(),
           revision_reason = NULL,
+          reflection_went_well = '',
+          reflection_challenges = '',
+          reflection_improvements = '',
           updated_at = NOW()
         WHERE lesson_plan_id = $1
         `,
@@ -644,7 +706,7 @@ router.post(
       await query(
         `
         UPDATE lessonplanstbl SET
-          status = 'approved',
+          status = 'awaiting_reflection',
           verified_by = $1,
           verified_at = NOW(),
           revision_reason = NULL,
@@ -677,6 +739,9 @@ router.post(
 /**
  * POST /api/sms/lesson-plans/:id/request-revision
  * Configured Superadmin (any branch) or Admin (own branch only) verifier.
+ * Body:
+ *   - items?: [{ field?, highlight?, note? }]  field keys e.g. learning_objectives
+ *   - reason?: string  general note (also accepted as legacy plain reason)
  */
 router.post(
   '/:id/request-revision',
@@ -684,6 +749,7 @@ router.post(
   [
     param('id').isInt(),
     body('reason').optional().isString(),
+    body('items').optional().isArray(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -713,7 +779,21 @@ router.post(
         });
       }
 
-      const reason = String(req.body.reason || '').trim() || null;
+      const feedback = buildRevisionFeedbackPayload({
+        items: req.body.items,
+        general: req.body.reason,
+      });
+      const feedbackErrors = validateRevisionFeedbackPayload(feedback);
+      if (feedbackErrors.length) {
+        return res.status(400).json({
+          success: false,
+          message: feedbackErrors.join('; '),
+        });
+      }
+
+      const reasonStored = serializeRevisionFeedback(feedback);
+      const reasonForNotify = summarizeRevisionFeedbackForNotification(feedback);
+
       await query(
         `
         UPDATE lessonplanstbl SET
@@ -724,7 +804,7 @@ router.post(
           updated_at = NOW()
         WHERE lesson_plan_id = $3
         `,
-        [reason, userId, id]
+        [reasonStored, userId, id]
       );
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
       const plan = mapLessonPlanRow(updated.rows[0]);
@@ -735,7 +815,7 @@ router.post(
           createdBy: userId,
           verifierName: req.user.fullName || req.user.full_name || req.user.email || 'Verifier',
           action: 'revision_requested',
-          revisionReason: reason,
+          revisionReason: reasonForNotify,
         });
       } catch (notifyErr) {
         console.error('[lesson-plans] revision notification failed:', notifyErr.message);

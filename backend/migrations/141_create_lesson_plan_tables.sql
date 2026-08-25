@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS public.lessonplanstbl (
   reflection_challenges TEXT NOT NULL DEFAULT '',
   reflection_improvements TEXT NOT NULL DEFAULT '',
   status VARCHAR(40) NOT NULL DEFAULT 'draft'
-    CHECK (status IN ('draft', 'submitted', 'approved', 'revision_requested')),
+    CHECK (status IN ('draft', 'submitted', 'awaiting_reflection', 'revision_requested', 'completed')),
   submitted_at TIMESTAMPTZ,
   revision_reason TEXT,
   verified_by INTEGER REFERENCES public.userstbl (user_id) ON DELETE SET NULL,
@@ -41,7 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_lessonplanstbl_status
   ON public.lessonplanstbl (status);
 
 COMMENT ON TABLE public.lessonplanstbl IS
-  'Teacher lesson plans: draft → submitted → approved | revision_requested.';
+  'Teacher lesson plans: draft → submitted → awaiting_reflection | revision_requested → completed.';
 
 CREATE TABLE IF NOT EXISTS public.lesson_plan_verifierstbl (
   user_id INTEGER PRIMARY KEY REFERENCES public.userstbl (user_id) ON DELETE CASCADE,

@@ -4,8 +4,19 @@ Helpers for teacher lesson plan CRUD and Superadmin/Admin verification.
 
 ## Status flow
 
-`draft` → `submitted` → `approved`  
+`draft` → `submitted` → `awaiting_reflection` → `completed`  
 `submitted` → `revision_requested` → (edit) → `submitted`
+
+### Teacher's Reflection
+
+- Locked while drafting / submitting / pending verification.
+- After verifier **approves**, status becomes **`awaiting_reflection`** (label: Awaiting Reflection).
+- Reflection fields unlock **only on the lesson date** (Asia/Manila calendar day). Locked again the day after.
+- Saving reflections marks the plan **`completed`** — no second verifier approval.
+
+### Structured revision feedback
+
+Verifiers can flag a **field** and/or **highlighted quote** (+ note). Stored as JSON in `revision_reason` (`revision_feedback` on API). Legacy plain-text reasons still display.
 
 ## Active student note
 

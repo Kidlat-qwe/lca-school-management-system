@@ -10,8 +10,8 @@
 | GET | `/` | Own lesson plans |
 | GET | `/:id` | One plan |
 | POST | `/` | Create draft (or `status: submitted`) |
-| PUT | `/:id` | Update draft / revision_requested |
-| POST | `/:id/submit` | Submit for verification |
+| PUT | `/:id` | Update draft / revision_requested (reflections cleared). Or, when `awaiting_reflection` and today is the lesson date (Manila), save reflections → `completed` |
+| POST | `/:id/submit` | Submit for verification (clears reflections) |
 
 ## Superadmin / Admin verifiers
 
@@ -23,7 +23,7 @@
 | GET | `/?status=…` | Review queue (configured verifiers). Admin scoped to their branch. |
 | GET | `/:id` | One plan (configured verifiers; Admin branch-scoped) |
 | POST | `/:id/approve` | Approve (configured verifier; Admin branch-scoped) |
-| POST | `/:id/request-revision` | Send back with optional `reason` (Admin branch-scoped) |
+| POST | `/:id/request-revision` | Send back with structured feedback: `items[{ field, highlight, note }]` and/or `reason` (general). Stored as JSON in `revision_reason`. |
 
 Review UI:
 - Superadmin **Lesson Plans** (`/superadmin/lesson-plans`) — all branches
