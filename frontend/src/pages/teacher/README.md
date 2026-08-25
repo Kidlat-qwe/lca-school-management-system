@@ -23,7 +23,7 @@ UI styling matches the QA `TeacherLessonPlans.jsx` sheet (Poppins, header grid, 
 - Fixed school header meta (Region III, Bulacan, 5th District, School ID 411093)
 - Save draft / submit for Superadmin verification
 - Prepared by = logged-in teacher
-- Superadmin → Settings → Lesson Plans configures verifiers; review is on `/superadmin/lesson-plans`
+- Superadmin → Settings → Lesson Plans configures Superadmin + Admin verifiers; review is on `/superadmin/lesson-plans` or `/admin/lesson-plans` (Admin = designated branch only)
 
 **API:** `/api/sms/lesson-plans`
 

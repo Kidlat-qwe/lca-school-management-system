@@ -191,6 +191,7 @@ function App() {
             <Route path="program" element={<AdminProgram />} />
             <Route path="classes" element={<AdminClasses />} />
             <Route path="announcements" element={<AdminAnnouncements />} />
+            <Route path="lesson-plans" element={<SuperadminLessonPlans />} />
             <Route path="package" element={<AdminPackage />} />
             <Route path="pricinglist" element={<AdminPricingList />} />
             <Route path="merchandise" element={<AdminMerchandise />} />

@@ -41,6 +41,78 @@ async function assertIsConfiguredVerifier(userId) {
 }
 
 /**
+ * Verifier access context.
+ * - Superadmin verifier: all branches (branchId = null scope)
+ * - Admin verifier: only their designated branch
+ */
+function getActorBranchId(req) {
+  const raw = req.user.branchId ?? req.user.branch_id ?? null;
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+async function getVerifierContext(req) {
+  const userId = req.user.userId || req.user.user_id;
+  const userType = req.user.userType || req.user.user_type;
+  const isVerifier = await assertIsConfiguredVerifier(userId);
+  if (!isVerifier) {
+    return { userId, userType, isVerifier: false, branchId: null };
+  }
+  if (userType === 'Admin') {
+    return { userId, userType, isVerifier: true, branchId: getActorBranchId(req) };
+  }
+  return { userId, userType, isVerifier: true, branchId: null };
+}
+
+/**
+ * Ensure the current verifier may act on a plan row (branch scope for Admin).
+ * @returns {{ ok: true } | { ok: false, status: number, message: string }}
+ */
+function assertVerifierMayAccessPlan(ctx, planRow) {
+  if (!ctx?.isVerifier) {
+    return {
+      ok: false,
+      status: 403,
+      message: 'You are not configured as a lesson plan verifier',
+    };
+  }
+  if (ctx.userType === 'Admin') {
+    if (ctx.branchId == null) {
+      return {
+        ok: false,
+        status: 403,
+        message: 'Admin verifiers must have a designated branch',
+      };
+    }
+    if (Number(planRow.branch_id) !== Number(ctx.branchId)) {
+      return {
+        ok: false,
+        status: 403,
+        message: 'You can only verify lesson plans for your designated branch',
+      };
+    }
+  }
+  return { ok: true };
+}
+
+const VERIFIER_LIST_SELECT = `
+  SELECT
+    v.user_id,
+    u.full_name,
+    u.email,
+    u.user_type,
+    u.branch_id,
+    b.branch_name,
+    v.created_at
+  FROM lesson_plan_verifierstbl v
+  INNER JOIN userstbl u ON u.user_id = v.user_id
+  LEFT JOIN branchestbl b ON b.branch_id = u.branch_id
+  WHERE u.user_type IN ('Superadmin', 'Admin')
+  ORDER BY u.user_type DESC, b.branch_name ASC NULLS LAST, u.full_name ASC
+`;
+
+/**
  * GET /api/sms/lesson-plans/meta
  * Grade/subject option lists + current user prepared-by name.
  */
@@ -82,15 +154,19 @@ router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next)
 
 /**
  * GET /api/sms/lesson-plans/verifiers/me
- * Current Superadmin: whether they are configured as a lesson-plan verifier.
+ * Current Superadmin/Admin: whether they are configured as a lesson-plan verifier.
  */
-router.get('/verifiers/me', requireRole('Superadmin'), async (req, res, next) => {
+router.get('/verifiers/me', requireRole('Superadmin', 'Admin'), async (req, res, next) => {
   try {
-    const userId = req.user.userId || req.user.user_id;
-    const isVerifier = await assertIsConfiguredVerifier(userId);
+    const ctx = await getVerifierContext(req);
     res.json({
       success: true,
-      data: { is_verifier: isVerifier, user_id: userId },
+      data: {
+        is_verifier: ctx.isVerifier,
+        user_id: ctx.userId,
+        user_type: ctx.userType,
+        branch_id: ctx.branchId,
+      },
     });
   } catch (error) {
     next(error);
@@ -99,19 +175,11 @@ router.get('/verifiers/me', requireRole('Superadmin'), async (req, res, next) =>
 
 /**
  * GET /api/sms/lesson-plans/verifiers
- * Superadmin: list configured lesson-plan verifiers.
+ * Superadmin: list configured lesson-plan verifiers (Superadmin + Admin).
  */
 router.get('/verifiers', requireRole('Superadmin'), async (req, res, next) => {
   try {
-    const result = await query(
-      `
-      SELECT v.user_id, u.full_name, u.email, v.created_at
-      FROM lesson_plan_verifierstbl v
-      INNER JOIN userstbl u ON u.user_id = v.user_id
-      WHERE u.user_type = 'Superadmin'
-      ORDER BY u.full_name ASC
-      `
-    );
+    const result = await query(VERIFIER_LIST_SELECT);
     res.json({ success: true, data: result.rows });
   } catch (error) {
     next(error);
@@ -120,7 +188,8 @@ router.get('/verifiers', requireRole('Superadmin'), async (req, res, next) => {
 
 /**
  * PUT /api/sms/lesson-plans/verifiers
- * Superadmin: replace verifier list (Superadmin users only).
+ * Superadmin: replace verifier list (Superadmin and Admin users only).
+ * Admin verifiers must have a designated branch_id.
  */
 router.put(
   '/verifiers',
@@ -136,15 +205,26 @@ router.put(
       if (userIds.length > 0) {
         const check = await query(
           `
-          SELECT user_id FROM userstbl
-          WHERE user_id = ANY($1::int[]) AND user_type = 'Superadmin'
+          SELECT user_id, user_type, branch_id
+          FROM userstbl
+          WHERE user_id = ANY($1::int[]) AND user_type IN ('Superadmin', 'Admin')
           `,
           [userIds]
         );
         if (check.rows.length !== userIds.length) {
           return res.status(400).json({
             success: false,
-            message: 'All verifiers must be Superadmin users',
+            message: 'All verifiers must be Superadmin or Admin users',
+          });
+        }
+        const adminsWithoutBranch = check.rows.filter(
+          (r) => r.user_type === 'Admin' && (r.branch_id == null || r.branch_id === '')
+        );
+        if (adminsWithoutBranch.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Admin verifiers must have a designated branch. Assign a branch to the Admin user first.',
           });
         }
       }
@@ -162,14 +242,7 @@ router.put(
         );
       }
 
-      const result = await query(
-        `
-        SELECT v.user_id, u.full_name, u.email, v.created_at
-        FROM lesson_plan_verifierstbl v
-        INNER JOIN userstbl u ON u.user_id = v.user_id
-        ORDER BY u.full_name ASC
-        `
-      );
+      const result = await query(VERIFIER_LIST_SELECT);
       res.json({ success: true, data: result.rows });
     } catch (error) {
       next(error);
@@ -179,11 +252,13 @@ router.put(
 
 /**
  * GET /api/sms/lesson-plans
- * Teacher: own plans. Superadmin: all (optional status filter) — for verification inbox.
+ * Teacher: own plans.
+ * Superadmin verifier: all branches.
+ * Admin verifier: only their designated branch.
  */
 router.get(
   '/',
-  requireRole('Teacher', 'Superadmin'),
+  requireRole('Teacher', 'Superadmin', 'Admin'),
   [
     queryValidator('status').optional().isString(),
     queryValidator('page').optional().isInt({ min: 1 }),
@@ -199,12 +274,19 @@ router.get(
       const isTeacher = req.user.userType === 'Teacher';
       const userId = req.user.userId || req.user.user_id;
 
+      let verifierCtx = null;
       if (!isTeacher) {
-        const allowed = await assertIsConfiguredVerifier(userId);
-        if (!allowed) {
+        verifierCtx = await getVerifierContext(req);
+        if (!verifierCtx.isVerifier) {
           return res.status(403).json({
             success: false,
             message: 'Only configured lesson plan verifiers can view the review queue',
+          });
+        }
+        if (verifierCtx.userType === 'Admin' && verifierCtx.branchId == null) {
+          return res.status(403).json({
+            success: false,
+            message: 'Admin verifiers must have a designated branch',
           });
         }
       }
@@ -214,6 +296,9 @@ router.get(
       if (isTeacher) {
         params.push(userId);
         where += ` AND lp.teacher_user_id = $${params.length}`;
+      } else if (verifierCtx?.userType === 'Admin' && verifierCtx.branchId != null) {
+        params.push(verifierCtx.branchId);
+        where += ` AND lp.branch_id = $${params.length}`;
       }
       if (status) {
         params.push(status);
@@ -255,7 +340,7 @@ router.get(
  */
 router.get(
   '/:id',
-  requireRole('Teacher', 'Superadmin'),
+  requireRole('Teacher', 'Superadmin', 'Admin'),
   [param('id').isInt(), handleValidationErrors],
   async (req, res, next) => {
     try {
@@ -271,12 +356,13 @@ router.get(
       ) {
         return res.status(403).json({ success: false, message: 'Access denied' });
       }
-      if (req.user.userType === 'Superadmin') {
-        const allowed = await assertIsConfiguredVerifier(req.user.userId || req.user.user_id);
-        if (!allowed) {
-          return res.status(403).json({
+      if (req.user.userType === 'Superadmin' || req.user.userType === 'Admin') {
+        const ctx = await getVerifierContext(req);
+        const access = assertVerifierMayAccessPlan(ctx, row);
+        if (!access.ok) {
+          return res.status(access.status).json({
             success: false,
-            message: 'Only configured lesson plan verifiers can view lesson plans',
+            message: access.message,
           });
         }
       }
@@ -522,22 +608,16 @@ router.post(
 
 /**
  * POST /api/sms/lesson-plans/:id/approve
- * Configured Superadmin verifier only.
+ * Configured Superadmin (any branch) or Admin (own branch only) verifier.
  */
 router.post(
   '/:id/approve',
-  requireRole('Superadmin'),
+  requireRole('Superadmin', 'Admin'),
   [param('id').isInt(), handleValidationErrors],
   async (req, res, next) => {
     try {
-      const userId = req.user.userId || req.user.user_id;
-      const allowed = await assertIsConfiguredVerifier(userId);
-      if (!allowed) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not configured as a lesson plan verifier',
-        });
-      }
+      const ctx = await getVerifierContext(req);
+      const userId = ctx.userId;
       const id = parseInt(req.params.id, 10);
       const existing = await query(
         `SELECT lesson_plan_id, status, teacher_user_id, branch_id, topic, grade_level, subject
@@ -546,6 +626,13 @@ router.post(
       );
       if (!existing.rows[0]) {
         return res.status(404).json({ success: false, message: 'Lesson plan not found' });
+      }
+      const access = assertVerifierMayAccessPlan(ctx, existing.rows[0]);
+      if (!access.ok) {
+        return res.status(access.status).json({
+          success: false,
+          message: access.message,
+        });
       }
       if (existing.rows[0].status !== 'submitted') {
         return res.status(400).json({
@@ -589,10 +676,11 @@ router.post(
 
 /**
  * POST /api/sms/lesson-plans/:id/request-revision
+ * Configured Superadmin (any branch) or Admin (own branch only) verifier.
  */
 router.post(
   '/:id/request-revision',
-  requireRole('Superadmin'),
+  requireRole('Superadmin', 'Admin'),
   [
     param('id').isInt(),
     body('reason').optional().isString(),
@@ -600,14 +688,8 @@ router.post(
   ],
   async (req, res, next) => {
     try {
-      const userId = req.user.userId || req.user.user_id;
-      const allowed = await assertIsConfiguredVerifier(userId);
-      if (!allowed) {
-        return res.status(403).json({
-          success: false,
-          message: 'You are not configured as a lesson plan verifier',
-        });
-      }
+      const ctx = await getVerifierContext(req);
+      const userId = ctx.userId;
       const id = parseInt(req.params.id, 10);
       const existing = await query(
         `SELECT lesson_plan_id, status, teacher_user_id, branch_id, topic, grade_level, subject
@@ -616,6 +698,13 @@ router.post(
       );
       if (!existing.rows[0]) {
         return res.status(404).json({ success: false, message: 'Lesson plan not found' });
+      }
+      const access = assertVerifierMayAccessPlan(ctx, existing.rows[0]);
+      if (!access.ok) {
+        return res.status(access.status).json({
+          success: false,
+          message: access.message,
+        });
       }
       if (existing.rows[0].status !== 'submitted') {
         return res.status(400).json({

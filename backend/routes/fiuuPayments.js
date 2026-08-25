@@ -8,6 +8,7 @@ import {
   getFiuuPaymentStatus,
   getPublicFiuuPayByToken,
   getPublicFiuuGoHtmlByToken,
+  applyParentAutodebitDecisionOnPayToken,
   previewFiuuPaymentLinkEmail,
   handleFiuuWebhookPayload,
   isFiuuConfigured,
@@ -15,6 +16,16 @@ import {
   formatIpnAckBody,
 } from '../services/fiuu/fiuuPaymentService.js';
 import { getFiuuFrontendReturnUrl } from '../services/fiuu/config.js';
+import {
+  listFiuuPaymentTokensForStudent,
+  revokeFiuuPaymentToken,
+} from '../services/fiuu/fiuuTokenService.js';
+import {
+  getAutodebitTermsPayload,
+  resolveInvoiceAutodebitContext,
+  listAutodebitConsentsForStudent,
+  disableAutodebitConsent,
+} from '../services/fiuu/fiuuAutodebitConsent.js';
 
 const router = express.Router();
 
@@ -28,9 +39,35 @@ router.get('/config', verifyFirebaseToken, (req, res) => {
     data: {
       enabled: isFiuuConfigured(),
       defaultChannel: process.env.FIUU_DEFAULT_CHANNEL || 'QRPH',
+      autodebitTerms: getAutodebitTermsPayload(),
     },
   });
 });
+
+/**
+ * GET /api/sms/payments/fiuu/autodebit-context/:invoiceId
+ * Whether this invoice can offer class-scoped auto-debit.
+ */
+router.get(
+  '/autodebit-context/:invoiceId',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [param('invoiceId').isInt(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const data = await resolveInvoiceAutodebitContext(req.params.invoiceId);
+      res.json({
+        success: true,
+        data: {
+          ...(data || { eligible: false }),
+          terms: getAutodebitTermsPayload(),
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 /**
  * GET /api/sms/payments/fiuu/go/:token
@@ -61,6 +98,44 @@ router.get(
           .send(
             `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
               err.message || 'Payment link error'
+            ).replace(/</g, '')}</p></body></html>`
+          );
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/go/:token/consent
+ * Parent accept/decline auto-debit on emailed pay link, then redirect back to /go.
+ */
+router.post(
+  '/go/:token/consent',
+  express.urlencoded({ extended: true }),
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const decision = String(req.body?.decision || '').toLowerCase();
+      const termsAccepted =
+        req.body?.terms_accepted === '1' ||
+        req.body?.terms_accepted === true ||
+        req.body?.terms_accepted === 'true';
+      await applyParentAutodebitDecisionOnPayToken(req.params.token, {
+        decision: decision === 'accept' ? 'accept' : 'decline',
+        terms_accepted: termsAccepted || decision === 'decline',
+      });
+      const redirectTo = `${req.baseUrl}/go/${encodeURIComponent(req.params.token)}`;
+      return res.redirect(303, redirectTo);
+    } catch (err) {
+      if (err.statusCode) {
+        res.removeHeader('Content-Security-Policy');
+        return res
+          .status(err.statusCode)
+          .type('html')
+          .send(
+            `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
+              err.message || 'Consent error'
             ).replace(/</g, '')}</p></body></html>`
           );
       }
@@ -109,6 +184,10 @@ router.post(
     body('send_copy_to_me').optional(),
     body('tip_amount').optional(),
     body('discount_amount').optional(),
+    body('autodebit_opt_in').optional(),
+    body('autodebit_terms_accepted').optional(),
+    body('parent_terms_accepted').optional(),
+    body('parent_opt_in').optional(),
     handleValidationErrors,
   ],
   async (req, res, next) => {
@@ -133,6 +212,16 @@ router.post(
         staff_email: req.user.email,
         tip_amount: req.body.tip_amount,
         discount_amount: req.body.discount_amount,
+        autodebit_opt_in:
+          req.body.autodebit_opt_in === true || req.body.autodebit_opt_in === 'true',
+        autodebit_terms_accepted:
+          req.body.autodebit_terms_accepted === true ||
+          req.body.autodebit_terms_accepted === 'true',
+        parent_terms_accepted:
+          req.body.parent_terms_accepted === true ||
+          req.body.parent_terms_accepted === 'true',
+        parent_opt_in:
+          req.body.parent_opt_in === true || req.body.parent_opt_in === 'true',
       });
       res.status(201).json({ success: true, data });
     } catch (err) {
@@ -219,8 +308,117 @@ router.post(
         send_copy_to_me:
           req.body.send_copy_to_me === true || req.body.send_copy_to_me === 'true',
         staff_email: req.user.email,
+        autodebit_opt_in:
+          req.body.autodebit_opt_in === true || req.body.autodebit_opt_in === 'true',
+        autodebit_terms_accepted:
+          req.body.autodebit_terms_accepted === true ||
+          req.body.autodebit_terms_accepted === 'true',
+        parent_terms_accepted:
+          req.body.parent_terms_accepted === true ||
+          req.body.parent_terms_accepted === 'true',
+        parent_opt_in:
+          req.body.parent_opt_in === true || req.body.parent_opt_in === 'true',
       });
       res.status(201).json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/fiuu/tokens/:studentId
+ * List saved FIUU card tokens for a student (never returns raw token).
+ */
+router.get(
+  '/tokens/:studentId',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [param('studentId').isInt(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const includeRevoked =
+        req.query.include_revoked === 'true' || req.query.include_revoked === '1';
+      const data = await listFiuuPaymentTokensForStudent(req.params.studentId, {
+        includeRevoked,
+      });
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/fiuu/autodebit-consents/:studentId
+ */
+router.get(
+  '/autodebit-consents/:studentId',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [param('studentId').isInt(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const data = await listAutodebitConsentsForStudent(req.params.studentId);
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/autodebit-consents/:consentId/disable
+ */
+router.post(
+  '/autodebit-consents/:consentId/disable',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [param('consentId').isInt(), body('reason').optional().isString(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const data = await disableAutodebitConsent(req.params.consentId, {
+        disabled_by: req.user.userId || req.user.user_id,
+        reason: req.body.reason || 'Disabled by staff',
+      });
+      res.json({ success: true, data });
+    } catch (err) {
+      if (err.statusCode) {
+        return res.status(err.statusCode).json({ success: false, message: err.message });
+      }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/tokens/:tokenId/revoke
+ * Revoke an active saved FIUU token (staff-initiated).
+ */
+router.post(
+  '/tokens/:tokenId/revoke',
+  verifyFirebaseToken,
+  requireRole('Superadmin', 'Admin'),
+  [
+    param('tokenId').isInt(),
+    body('student_id').optional().isInt(),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const data = await revokeFiuuPaymentToken(req.params.tokenId, {
+        studentId: req.body.student_id != null ? parseInt(req.body.student_id, 10) : null,
+      });
+      res.json({ success: true, data });
     } catch (err) {
       if (err.statusCode) {
         return res.status(err.statusCode).json({ success: false, message: err.message });

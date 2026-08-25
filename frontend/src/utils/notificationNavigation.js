@@ -32,6 +32,7 @@ function getNotificationBasePath(navigationKey, userInfo) {
 
     case 'lesson-plans':
       if (userType === 'Superadmin') return '/superadmin/lesson-plans';
+      if (userType === 'Admin') return '/admin/lesson-plans';
       if (userType === 'Teacher') return '/teacher/lesson-plans';
       return getAnnouncementsPathForUser(userInfo);
 

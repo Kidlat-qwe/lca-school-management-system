@@ -7,35 +7,27 @@ Shared UI for finance payment logs and related flows.
 | File | Purpose |
 |------|---------|
 | `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. |
-| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. **Send payment link**, **Open FIUU now**, invoice **tip/discount**, and **Advanced settings** (expiry, Preview). |
+| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. Send link / Open pay page, tip/discount, advanced expiry/preview. |
+
+## Auto-debit (installment) — client decides
+
+Staff does **not** configure auto-debit in CMS. For installment invoices / installment Package AR:
+
+1. Staff sends the payment link (or opens the pay page).
+2. On `/go`, auto-debit toggle defaults **OFF**.
+3. Turning the toggle **ON** opens a **Terms & Conditions modal** explaining what will happen; Agree enables it, Cancel keeps it off.
+4. Continue to payment → FIUU. If enabled, Card (CREDIT) is used so FIUU can tokenize.
 
 ## Public pay page
 
-| Path | File |
-|------|------|
-| API `GET /payments/fiuu/go/:token` | Backend HTML auto-POST to FIUU — **used by email Pay now** |
-| `/pay/fiuu/:token` | Optional CMS landing (`FiuuPublicPayPage.jsx`) for diagnostics |
+| Path | Purpose |
+|------|---------|
+| `GET /payments/fiuu/go/:token` | Client auto-debit choice (if installment) then FIUU |
+| `POST /payments/fiuu/go/:token/consent` | Client accept/decline |
 
-## Advanced settings (`FiuuPayOnlinePanel`)
+Paid links always show already paid.
 
-Collapsible section matching FIUU-style options:
+## Related
 
-| Control | Behavior |
-|---------|----------|
-| Tip / Discount (invoice) | Same as manual Record Payment; FIUU charge = amount due − discount + tip |
-| Expiry Date | Optional. When set → email shows that date and link expires then. When blank → email shows **N/A** (no auto-expiry) |
-| Preview | Opens HTML preview via `POST /payments/fiuu/preview-email` |
-
-Paid links are always disabled after FIUU confirms payment (no staff toggle). AR tip/discount stay on the create form above the panel.
-
-## Related utils
-
-- `frontend/src/utils/fiuuPayment.js` — create (invoice/AR), preview email, public fetch, poll, form POST helpers
-
-## Related backend
-
-- `POST /api/sms/payments/fiuu/create` — `send_email`, advanced link options
-- `POST /api/sms/payments/fiuu/create-ar` — same
-- `POST /api/sms/payments/fiuu/preview-email` — HTML preview only
-- `GET /api/sms/payments/fiuu/public/:token` — unauthenticated landing payload
-- See `backend/services/fiuu/README.md`
+- `frontend/src/utils/fiuuPayment.js`
+- `backend/services/fiuu/README.md`

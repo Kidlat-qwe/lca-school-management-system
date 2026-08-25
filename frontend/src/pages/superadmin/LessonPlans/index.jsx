@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Navigate } from 'react-router-dom';
 import { apiRequest } from '../../../config/api';
+import { useAuth } from '../../../contexts/AuthContext';
 import { appAlert, appConfirm } from '../../../utils/appAlert';
 import { LessonPlanHeader } from '../../../components/lessonPlanHeader';
 
@@ -48,10 +49,14 @@ const statusBadgeClass = (status) => {
 };
 
 /**
- * Superadmin Lesson Plan review (configured verifiers only).
+ * Lesson Plan review for configured Superadmin/Admin verifiers.
+ * Admin verifiers only see plans for their designated branch (enforced by API).
  * UI guided by QA_LessonPlans.jsx: grade cards → filtered list → detail modal.
  */
 export default function SuperadminLessonPlans() {
+  const { userInfo } = useAuth();
+  const userType = userInfo?.user_type || userInfo?.userType;
+  const homePath = userType === 'Admin' ? '/admin' : '/superadmin';
   const [accessChecked, setAccessChecked] = useState(false);
   const [isVerifier, setIsVerifier] = useState(false);
   const [lessonPlans, setLessonPlans] = useState([]);
@@ -243,7 +248,7 @@ export default function SuperadminLessonPlans() {
   };
 
   if (accessChecked && !isVerifier) {
-    return <Navigate to="/superadmin" replace />;
+    return <Navigate to={homePath} replace />;
   }
 
   return (

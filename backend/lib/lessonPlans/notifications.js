@@ -5,16 +5,34 @@ import { query } from '../../config/database.js';
  * for lesson plan submit / approve / revision events.
  */
 
-async function getConfiguredVerifierUserIds() {
+/**
+ * Configured verifiers who should be notified for a plan's branch:
+ * - Superadmin verifiers: always
+ * - Admin verifiers: only when their branch_id matches the plan branch
+ */
+async function getConfiguredVerifierUserIdsForBranch(branchId) {
   const result = await query(
     `
-    SELECT v.user_id
+    SELECT v.user_id, u.user_type, u.branch_id
     FROM lesson_plan_verifierstbl v
     INNER JOIN userstbl u ON u.user_id = v.user_id
-    WHERE u.user_type = 'Superadmin'
+    WHERE u.user_type IN ('Superadmin', 'Admin')
     `
   );
-  return result.rows.map((r) => Number(r.user_id)).filter((id) => id > 0);
+
+  const planBranch = branchId != null && branchId !== '' ? Number(branchId) : null;
+
+  return result.rows
+    .filter((r) => {
+      if (r.user_type === 'Superadmin') return true;
+      if (r.user_type === 'Admin') {
+        if (planBranch == null || r.branch_id == null) return false;
+        return Number(r.branch_id) === planBranch;
+      }
+      return false;
+    })
+    .map((r) => Number(r.user_id))
+    .filter((id) => id > 0);
 }
 
 async function getAllSuperadminUserIds() {
@@ -55,7 +73,9 @@ async function insertTargetedNotification({
 }
 
 /**
- * Teacher submitted a plan → notify configured verifiers (fallback: all Superadmins).
+ * Teacher submitted a plan → notify matching verifiers
+ * (Superadmin verifiers + Admin verifiers for that branch).
+ * Fallback: all Superadmins when no verifiers are configured.
  */
 export async function notifyVerifiersOfLessonPlanSubmission({
   lessonPlan,
@@ -67,7 +87,7 @@ export async function notifyVerifiersOfLessonPlanSubmission({
   const grade = lessonPlan?.grade_level || '';
   const subject = lessonPlan?.subject || '';
 
-  let verifierIds = await getConfiguredVerifierUserIds();
+  let verifierIds = await getConfiguredVerifierUserIdsForBranch(lessonPlan?.branch_id);
   if (verifierIds.length === 0) {
     verifierIds = await getAllSuperadminUserIds();
   }

@@ -13,25 +13,29 @@
 | PUT | `/:id` | Update draft / revision_requested |
 | POST | `/:id/submit` | Submit for verification |
 
-## Superadmin
+## Superadmin / Admin verifiers
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/verifiers/me` | Whether the current Superadmin is a configured verifier |
-| GET | `/verifiers` | Configured verifier users (Settings) |
-| PUT | `/verifiers` | Replace verifier list (`user_ids`, Superadmin only) |
-| GET | `/?status=…` | Review queue (configured verifiers only) |
-| GET | `/:id` | One plan (configured verifiers only) |
-| POST | `/:id/approve` | Approve (must be configured verifier) |
-| POST | `/:id/request-revision` | Send back with optional `reason` |
+| GET | `/verifiers/me` | Whether the current Superadmin/Admin is a configured verifier |
+| GET | `/verifiers` | Configured verifier users (Settings; Superadmin only) |
+| PUT | `/verifiers` | Replace verifier list (`user_ids`: Superadmin and Admin). Admin users must have a `branch_id`. |
+| GET | `/?status=…` | Review queue (configured verifiers). Admin scoped to their branch. |
+| GET | `/:id` | One plan (configured verifiers; Admin branch-scoped) |
+| POST | `/:id/approve` | Approve (configured verifier; Admin branch-scoped) |
+| POST | `/:id/request-revision` | Send back with optional `reason` (Admin branch-scoped) |
 
-Review UI: Superadmin **Lesson Plans** page (`/superadmin/lesson-plans`), shown only to configured verifiers. Settings only manages the verifier list.
+Review UI:
+- Superadmin **Lesson Plans** (`/superadmin/lesson-plans`) — all branches
+- Admin **Lesson Plans** (`/admin/lesson-plans`) — designated branch only
+
+Settings only manages the verifier list.
 
 ## Notifications
 
 | Event | Recipients | `navigation_key` |
 |-------|------------|------------------|
-| Teacher submits | Configured verifiers (fallback: all Superadmins) | `lesson-plans` |
+| Teacher submits | Matching verifiers: Superadmin + Admin for plan branch (fallback: all Superadmins) | `lesson-plans` |
 | Verifier approves | Teacher who authored the plan | `lesson-plans` |
 | Verifier requests revision | Teacher who authored the plan | `lesson-plans` |
 

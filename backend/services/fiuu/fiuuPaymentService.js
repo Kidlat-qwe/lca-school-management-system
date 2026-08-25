@@ -28,6 +28,13 @@ import {
 } from './applyGatewayInvoicePayment.js';
 import { applyGatewayArPayment } from './applyGatewayArPayment.js';
 import { createFiuuArPayment } from './createFiuuArPayment.js';
+import { captureFiuuTokenFromWebhook, buildFiuuCustId } from './fiuuTokenService.js';
+import {
+  resolveInvoiceAutodebitContext,
+  buildAutodebitMetadataPatch,
+  upsertAutodebitConsentFromGateway,
+  getAutodebitTermsPayload,
+} from './fiuuAutodebitConsent.js';
 import {
   attachPayLinkToMetadata,
   buildFiuuPublicPayPageUrl,
@@ -36,6 +43,8 @@ import {
   buildFiuuAutoPostHtml,
   findGatewayPaymentByPayToken,
   resolvePayLinkExpiresAt,
+  isTargetBillAlreadySettled,
+  isPayLinkExpired,
 } from './payLink.js';
 import {
   sendFiuuPaymentLinkEmail,
@@ -145,9 +154,13 @@ export async function createFiuuInvoicePayment({
   }
   const chargeAmt = netPayable + tipApplied;
 
+  const autodebitCtx = await resolveInvoiceAutodebitContext(invoice_id);
+  const offerAutodebit = Boolean(autodebitCtx?.eligible);
+
   const orderid = buildInvoiceOrderId(invoice_id);
   const amount = formatFiuuAmount(chargeAmt);
   const currency = getFiuuCurrency();
+  // Default QRPH; if client enables auto-debit on /go we switch form to CREDIT for tokenization.
   const fiuuChannel = channel || getFiuuDefaultChannel();
   const refLabel = invoice.invoice_description || `INV-${invoice_id}`;
   const description = formatFiuuDescription({
@@ -174,6 +187,7 @@ export async function createFiuuInvoicePayment({
     currency,
     vcode,
     channel: fiuuChannel,
+    CustID: buildFiuuCustId(student_id),
   };
 
   const returnUrl = getFiuuReturnUrl();
@@ -183,14 +197,23 @@ export async function createFiuuInvoicePayment({
   if (notifyUrl) formFields.notifyurl = notifyUrl;
   if (callbackUrl) formFields.callbackurl = callbackUrl;
 
+  const autodebitMeta = buildAutodebitMetadataPatch({
+    eligible: offerAutodebit,
+    staff_accepted_by: created_by,
+    installmentinvoiceprofiles_id: autodebitCtx?.installmentinvoiceprofiles_id,
+    class_id: autodebitCtx?.class_id,
+    class_name: autodebitCtx?.class_name,
+  });
+
   const metadata = attachPayLinkToMetadata(
     {
       channel: fiuuChannel,
-      payment_type: 'Full Payment',
+      payment_type: offerAutodebit ? 'Installment' : 'Full Payment',
       tip_amount: tipApplied,
       discount_amount: discountApplied,
       net_payable: netPayable,
       invoice_remaining: remaining,
+      ...autodebitMeta,
     },
     {
       expiresOnYmd: pay_link_expires_on,
@@ -204,7 +227,7 @@ export async function createFiuuInvoicePayment({
     if (send_email) throw err;
   }
 
-  await insertGatewayPayment({
+  const inserted = await insertGatewayPayment({
     gateway: 'FIUU',
     orderid,
     target_type: 'invoice',
@@ -258,6 +281,15 @@ export async function createFiuuInvoicePayment({
     discount_amount: discountApplied,
     net_payable: netPayable,
     email: emailResult,
+    autodebit: {
+      eligible: offerAutodebit,
+      offered_on_pay_link: offerAutodebit,
+      class_name: autodebitCtx?.class_name || null,
+      class_id: autodebitCtx?.class_id || null,
+      installmentinvoiceprofiles_id: autodebitCtx?.installmentinvoiceprofiles_id || null,
+      gateway_payment_id: inserted?.gateway_payment_id || null,
+      terms: getAutodebitTermsPayload(),
+    },
   };
 }
 
@@ -295,11 +327,107 @@ export async function getPublicFiuuPayByToken(token) {
   return buildPublicPayPayloadForRow(row);
 }
 
-/** HTML bridge for email "Pay now" — auto-POSTs to FIUU in the same tab. */
+/** HTML bridge for email "Pay now" — consent gate (if needed) then auto-POST to FIUU. */
 export async function getPublicFiuuGoHtmlByToken(token) {
   const row = await findGatewayPaymentByPayToken(token);
   const payload = await buildPublicPayPayloadForRow(row);
-  return buildFiuuAutoPostHtml(payload);
+  // Relative URL so consent POSTs to the same host that served /go (local or Coolify).
+  const consentActionUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/consent`;
+  return buildFiuuAutoPostHtml(payload, {
+    consentActionUrl,
+    terms: getAutodebitTermsPayload(),
+  });
+}
+
+/**
+ * Parent decision on emailed /go link (accept or decline auto-debit), then continue to FIUU.
+ */
+export async function applyParentAutodebitDecisionOnPayToken(token, { decision, terms_accepted }) {
+  const row = await findGatewayPaymentByPayToken(token);
+  if (!row) {
+    throw Object.assign(new Error('Payment link not found'), { statusCode: 404 });
+  }
+  const billAlreadySettled = await isTargetBillAlreadySettled(row);
+  if (billAlreadySettled || row.status === 'paid') {
+    throw Object.assign(new Error('This payment was already received'), { statusCode: 400 });
+  }
+  if (isPayLinkExpired(row)) {
+    throw Object.assign(new Error('This payment link has expired'), { statusCode: 410 });
+  }
+
+  const meta =
+    row.metadata && typeof row.metadata === 'object' ? { ...row.metadata } : {};
+  if (!meta.autodebit_eligible) {
+    throw Object.assign(new Error('Auto-debit is not offered on this payment link'), {
+      statusCode: 400,
+    });
+  }
+  if (!terms_accepted && String(decision) === 'accept') {
+    throw Object.assign(new Error('Terms & Conditions must be accepted to enable auto-debit'), {
+      statusCode: 400,
+    });
+  }
+
+  const accepted = String(decision) === 'accept';
+  meta.parent_autodebit_decision = accepted ? 'accepted' : 'declined';
+  meta.parent_autodebit_opt_in = accepted;
+  meta.parent_autodebit_accepted_at = new Date().toISOString();
+  meta.parent_autodebit_accepted_via = 'pay_link';
+  meta.autodebit_offered = true;
+  meta.autodebit_staff_opt_in = true;
+
+  let formFields = row.raw_request;
+  if (typeof formFields === 'string') {
+    try {
+      formFields = JSON.parse(formFields);
+    } catch {
+      formFields = {};
+    }
+  }
+  if (!formFields || typeof formFields !== 'object') formFields = {};
+  formFields = { ...formFields };
+
+  // Enabling auto-debit needs Card (CREDIT) so FIUU can return a token.
+  if (accepted) {
+    const amount = formFields.amount;
+    const orderid = formFields.orderid || row.orderid;
+    const currency = formFields.currency || row.currency || getFiuuCurrency();
+    formFields.channel = 'CREDIT';
+    formFields.vcode = buildPaymentVcode({ amount, orderid, currency });
+    meta.channel = 'CREDIT';
+  }
+
+  await query(
+    `UPDATE gateway_paymentstbl
+     SET metadata = $2::jsonb, raw_request = $3::jsonb, updated_at = CURRENT_TIMESTAMP
+     WHERE gateway_payment_id = $1`,
+    [row.gateway_payment_id, JSON.stringify(meta), JSON.stringify(formFields)]
+  );
+
+  if (row.student_id) {
+    try {
+      await upsertAutodebitConsentFromGateway({
+        student_id: row.student_id,
+        installmentinvoiceprofiles_id: meta.installmentinvoiceprofiles_id || null,
+        class_id: meta.autodebit_class_id || null,
+        class_name: meta.autodebit_class_name || null,
+        package_id: meta.autodebit_package_id || null,
+        branch_id: row.branch_id,
+        gateway_payment_id: row.gateway_payment_id,
+        staff_opt_in: true,
+        staff_accepted_at: meta.autodebit_staff_accepted_at || new Date().toISOString(),
+        staff_accepted_by: meta.autodebit_staff_accepted_by || null,
+        parent_opt_in: accepted,
+        parent_accepted_at: meta.parent_autodebit_accepted_at,
+        parent_accepted_via: 'pay_link',
+        terms_version: meta.autodebit_terms_version || undefined,
+      });
+    } catch (err) {
+      console.error('FIUU: parent consent upsert failed:', err?.message || err);
+    }
+  }
+
+  return { ok: true, decision: meta.parent_autodebit_decision };
 }
 
 /**
@@ -499,6 +627,19 @@ async function processSuccessfulGatewayPayment(gatewayRow, webhookPayload) {
         console.error('FIUU: payment confirmation email failed:', emailErr);
       }
     })();
+  }
+
+  // Best-effort: store FIUU card token from notify extraP (tokenization / MIT).
+  // Works for invoice and AR when student_id is present. Never fail payment apply.
+  if (applyResult) {
+    try {
+      await captureFiuuTokenFromWebhook({
+        webhookPayload,
+        gatewayRow,
+      });
+    } catch (tokenErr) {
+      console.error('FIUU: token capture failed:', tokenErr?.message || tokenErr);
+    }
   }
 
   return applyResult;

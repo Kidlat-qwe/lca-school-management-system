@@ -1,13 +1,16 @@
-# Superadmin Lesson Plan Review
+# Superadmin / Admin Lesson Plan Review
 
-Page: `/superadmin/lesson-plans`  
-Component: `index.jsx`
+Pages:
+- `/superadmin/lesson-plans` (Superadmin verifiers — all branches)
+- `/admin/lesson-plans` (Admin verifiers — designated branch only)
+
+Component: `index.jsx` (shared)
 
 ## Access
 
-- Visible in the Superadmin sidebar only when the signed-in user is listed under **Settings → Lesson Plans → Lesson plan verifiers**.
-- Direct URL visits by non-verifiers redirect to `/superadmin`.
-- Backend also enforces verifier membership on list/get/approve/request-revision.
+- Visible in the sidebar only when the signed-in user is listed under **Settings → Lesson Plans → Lesson plan verifiers**.
+- Direct URL visits by non-verifiers redirect to `/superadmin` or `/admin`.
+- Backend enforces verifier membership; Admin verifiers are further limited to `lessonplanstbl.branch_id = admin.branch_id`.
 
 ## UI flow
 

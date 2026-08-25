@@ -8,7 +8,7 @@ Reusable UI for the Settings tabs.
 - `TemplateVariableField.jsx` — Input/textarea that locks `{variable}` tokens after insertion.
 - `TemplateVariablePalette.jsx` — Read-only, auto-detected variable chips (drag or click to insert).
 - `ArchivedClassesPanel.jsx` — Settings → **Archived Classes**: list, restore, or permanently delete soft-archived classes (30-day retention).
-- `LessonPlanSettingsPanel.jsx` — Settings → **Lesson Plans**: configure which Superadmins may verify lesson plans. Review UI is on `/superadmin/lesson-plans` (verifiers only).
+- `LessonPlanSettingsPanel.jsx` — Settings → **Lesson Plans**: configure which Superadmins and Admins may verify lesson plans. Superadmin verifiers review all branches; Admin verifiers only their designated branch. Review UI: `/superadmin/lesson-plans` or `/admin/lesson-plans` (verifiers only).
 
 ## Archived Classes
 

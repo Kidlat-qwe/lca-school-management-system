@@ -4332,6 +4332,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             defaultEmail={(createFormData.prospect_student_email || '').trim()}
                             branchId={createFormData.branch_id || userBranchId}
                             arPayloadBuilder={buildArFiuuCreatePayload}
+                            arInstallmentEligible={
+                              !!selectedPackage &&
+                              ((selectedPackage.package_type || '').toLowerCase() === 'installment' ||
+                                (selectedPackage.package_type === 'Phase' &&
+                                  (selectedPackage.payment_option || '').toLowerCase() ===
+                                    'installment'))
+                            }
+                            arClassLabel={selectedPackage?.package_name || ''}
                             onPaid={handleFiuuArPaymentSuccess}
                             onLinkSent={handleFiuuArLinkSent}
                             onCancel={() => setArCreatePaymentMode('manual')}
@@ -4812,6 +4820,14 @@ const AcknowledgementReceiptsPage = ({ requireExportDateRange = false }) => {
                             defaultEmail={(createFormData.prospect_student_email || '').trim()}
                             branchId={createFormData.branch_id || userBranchId}
                             arPayloadBuilder={buildArFiuuCreatePayload}
+                            arInstallmentEligible={
+                              !!selectedPackage &&
+                              ((selectedPackage.package_type || '').toLowerCase() === 'installment' ||
+                                (selectedPackage.package_type === 'Phase' &&
+                                  (selectedPackage.payment_option || '').toLowerCase() ===
+                                    'installment'))
+                            }
+                            arClassLabel={selectedPackage?.package_name || ''}
                             onPaid={handleFiuuArPaymentSuccess}
                             onLinkSent={handleFiuuArLinkSent}
                             onCancel={() => setArCreatePaymentMode('manual')}

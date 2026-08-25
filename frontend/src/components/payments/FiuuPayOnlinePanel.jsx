@@ -35,6 +35,9 @@ export default function FiuuPayOnlinePanel({
   defaultEmail = '',
   branchId = null,
   arPayloadBuilder,
+  /** AR Package installment-like — client decides auto-debit on pay link. */
+  arInstallmentEligible = false,
+  arClassLabel = '',
   onPaid,
   onLinkSent,
   onCancel,
@@ -48,12 +51,15 @@ export default function FiuuPayOnlinePanel({
   const [recipientEmail, setRecipientEmail] = useState(defaultEmail || '');
   const [error, setError] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  // Empty = no configured expiry (email shows N/A); staff can set a date when needed.
   const [expiryDate, setExpiryDate] = useState('');
   const [tipAmount, setTipAmount] = useState('');
   const [discountAmount, setDiscountAmount] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const pollAbort = useRef(false);
+
+  const isInstallmentLike = isAr
+    ? Boolean(arInstallmentEligible)
+    : Boolean(invoice?.installmentinvoiceprofiles_id);
 
   const remaining = isAr
     ? Number(amountProp ?? 0)
@@ -180,8 +186,20 @@ export default function FiuuPayOnlinePanel({
         }
 
         if (openNow) {
-          submitFiuuPaymentForm(data.payUrl, data.formFields);
-          setPhase('waiting');
+          const offerOnLink =
+            Boolean(data.autodebit?.eligible || data.autodebit?.offered_on_pay_link) ||
+            isInstallmentLike;
+          // Installment: open the pay link so the client chooses auto-debit there.
+          if (offerOnLink && data.pay_link_url) {
+            window.open(data.pay_link_url, '_blank', 'noopener,noreferrer');
+            setPhase('waiting');
+            appAlert(
+              'Payment page opened for the client. They can choose optional auto-debit there, then pay on FIUU.'
+            );
+          } else {
+            submitFiuuPaymentForm(data.payUrl, data.formFields);
+            setPhase('waiting');
+          }
           const status = await pollFiuuPaymentStatus(data.orderid);
           if (pollAbort.current) return;
           if (status.status === 'paid') {
@@ -216,6 +234,7 @@ export default function FiuuPayOnlinePanel({
       linkOptions,
       onPaid,
       onLinkSent,
+      isInstallmentLike,
     ]
   );
 
@@ -313,6 +332,9 @@ export default function FiuuPayOnlinePanel({
         <p className="mt-1 text-xs text-indigo-800/90">
           Send a payment link to the guardian/client email. They open the link and pay on FIUU
           (GCash, Maya, or QR Ph). CMS stays unpaid until FIUU confirms payment.
+          {isInstallmentLike
+            ? ' For installment plans, the client can optionally enable auto-debit for this class on the payment page.'
+            : ''}
         </p>
       </div>
 
@@ -324,7 +346,11 @@ export default function FiuuPayOnlinePanel({
         <div>
           <span className="text-gray-500 text-xs">Payment type</span>
           <p className="font-medium text-gray-900">
-            {isAr ? 'Acknowledgement receipt (FIUU)' : 'Full Payment (FIUU)'}
+            {isAr
+              ? 'Acknowledgement receipt (FIUU)'
+              : isInstallmentLike
+                ? 'Installment (FIUU)'
+                : 'Full Payment (FIUU)'}
           </p>
         </div>
       </div>
@@ -510,7 +536,7 @@ export default function FiuuPayOnlinePanel({
               disabled={actionsDisabled || phase === 'waiting'}
               className="px-4 py-2 text-sm font-medium text-indigo-800 bg-indigo-50 border border-indigo-200 rounded-md hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {phase === 'waiting' ? 'Waiting…' : 'Open FIUU now'}
+              {phase === 'waiting' ? 'Waiting…' : isInstallmentLike ? 'Open pay page' : 'Open FIUU now'}
             </button>
             <button
               type="button"

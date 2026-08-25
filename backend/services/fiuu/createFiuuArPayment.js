@@ -21,6 +21,12 @@ import { buildPaymentVcode, formatFiuuAmount } from './signature.js';
 import { attachPayLinkToMetadata, buildFiuuPublicPayPageUrl } from './payLink.js';
 import { sendFiuuPaymentLinkEmail, loadBranchForPayEmail } from './sendFiuuPaymentLinkEmail.js';
 import { normalizeNotificationRecipients } from '../../utils/emailService.js';
+import { buildFiuuCustId } from './fiuuTokenService.js';
+import {
+  buildAutodebitMetadataPatch,
+  getAutodebitTermsPayload,
+  isInstallmentLikePackage,
+} from './fiuuAutodebitConsent.js';
 
 const FIUU_AR_PAYMENT_METHOD = 'FIUU Online';
 
@@ -104,6 +110,7 @@ export async function createFiuuArPayment({
     let packageAmountSnapshot = null;
     let pkgId = null;
     let installment_option = null;
+    let arInstallmentEligible = false;
 
     if (arType === 'Merchandise') {
       const merchandise_items = Array.isArray(arPayload.merchandise_items)
@@ -189,9 +196,11 @@ export async function createFiuuArPayment({
             ? 'downpayment_only'
             : null;
 
-      const isInstallmentPkg =
-        (pkg.package_type || '').toLowerCase() === 'installment' ||
-        (pkg.package_type === 'Phase' && (pkg.payment_option || '').toLowerCase() === 'installment');
+      const isInstallmentPkg = isInstallmentLikePackage({
+        package_type: pkg.package_type,
+        payment_option: pkg.payment_option,
+      });
+      arInstallmentEligible = isInstallmentPkg;
       const downpayment = parseFloat(pkg.downpayment_amount ?? 0) || 0;
       const monthly = parseFloat(pkg.package_price ?? 0) || 0;
 
@@ -278,6 +287,9 @@ export async function createFiuuArPayment({
     const orderid = buildArOrderId(ackId);
     const amount = formatFiuuAmount(chargeAmt);
     const currency = getFiuuCurrency();
+
+    const offerAutodebit = arInstallmentEligible;
+
     const fiuuChannel = channel || getFiuuDefaultChannel();
     const description = formatFiuuDescription({
       typeLabel: arType === 'Merchandise' ? 'AR Merchandise' : 'AR Package',
@@ -303,6 +315,7 @@ export async function createFiuuArPayment({
       currency,
       vcode,
       channel: fiuuChannel,
+      ...(linkedStudentId ? { CustID: buildFiuuCustId(linkedStudentId) } : {}),
     };
 
     const returnUrl = getFiuuReturnUrl();
@@ -311,6 +324,15 @@ export async function createFiuuArPayment({
     if (returnUrl) formFields.returnurl = returnUrl;
     if (notifyUrl) formFields.notifyurl = notifyUrl;
     if (callbackUrl) formFields.callbackurl = callbackUrl;
+
+    const autodebitMeta = buildAutodebitMetadataPatch({
+      eligible: offerAutodebit,
+      staff_accepted_by: created_by,
+      package_id: pkgId,
+      class_name: packageNameSnapshot
+        ? `${packageNameSnapshot} (installment package)`
+        : null,
+    });
 
     const metadata = attachPayLinkToMetadata(
       {
@@ -321,6 +343,7 @@ export async function createFiuuArPayment({
         tip_amount,
         discount_amount: discountValue,
         charge_amount: chargeAmt,
+        ...autodebitMeta,
       },
       {
         expiresOnYmd: pay_link_expires_on,
@@ -334,11 +357,12 @@ export async function createFiuuArPayment({
       if (send_email) throw err;
     }
 
-    await client.query(
+    const gwInsert = await client.query(
       `INSERT INTO gateway_paymentstbl (
          gateway, orderid, target_type, target_id, student_id, branch_id, invoice_id,
          amount, currency, description_sent, status, metadata, raw_request, created_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13)`,
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13)
+       RETURNING gateway_payment_id`,
       [
         'FIUU',
         orderid,
@@ -398,6 +422,13 @@ export async function createFiuuArPayment({
       pay_link_url: payLinkUrl,
       pay_link_token: metadata.pay_link_token,
       email: emailResult,
+      autodebit: {
+        eligible: arInstallmentEligible,
+        offered_on_pay_link: arInstallmentEligible,
+        package_id: pkgId,
+        class_name: packageNameSnapshot || null,
+        terms: getAutodebitTermsPayload(),
+      },
     };
   } catch (err) {
     try {

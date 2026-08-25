@@ -43,7 +43,7 @@ const Sidebar = ({ isOpen, onClose }) => {
   const [expandedNestedMenu, setExpandedNestedMenu] = useState(null);
 
   useEffect(() => {
-    if (userType !== 'Superadmin') {
+    if (userType !== 'Superadmin' && userType !== 'Admin') {
       setIsLessonPlanVerifier(false);
       return undefined;
     }
@@ -211,7 +211,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     },
     {
       name: 'Lesson Plans',
-      path: '/superadmin/lesson-plans',
+      path: '/superadmin/lesson-plans', // Overridden for Admin → /admin/lesson-plans
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path
@@ -222,7 +222,7 @@ const Sidebar = ({ isOpen, onClose }) => {
           />
         </svg>
       ),
-      roles: ['Superadmin'],
+      roles: ['Superadmin', 'Admin'],
       requiresLessonPlanVerifier: true,
     },
     {
@@ -536,6 +536,8 @@ const Sidebar = ({ isOpen, onClose }) => {
         itemPath = '/admin/room';
       } else if (item.name === 'Report' && basePath === '/admin') {
         itemPath = '/admin/report';
+      } else if (item.name === 'Lesson Plans' && (basePath === '/superadmin' || basePath === '/admin')) {
+        itemPath = `${basePath}/lesson-plans`;
       } else if (item.name === 'Settings' && basePath === '/admin') {
         itemPath = '/admin/settings';
       } else if (item.name === 'System Logs' && basePath === '/admin') {

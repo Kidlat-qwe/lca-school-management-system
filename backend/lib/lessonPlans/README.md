@@ -1,6 +1,6 @@
 # Lesson plans module
 
-Helpers for teacher lesson plan CRUD and Superadmin verification.
+Helpers for teacher lesson plan CRUD and Superadmin/Admin verification.
 
 ## Status flow
 
@@ -28,9 +28,16 @@ Hardcoded for all branches (never use per-branch address):
 
 ## Notifications
 
-- Teacher submit → system notification to configured lesson-plan verifiers (`navigation_key: lesson-plans`)
+- Teacher submit → system notification to matching verifiers (`navigation_key: lesson-plans`):
+  - Superadmin verifiers (all plans)
+  - Admin verifiers whose `branch_id` matches the plan's branch
+  - Fallback when none configured: all Superadmins
 - Verifier approve / request revision → system notification to the teacher
 
-## Superadmin review
+## Review
 
-Configured verifiers open **Lesson Plans** (`/superadmin/lesson-plans`) to review submitted plans. Settings only manages the verifier list.
+Configured verifiers open **Lesson Plans**:
+- Superadmin → `/superadmin/lesson-plans` (all branches)
+- Admin → `/admin/lesson-plans` (designated branch only)
+
+Settings only manages the verifier list (Superadmin + Admin candidates).

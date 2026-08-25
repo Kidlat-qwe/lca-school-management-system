@@ -21,6 +21,11 @@ export async function fetchFiuuConfig() {
   return res.data || { enabled: false };
 }
 
+export async function fetchFiuuAutodebitContext(invoiceId) {
+  const res = await apiRequest(`/payments/fiuu/autodebit-context/${encodeURIComponent(invoiceId)}`);
+  return res.data;
+}
+
 export async function createFiuuInvoicePayment({
   invoice_id,
   student_id,
