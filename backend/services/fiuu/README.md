@@ -9,7 +9,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 - **Primary UX:** email **Pay now** → `/payments/fiuu/go/:token` → FIUU. Bill stays unpaid until webhook.
 - **Installment auto-debit consent:** optional, class/profile-scoped.
   - Staff only sends/opens the pay link — **the client decides** on `/go`.
-  - Toggle defaults **OFF**; turning ON opens a Terms modal before enable.
+  - Toggle defaults **OFF**; turning ON opens the **LCA AutoPay** Terms modal before enable.
   - Consent + token bound to **one** installment profile / class.
 
 ## Setup

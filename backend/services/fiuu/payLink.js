@@ -303,7 +303,7 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
     const classLabel = escapeHtmlAttr(
       payload.autodebit_class_name || 'this class installment plan'
     );
-    const termsTitle = escapeHtmlAttr(terms?.title || 'Auto-debit terms');
+    const termsTitle = escapeHtmlAttr(terms?.title || 'LCA AutoPay Terms & Conditions');
     const termsBody = String(terms?.body || '')
       .split(/\n\n/)
       .map(
@@ -311,19 +311,29 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
           `<p style="margin:0 0 10px;font-size:13px;line-height:1.55;color:#475569;">${escapeHtmlAttr(p)}</p>`
       )
       .join('');
+    const whatHappensList = Array.isArray(terms?.what_happens) && terms.what_happens.length
+      ? terms.what_happens
+      : [
+          'Your card may be securely tokenized by FIUU after a successful first payment.',
+          'LCA may automatically charge that card for tuition under your plan until settled or you cancel AutoPay.',
+          'AutoPay is optional — leave it off to pay each invoice with a payment link instead.',
+        ];
+    const whatHappensHtml = whatHappensList
+      .map((item) => `<li>${escapeHtmlAttr(item)}</li>`)
+      .join('');
     const action = escapeHtmlAttr(consentActionUrl);
 
     const bodyHtml = `
               <div style="margin-top:16px;text-align:left;">
                 <p style="margin:0 0 14px;font-size:13px;color:#334155;line-height:1.5;">
-                  Optional auto-debit is available for <strong>${classLabel}</strong> only
-                  (not other classes). It stays <strong>off</strong> unless you turn it on.
+                  Optional <strong>LCA AutoPay</strong> is available for <strong>${classLabel}</strong>.
+                  It stays <strong>off</strong> unless you turn it on and accept the Terms.
                 </p>
 
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
                             background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;margin-bottom:14px;">
                   <div style="font-size:13px;color:#0f172a;line-height:1.4;padding-right:8px;">
-                    <div style="font-weight:700;margin-bottom:4px;">Enable auto-debit for this class</div>
+                    <div style="font-weight:700;margin-bottom:4px;">Enable LCA AutoPay</div>
                     <div style="font-size:12px;color:#64748b;">Default is off. Turning it on shows Terms first.</div>
                   </div>
                   <button type="button" id="autodebitToggle" role="switch" aria-checked="false"
@@ -336,7 +346,7 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                 </div>
 
                 <p id="autodebitStatus" style="margin:0 0 14px;font-size:12px;color:#64748b;">
-                  Auto-debit is <strong>off</strong>. You will pay this invoice only.
+                  LCA AutoPay is <strong>off</strong>. You will pay this invoice only.
                 </p>
 
                 <button type="button" id="continuePayBtn"
@@ -358,22 +368,19 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
               <div id="termsModal" style="display:none;position:fixed;inset:0;z-index:50;
                    background:rgba(15,23,42,0.55);align-items:center;justify-content:center;padding:16px;">
                 <div role="dialog" aria-modal="true" aria-labelledby="termsModalTitle"
-                  style="width:100%;max-width:420px;background:#fff;border-radius:12px;overflow:hidden;
+                  style="width:100%;max-width:440px;background:#fff;border-radius:12px;overflow:hidden;
                          box-shadow:0 20px 40px rgba(15,23,42,0.25);max-height:90vh;display:flex;flex-direction:column;">
                   <div style="padding:16px 18px 10px;border-bottom:1px solid #f1f5f9;">
                     <div id="termsModalTitle" style="font-size:15px;font-weight:700;color:#0f172a;">${termsTitle}</div>
                     <p style="margin:6px 0 0;font-size:12px;color:#64748b;line-height:1.4;">
-                      Please read carefully before enabling auto-debit.
+                      Please read carefully before enabling LCA AutoPay.
                     </p>
                   </div>
                   <div style="padding:14px 18px;overflow:auto;flex:1;">
                     <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
-                      <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:4px;">What happens if you turn this on</div>
+                      <div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:6px;">What happens if you turn this on</div>
                       <ul style="margin:0;padding-left:18px;font-size:12px;line-height:1.5;color:#334155;">
-                        <li>Your card may be saved securely (tokenized) by FIUU for future use.</li>
-                        <li>Future installment invoices for <strong>${classLabel}</strong> only may be charged to that card.</li>
-                        <li>Other classes are never included.</li>
-                        <li>You can leave this off and pay each invoice with a link instead.</li>
+                        ${whatHappensHtml}
                       </ul>
                     </div>
                     ${termsBody}
@@ -382,12 +389,12 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                     <button type="button" id="termsAgreeBtn"
                       style="width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
                              font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      I agree — enable auto-debit
+                      I agree — enable LCA AutoPay
                     </button>
                     <button type="button" id="termsCancelBtn"
                       style="width:100%;background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:8px;
                              font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      Cancel — keep auto-debit off
+                      Cancel — keep AutoPay off
                     </button>
                   </div>
                 </div>
@@ -412,11 +419,11 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                     toggle.style.background = enabled ? '#16a34a' : '#cbd5e1';
                     knob.style.left = enabled ? '25px' : '3px';
                     if (enabled && termsAccepted) {
-                      status.innerHTML = 'Auto-debit is <strong>on</strong> for this class only (Terms accepted).';
+                      status.innerHTML = 'LCA AutoPay is <strong>on</strong> (Terms accepted).';
                       status.style.color = '#166534';
-                      continueBtn.textContent = 'Continue with auto-debit';
+                      continueBtn.textContent = 'Continue with LCA AutoPay';
                     } else {
-                      status.innerHTML = 'Auto-debit is <strong>off</strong>. You will pay this invoice only.';
+                      status.innerHTML = 'LCA AutoPay is <strong>off</strong>. You will pay this invoice only.';
                       status.style.color = '#64748b';
                       continueBtn.textContent = 'Continue to payment';
                     }
@@ -436,7 +443,6 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                       paintToggle();
                       return;
                     }
-                    // Turning ON → Terms modal first (never auto-enable).
                     openModal();
                   });
 
@@ -476,9 +482,9 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
               </script>`;
 
     return buildBrandedPayPageHtml({
-      title: 'Auto-debit option',
+      title: 'LCA AutoPay option',
       heading: 'Before you pay',
-      message: 'Auto-debit stays off unless you turn it on and accept the Terms.',
+      message: 'LCA AutoPay stays off unless you turn it on and accept the Terms.',
       bodyHtml,
       statusTone: 'neutral',
     });

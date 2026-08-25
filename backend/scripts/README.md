@@ -60,6 +60,58 @@ node backend/scripts/createMalolosTogaMerchandise.js --development --apply
 node backend/scripts/createMalolosTogaMerchandise.js --development --apply --quantity=20 --price=1500
 ```
 
+### `removeGuiguintoUniformReplacementMerch.js`
+
+Removes the **Uniform Replacement** merchandise type card (and all its stock rows) for
+**one branch** (default **Guiguinto**; override with `--branch-name=Cavite`, etc.).
+Matches CMS names:
+
+- `Uniform Replacement` (UI card label)
+- `School Uniform_Replacement`
+- `PE Uniform_Replacement`
+- any row on that branch whose name contains both `uniform` and `replacement`
+
+Also clears FK blockers (package detail lines, promo links, release logs) and nulls
+`merchandiserequestlogtbl.merchandise_id` so request history is kept. Other branches
+and other types (e.g. plain `School Uniform`) are untouched.
+
+Default is **dry-run**; pass `--apply` to delete. Optional `--branch-id=` if multiple
+matching branches exist.
+
+```bash
+node scripts/removeGuiguintoUniformReplacementMerch.js --production
+node scripts/removeGuiguintoUniformReplacementMerch.js --production --apply
+node scripts/removeGuiguintoUniformReplacementMerch.js --production --branch-name=Cavite
+node scripts/removeGuiguintoUniformReplacementMerch.js --production --branch-name=Cavite --apply
+node scripts/removeGuiguintoUniformReplacementMerch.js --production --branch-id=5
+```
+
+### `removeBranchMerchandiseTypes.js`
+
+Generic remover for one or more merchandise **type cards** on one branch (exact
+`merchandise_name` match). Same FK cleanup as the Uniform Replacement script.
+
+Example — Malolos **Recognition Program** + **Toga Set**:
+
+```bash
+node scripts/removeBranchMerchandiseTypes.js --production --branch-name=Malolos --names="Recognition Program,Toga Set"
+node scripts/removeBranchMerchandiseTypes.js --production --branch-name=Malolos --names="Recognition Program,Toga Set" --apply
+```
+
+Required: `--branch-name=` and `--names="A,B"`. Optional: `--branch-id=`. Default dry-run.
+
+### `removeMalolosSpecificUniformStockRows.js`
+
+Deletes **specific stock SKU rows** on Malolos (not whole type cards) matching the
+ops screenshots: Female Blouse M/XL/S/XS, Female Skirt M, Male Polo M×2 / S,
+Male Short S / M — matched by gender+type+size+qty+price+remarks. Aborts if any
+fingerprint is missing or ambiguous.
+
+```bash
+node scripts/removeMalolosSpecificUniformStockRows.js --production
+node scripts/removeMalolosSpecificUniformStockRows.js --production --apply
+```
+
 ### `repairBriaToledanoFullPaymentThroughJuly.js`
 
 **Bria Renesmee M. Toledano** (`jennyrosewin@gmail.com`, student **356**, class **68** `VMP_Playgroup_SS_9:30AM`). Full payment INV-**350** auto-enrolled all **10** class phases, so Month Re-enrollment showed **October completed** and August still re-enrolled. Package ends **Phase 7 / July**.

@@ -14,8 +14,8 @@ Shared UI for finance payment logs and related flows.
 Staff does **not** configure auto-debit in CMS. For installment invoices / installment Package AR:
 
 1. Staff sends the payment link (or opens the pay page).
-2. On `/go`, auto-debit toggle defaults **OFF**.
-3. Turning the toggle **ON** opens a **Terms & Conditions modal** explaining what will happen; Agree enables it, Cancel keeps it off.
+2. On `/go`, **LCA AutoPay** toggle defaults **OFF**.
+3. Turning the toggle **ON** opens a **Terms modal** (LCA AutoPay Recurring Payment T&C summary) explaining authorization, 5th-of-month billing, failed payments, cancellation, and privacy; Agree enables it, Cancel keeps it off.
 4. Continue to payment → FIUU. If enabled, Card (CREDIT) is used so FIUU can tokenize.
 
 ## Public pay page

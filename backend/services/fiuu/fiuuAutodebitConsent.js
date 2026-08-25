@@ -5,20 +5,37 @@
 import { query } from '../../config/database.js';
 
 /** Bump when legal copy changes; old consents stay on their recorded version. */
-export const FIUU_AUTODEBIT_TERMS_VERSION = '2026-03-25-v2';
+export const FIUU_AUTODEBIT_TERMS_VERSION = '2026-08-25-lca-autopay-v1';
 
 export const FIUU_AUTODEBIT_TERMS_TITLE =
-  'Automatic card payment for installment tuition (this class only)';
+  'LCA AutoPay — Recurring Payment Terms & Conditions';
 
+/**
+ * Summarized from Little Champions Academy Inc. "LCA AutoPay" Recurring Payment T&C.
+ * Full policy remains with LCA; this copy is shown on the FIUU /go pay page modal.
+ */
 export const FIUU_AUTODEBIT_TERMS_BODY = [
-  'If you turn this on, you authorize Little Champion Academy (via FIUU) to save your card as a secure token and charge it for future installment invoices for this class enrollment plan only.',
-  'What happens next: after this payment succeeds, future installment invoices generated for this same class may be charged automatically to that linked card (when auto-debit is fully enabled).',
-  'Charges apply only to unpaid installment invoices for this one class / installment profile. Other classes or programs for the same student are not included.',
-  'Auto-debit is optional and stays OFF unless you turn it on and accept these Terms. You may leave it off and pay each invoice with a payment link instead.',
-  'If an invoice is already paid, any old payment link will show as already paid and will not charge again.',
-  'You or the school may disable auto-debit for this class at any time. Failed charges will fall back to a payment link notification.',
-  'Card details are tokenized by FIUU. The school stores a payment token and card display info (brand / last four digits), not the full card number.',
+  'Little Champions Academy Inc. (LCA) offers LCA AutoPay, a recurring payment facility that lets parents or guardians settle tuition through automatic charges to a nominated payment card processed by FIUU.',
+  'By turning on LCA AutoPay and proceeding with payment, you confirm that you have read, understood, and agree to these Terms & Conditions.',
+  '1. Authorization. You authorize LCA to securely tokenize your nominated payment card through FIUU after a successful initial payment, and to automatically charge that card for tuition under your selected payment plan until all tuition obligations are settled or you cancel AutoPay under these Terms. The first payment may require card-issuer authentication; later recurring charges are processed automatically via FIUU tokenization.',
+  '2. Billing schedule. Recurring tuition charges are processed on the 5th day of every month. You must keep your card active and valid, maintain sufficient funds or credit before each billing date, and tell LCA of any card updates before the next cycle.',
+  '3. Failed or declined payments. Payments may fail due to insufficient funds, expired/blocked/replaced cards, bank declines, or other authorization issues. You remain responsible for settling outstanding tuition by another approved method before the due date. LCA may reattempt a failed charge within twenty-four (24) hours, subject to FIUU and bank rules.',
+  '4. Late payment. Unpaid tuition remains subject to LCA’s Tuition Fee Obligation Policy, including the applicable 10% late payment penalty. A failed AutoPay charge does not remove your financial obligation.',
+  '5. Cancellation. You may stop AutoPay by submitting an AutoPay Cancellation Request or contacting your Learning Consultant. Requests must be received at least five (5) business days before the next scheduled billing date (Monday–Friday, excluding Philippine national holidays). Cancellation stops future automatic charges only — it does not cancel enrollment, end the tuition plan, waive unpaid fees, or change LCA’s Tuition Fee Obligation and Refund Policy. You must arrange another approved payment method if tuition remains due.',
+  '6. Other school policies. Enrollment, reservation, registration, tuition, miscellaneous fees, kits, uniforms, workbooks, and related charges continue under LCA’s official Tuition Fee Obligation and Refund Policy. AutoPay does not replace or override those policies.',
+  '7. Privacy. Card data is processed and tokenized by FIUU. LCA does not store complete card numbers, CVV, or other sensitive card authentication data. Personal information is used only for billing, AutoPay administration, payment reminders, success/failure notices, balance notices, support, and legal compliance, under the Data Privacy Act of 2012 (RA 10173) and LCA’s Privacy Policy.',
+  '8. Notifications. LCA may send AutoPay-related notices by registered mobile, email, or other official channels (reminders, success/failure notices, balance reminders, and AutoPay announcements).',
+  '9. Acknowledgment. By enabling LCA AutoPay you authorize tokenization and automatic charging under your plan, understand that cancelling AutoPay only stops future auto-charges (not enrollment or unpaid balances), accept responsibility for unpaid tuition including applicable late penalties, and consent to processing of personal information under LCA’s Privacy Policy and RA 10173.',
 ].join('\n\n');
+
+/** Short bullets for the /go modal “What happens” callout. */
+export const FIUU_AUTODEBIT_WHAT_HAPPENS = [
+  'Your card may be securely tokenized by FIUU after a successful first payment.',
+  'LCA may automatically charge that card for tuition under your plan (typically on the 5th of each month) until settled or you cancel AutoPay.',
+  'AutoPay is optional — leave it off to pay each invoice with a payment link instead.',
+  'Failed charges may be retried within 24 hours; you remain responsible for unpaid tuition and any applicable late penalties.',
+  'Cancelling AutoPay stops future auto-charges only; it does not cancel enrollment or waive balances.',
+];
 
 /**
  * Resolve installment + class context for an invoice.
@@ -315,5 +332,6 @@ export function getAutodebitTermsPayload() {
     terms_version: FIUU_AUTODEBIT_TERMS_VERSION,
     title: FIUU_AUTODEBIT_TERMS_TITLE,
     body: FIUU_AUTODEBIT_TERMS_BODY,
+    what_happens: FIUU_AUTODEBIT_WHAT_HAPPENS,
   };
 }

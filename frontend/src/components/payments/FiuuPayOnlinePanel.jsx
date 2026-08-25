@@ -194,7 +194,7 @@ export default function FiuuPayOnlinePanel({
             window.open(data.pay_link_url, '_blank', 'noopener,noreferrer');
             setPhase('waiting');
             appAlert(
-              'Payment page opened for the client. They can choose optional auto-debit there, then pay on FIUU.'
+              'Payment page opened for the client. They can choose optional LCA AutoPay there, then pay on FIUU.'
             );
           } else {
             submitFiuuPaymentForm(data.payUrl, data.formFields);
@@ -333,7 +333,7 @@ export default function FiuuPayOnlinePanel({
           Send a payment link to the guardian/client email. They open the link and pay on FIUU
           (GCash, Maya, or QR Ph). CMS stays unpaid until FIUU confirms payment.
           {isInstallmentLike
-            ? ' For installment plans, the client can optionally enable auto-debit for this class on the payment page.'
+            ? ' For installment plans, the client can optionally enable LCA AutoPay on the payment page (Terms apply).'
             : ''}
         </p>
       </div>
