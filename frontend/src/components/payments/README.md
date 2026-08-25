@@ -7,16 +7,25 @@ Shared UI for finance payment logs and related flows.
 | File | Purpose |
 |------|---------|
 | `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. |
-| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. |
+| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. Send link / Open pay page, tip/discount, advanced expiry/preview. |
 
-## Auto-debit (installment) — on FIUU Card page only
+## Auto-debit (installment) — client decides
 
-Staff does not configure auto-debit in CMS. For installment invoices / Package AR:
+Staff does **not** configure auto-debit in CMS. For installment invoices / installment Package AR:
 
-1. CMS sends pay link → `/go` briefly bridges to **FIUU Card** (`CREDIT` + `token_status=0`).
-2. On FIUU’s card form, the client may toggle **“I consent to my payment details being securely stored…”** (defaults off via `token_status=0`).
-3. If ON and pay succeeds, FIUU returns a token → CMS stores it and enables class-scoped consent.
-4. QRPH / non-card channels do not offer this toggle.
+1. Staff sends the payment link (or opens the pay page).
+2. On `/go`, auto-debit toggle defaults **OFF**.
+3. Turning the toggle **ON** opens a **Terms & Conditions modal** explaining what will happen; Agree enables it, Cancel keeps it off.
+4. Continue to payment → FIUU. If enabled, Card (CREDIT) is used so FIUU can tokenize.
+
+## Public pay page
+
+| Path | Purpose |
+|------|---------|
+| `GET /payments/fiuu/go/:token` | Client auto-debit choice (if installment) then FIUU |
+| `POST /payments/fiuu/go/:token/consent` | Client accept/decline |
+
+Paid links always show already paid.
 
 ## Related
 

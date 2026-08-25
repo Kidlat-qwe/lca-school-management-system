@@ -290,10 +290,7 @@ export async function createFiuuArPayment({
 
     const offerAutodebit = arInstallmentEligible;
 
-    // Installment Package AR: Card channel so FIUU save-card toggle is available.
-    const fiuuChannel = offerAutodebit
-      ? channel || 'CREDIT'
-      : channel || getFiuuDefaultChannel();
+    const fiuuChannel = channel || getFiuuDefaultChannel();
     const description = formatFiuuDescription({
       typeLabel: arType === 'Merchandise' ? 'AR Merchandise' : 'AR Package',
       studentName: prospect_student_name,
@@ -320,9 +317,6 @@ export async function createFiuuArPayment({
       channel: fiuuChannel,
       ...(linkedStudentId ? { CustID: buildFiuuCustId(linkedStudentId) } : {}),
     };
-    if (offerAutodebit) {
-      formFields.token_status = '0';
-    }
 
     const returnUrl = getFiuuReturnUrl();
     const notifyUrl = getFiuuNotifyUrl();
