@@ -389,7 +389,7 @@ const initializePackageMerchSelections = useCallback(
         // Check if this merchandise type requires sizing
         const requiresSizing = requiresSizingForMerchandise(typeName);
         
-        // For item-keyed types (Tool Kit, Moving Up Kit, …), per-student variant pick in UI
+        // For item-keyed types (Tool Kit, Moving Up Kit, â€¦), per-student variant pick in UI
         if (
           requiresPackageItemVariantSelection(typeName, merchandise, {
             requiresSizing,
@@ -1741,7 +1741,7 @@ const initializePackageMerchSelections = useCallback(
       setLoadingEnrolledStudents(true);
 
       if (isPending) {
-        // Pending students only have a downpayment profile — no active phase rows.
+        // Pending students only have a downpayment profile â€” no active phase rows.
         const res = await apiRequest(`/students/class/${classId}/pending/${student.user_id}`, { method: 'DELETE' });
         if (res?.success) {
           appAlert(`${studentName} has been removed from the class.`);
@@ -1792,7 +1792,7 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
-      // One row per student; combine phase enrollments (e.g. Phase 1–2, single status badge).
+      // One row per student; combine phase enrollments (e.g. Phase 1â€“2, single status badge).
       const uniqueEnrolledStudents = enrolledStudents.reduce((acc, student) => {
         const phaseRow = {
           classstudent_id: student.classstudent_id,
@@ -3114,7 +3114,7 @@ const initializePackageMerchSelections = useCallback(
       formatPackageTypeLabel(pkg),
       pkg?.level_tag ? String(pkg.level_tag).trim() : '',
     ].filter(Boolean);
-    return parts.join(' · ');
+    return parts.join(' Â· ');
   };
 
   const packageMatchesUpdatePlanBranchScope = (pkg, classBranchId, classLevelTag) => {
@@ -4232,7 +4232,7 @@ const initializePackageMerchSelections = useCallback(
     if (!includeStock) {
       return baseLabel;
     }
-    return `${baseLabel} • Available: ${item.quantity ?? 0}`;
+    return `${baseLabel} â€¢ Available: ${item.quantity ?? 0}`;
   };
 
   const fetchInstallmentScheduleSettings = async (branchId = null) => {
@@ -4297,7 +4297,7 @@ const initializePackageMerchSelections = useCallback(
       const selection = packageMerchSelections[typeName];
       if (selection && selection.length > 0) return false;
 
-      // Sized uniforms are chosen per student (Top/Bottom/Set) — accept those as selected
+      // Sized uniforms are chosen per student (Top/Bottom/Set) â€” accept those as selected
       if (requiresSizingForMerchandise(typeName) && selectedStudents.length > 0) {
         const itemsForType = getMerchandiseItemsByType(typeName);
         const everyStudentConfigured = selectedStudents.every((student) => {
@@ -4312,7 +4312,7 @@ const initializePackageMerchSelections = useCallback(
         return !everyStudentConfigured;
       }
 
-      // Item-keyed variants (Tool Kit, …) — per-student merchandise_id required
+      // Item-keyed variants (Tool Kit, â€¦) â€” per-student merchandise_id required
       if (requiresItemVariantForMerchandise(typeName) && selectedStudents.length > 0) {
         const everyStudentConfigured = selectedStudents.every((student) =>
           isStudentItemVariantSelectionComplete(
@@ -4485,7 +4485,7 @@ const initializePackageMerchSelections = useCallback(
       const hasSize = item.size != null && String(item.size).trim() !== '';
       const itemCategory = getUniformCategory(item);
 
-      // Sized merchandise (uniforms): one selection per Top/Bottom slot — replace prior size
+      // Sized merchandise (uniforms): one selection per Top/Bottom slot â€” replace prior size
       if (hasSize) {
         const filtered = currentSelections.filter((selection) => {
           if (selection.merchandise_id === item.merchandise_id) return false;
@@ -8140,7 +8140,7 @@ const resolvedBranchId =
             selectedClassForDetails?.class_name || selectedClassForDetails?.level_tag,
           ]
             .filter(Boolean)
-            .join(' — ')}
+            .join(' â€” ')}
         />
 
         {/* Attendance Modal */}
@@ -9973,7 +9973,7 @@ const resolvedBranchId =
                         <p className="mt-1 text-xs text-gray-500">
                           {editingClass
                             ? 'End date is automatically calculated from the class schedule and updates when start date or days change.'
-                            : `End date is automatically calculated based on curriculum (${selectedProgram.number_of_phase} phases × ${selectedProgram.number_of_session_per_phase} sessions) and selected days`}
+                            : `End date is automatically calculated based on curriculum (${selectedProgram.number_of_phase} phases Ã— ${selectedProgram.number_of_session_per_phase} sessions) and selected days`}
                         </p>
                       )}
                       {formErrors.end_date && (
@@ -10332,7 +10332,7 @@ const resolvedBranchId =
                   {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') && 'Add students to package'}
                 </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {selectedClassForEnrollment.program_name} • {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
+                  {selectedClassForEnrollment.program_name} â€¢ {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
                 </p>
               </div>
               {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') ? (
@@ -10626,7 +10626,7 @@ const resolvedBranchId =
                                       </button>
                                     </div>
                                   ) : isRemovedEnrollment ? (
-                                    <span className="text-sm text-gray-400">—</span>
+                                    <span className="text-sm text-gray-400">â€”</span>
                                   ) : isReserved ? (
                                     (() => {
                                       const resObj = enrollReservedStudents.find(
@@ -10648,7 +10648,7 @@ const resolvedBranchId =
                                           <span className="text-xs text-gray-500">Pay fee first</span>
                                         );
                                       }
-                                      return <span className="text-sm text-gray-400">—</span>;
+                                      return <span className="text-sm text-gray-400">â€”</span>;
                                     })()
                                   ) : reservationForStudent &&
                                     canUpgradeReservationRecord(reservationForStudent) ? (
@@ -10790,7 +10790,7 @@ const resolvedBranchId =
 
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receiptsâ€¦</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -11152,7 +11152,7 @@ const resolvedBranchId =
                                   <span className="block text-xs text-amber-700 mt-1">
                                     Paid via Acknowledgement Receipt:{' '}
                                     {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')}{' '}
-                                    — Amount: ?
+                                    â€” Amount: ?
                                     {getEnrollmentAckReceiptLineTotal(selectedAckReceipt).toLocaleString('en-US', {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
@@ -12102,7 +12102,7 @@ const resolvedBranchId =
                         slotsAvailable={getAvailableSlots()}
                         configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
                         showInvoiceNote={enrollStep === 'review'}
-                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' â€¢ ')}
                       />
                     }
                   />
@@ -12611,7 +12611,7 @@ const resolvedBranchId =
                         slotsAvailable={getAvailableSlots()}
                         configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
                         showInvoiceNote={enrollStep === 'review'}
-                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' â€¢ ')}
                       />
                     }
                   />
@@ -12628,7 +12628,7 @@ const resolvedBranchId =
                       selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag,
                     ]
                       .filter(Boolean)
-                      .join(' — ');
+                      .join(' â€” ');
                     const branchLabel =
                       selectedClassForEnrollment?.branch_name ||
                       selectedBranchName ||
@@ -12756,7 +12756,7 @@ const resolvedBranchId =
                               Enrolling into
                             </p>
                             <p className="text-sm font-semibold text-gray-900 leading-snug">
-                              {classLabel || '—'}
+                              {classLabel || 'â€”'}
                             </p>
                             {branchLabel ? (
                               <p className="text-xs text-gray-600 mt-1.5">{branchLabel}</p>
@@ -12848,7 +12848,7 @@ const resolvedBranchId =
                                                 ) : null}
                                               </div>
                                               <p className="text-xs text-gray-600 mt-0.5 truncate">
-                                                {[line.size, line.gender].filter(Boolean).join(' · ') ||
+                                                {[line.size, line.gender].filter(Boolean).join(' Â· ') ||
                                                   (line.swapped ? line.subtitle : 'Included')}
                                               </p>
                                             </div>
@@ -15081,7 +15081,7 @@ const resolvedBranchId =
                     </div>
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receiptsâ€¦</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -15276,7 +15276,7 @@ const resolvedBranchId =
                         ) : null}
                         {curriculumPhaseCount == null && phaseOptions.length <= 1 ? (
                           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                            Could not load curriculum phase count from this class or program. Phase list may be limited — open the class from the list after refresh, or confirm the program has a curriculum with phases.
+                            Could not load curriculum phase count from this class or program. Phase list may be limited â€” open the class from the list after refresh, or confirm the program has a curriculum with phases.
                           </div>
                         ) : null}
                         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-4 xl:gap-6 items-end">
@@ -15430,7 +15430,7 @@ const resolvedBranchId =
                       </button>
                     </div>
 
-                  {/* Available Promos — directly under Selected Package */}
+                  {/* Available Promos â€” directly under Selected Package */}
                   {upgradeSelectedPackage && (
                     <div className="space-y-3">
                       <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg">
@@ -16102,7 +16102,7 @@ const resolvedBranchId =
                     <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
                       <h4 className="font-semibold text-amber-900 mb-1">Acknowledgement receipt</h4>
                       <p className="text-sm text-amber-900">
-                        {upgradeSelectedAckReceipt.prospect_student_name || '—'} — Ref:{' '}
+                        {upgradeSelectedAckReceipt.prospect_student_name || 'â€”'} â€” Ref:{' '}
                         {upgradeSelectedAckReceipt.ack_receipt_number ||
                           `#${upgradeSelectedAckReceipt.ack_receipt_id}`}
                       </p>
