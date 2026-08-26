@@ -4,11 +4,18 @@ This directory contains SQL migration files for database schema changes.
 
 ## Migration Files
 
-### 141_create_lesson_plan_tables.sql
-- **Purpose**: Teacher lesson plans + Superadmin verifier config
+### 145_align_lesson_plan_fields_to_lca_form.sql
+- **Purpose**: Align `lessonplanstbl` with LCA Lesson Plan PDF fields
 - **Changes**:
-  - `lessonplanstbl` (draft / submitted / approved / revision_requested)
-  - `lesson_plan_verifierstbl` (Superadmin user_ids who may verify)
+  - Adds phase/session, goals, objectives 1–3, assessment method/criteria, materials, lesson overview (preliminaries / lesson proper / conclusion), class 1–3 adjustments
+  - Adds `reflection_amazing_moments`; Head Teacher review columns (verifier-only on approve)
+  - Best-effort copy from legacy columns (`learning_objectives`, `materials_resources`, etc.)
+
+### 141_create_lesson_plan_tables.sql
+- **Purpose**: Teacher lesson plans + Admin verifier config (Superadmins always verify)
+- **Changes**:
+  - `lessonplanstbl` (LCA form fields; draft / submitted / awaiting_reflection / revision_requested / completed)
+  - `lesson_plan_verifierstbl` (Admin user_ids selected in Settings who may verify their branch)
 
 ### 140_add_program_class_filters_to_announcementstbl.sql
 - **Purpose**: Optional program/class audience filters on announcements (email + Student/Teacher board)

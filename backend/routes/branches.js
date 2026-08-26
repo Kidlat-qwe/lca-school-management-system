@@ -101,6 +101,9 @@ router.post(
     body('branch_address').optional().isString().withMessage('Address must be a string'),
     body('branch_phone_number').optional().isString().withMessage('Phone number must be a string'),
     body('status').optional().isIn(['Active', 'Inactive']).withMessage('Status must be Active or Inactive'),
+    body('deped_region').optional().isString().withMessage('DepEd region must be a string'),
+    body('deped_division').optional().isString().withMessage('DepEd division must be a string'),
+    body('deped_district').optional().isString().withMessage('DepEd district must be a string'),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -122,14 +125,18 @@ router.post(
         state_province_region,
         locale,
         currency,
+        deped_region,
+        deped_division,
+        deped_district,
       } = req.body;
 
       const result = await query(
         `INSERT INTO branchestbl (
           branch_name, branch_email, branch_nickname, branch_address, branch_phone_number, status,
           city, postal_code, business_registration_number, registered_tax_id,
-          establishment_date, country, state_province_region, locale, currency
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          establishment_date, country, state_province_region, locale, currency,
+          deped_region, deped_division, deped_district
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING *`,
         [
           branch_name,
@@ -147,6 +154,9 @@ router.post(
           state_province_region || null,
           locale || null,
           currency || 'PHP',
+          deped_region || null,
+          deped_division || null,
+          deped_district || null,
         ]
       );
 
@@ -203,6 +213,9 @@ router.put(
         state_province_region,
         locale,
         currency,
+        deped_region,
+        deped_division,
+        deped_district,
       } = req.body;
 
       // Check if branch exists
@@ -235,6 +248,9 @@ router.put(
         state_province_region,
         locale,
         currency,
+        deped_region,
+        deped_division,
+        deped_district,
       };
 
       Object.entries(fields).forEach(([key, value]) => {
@@ -242,9 +258,24 @@ router.put(
           paramCount++;
           updates.push(`${key} = $${paramCount}`);
           // Convert empty strings to null for optional fields (except branch_name which is required)
-          const optionalFields = ['branch_email', 'branch_nickname', 'branch_address', 'branch_phone_number', 'city', 'postal_code', 
-                                  'business_registration_number', 'registered_tax_id', 'establishment_date', 
-                                  'country', 'state_province_region', 'locale', 'currency'];
+          const optionalFields = [
+            'branch_email',
+            'branch_nickname',
+            'branch_address',
+            'branch_phone_number',
+            'city',
+            'postal_code',
+            'business_registration_number',
+            'registered_tax_id',
+            'establishment_date',
+            'country',
+            'state_province_region',
+            'locale',
+            'currency',
+            'deped_region',
+            'deped_division',
+            'deped_district',
+          ];
           if (optionalFields.includes(key) && value === '') {
             params.push(null);
           } else {

@@ -20,12 +20,15 @@ Single unified dashboard for teachers (`TeacherDashboardView`). No separate dail
 
 UI styling matches the QA `TeacherLessonPlans.jsx` sheet (Poppins, header grid, peach primary buttons, submissions sidebar).
 
-- Fixed school header meta (Region III, Bulacan, 5th District, School ID 411093)
+Form fields follow the **LCA Lesson Plan PDF**: phase/session, early learning goals, objectives 1–3, assessment method/criteria, materials, general lesson overview (preliminaries / lesson proper / conclusion), class-specific adjustments (Class 1–3). Grade level + subject remain for program browsing.
+
+- Branch-based DepEd letterhead (Region / Schools Division Office from branch; DepEd seal `/deped-seal.png`); School ID always `411093`
+- After approval, teachers see read-only **Head Teacher's Review and Feedback** (Overall Assessment, Specific Feedback, Next Steps)
 - Save draft / submit for verification (Teacher's Reflection locked at submit)
-- After verifier approves → status **`awaiting_reflection`** (UI: Awaiting Reflection); reflections unlock **only on the lesson date** (Manila); saving marks **`completed`** (no re-approval)
-- When status is **`revision_requested`**, structured revision notes appear **under each flagged field** (highlight + note); general/legacy notes stay above the action buttons
+- Reflections: Successes, Amazing Moments, Challenges, Improvements — unlock **only on the lesson date** after verifier approve (`awaiting_reflection` → `completed`)
+- When status is **`revision_requested`**, structured revision notes appear **under each flagged field**
 - Prepared by = logged-in teacher
-- Superadmin → Settings → Lesson Plans configures Superadmin + Admin verifiers; review is on `/superadmin/lesson-plans` or `/admin/lesson-plans` (Admin = designated branch only)
+- Superadmin → Settings → Lesson Plans selects **Admin** verifiers only; all Superadmins can already review
 
 **API:** `/api/sms/lesson-plans`
 

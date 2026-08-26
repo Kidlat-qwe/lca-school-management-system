@@ -675,6 +675,32 @@ export const processDueInstallmentInvoices = async () => {
           );
         }
 
+        // LCA AutoPay MIT: charge saved card when consent is active for this profile.
+        try {
+          const { tryAutopayInstallmentInvoice } = await import(
+            '../services/fiuu/fiuuRecurringCharge.js'
+          );
+          const mitResult = await tryAutopayInstallmentInvoice({
+            invoiceId: invoiceData.invoice_id,
+            profileId: installmentInvoice.installmentinvoiceprofiles_id,
+            studentId: installmentInvoice.student_id,
+          });
+          if (mitResult?.attempted) {
+            console.log(
+              `[Generator] AutoPay MIT invoice_id=${invoiceData.invoice_id} accepted=${Boolean(mitResult.accepted)} orderid=${mitResult.orderid || 'n/a'} reason=${mitResult.reason || 'ok'}`
+            );
+          } else if (mitResult?.reason && mitResult.reason !== 'mit_disabled' && mitResult.reason !== 'no_active_consent') {
+            console.log(
+              `[Generator] AutoPay MIT skipped invoice_id=${invoiceData.invoice_id}: ${mitResult.reason}`
+            );
+          }
+        } catch (mitErr) {
+          console.error(
+            `[Generator] AutoPay MIT failed for invoice_id=${invoiceData.invoice_id}:`,
+            mitErr?.message || mitErr
+          );
+        }
+
         processed.push(invoiceData);
       } catch (error) {
         console.error(`Error processing installment invoice ${installmentInvoice.installmentinvoicedtl_id}:`, error);
@@ -819,6 +845,22 @@ export async function tryGenerateCatchUpInstallmentAfterFirstPhasePayment({
     },
     { enrollmentInvoiceIssueYmd: payYmd }
   );
+
+  try {
+    const { tryAutopayInstallmentInvoice } = await import(
+      '../services/fiuu/fiuuRecurringCharge.js'
+    );
+    await tryAutopayInstallmentInvoice({
+      invoiceId: generated.invoice_id,
+      profileId: profile.installmentinvoiceprofiles_id,
+      studentId: profile.student_id,
+    });
+  } catch (mitErr) {
+    console.error(
+      `[CatchUp] AutoPay MIT failed for invoice_id=${generated.invoice_id}:`,
+      mitErr?.message || mitErr
+    );
+  }
 
   return { generated: true, invoice_id: generated.invoice_id };
 };

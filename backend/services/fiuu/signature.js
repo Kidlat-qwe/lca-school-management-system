@@ -28,11 +28,15 @@ export function buildPaymentVcode({ amount, orderid, currency = 'PHP' }) {
 
 /**
  * Verify FIUU webhook/return skey.
+ * HPP IPN uses Secret Key; Recurring API v7 sample documents Verify Key for callback skey.
+ * Accept either so MIT and HPP share one handler.
  * @see https://docs.fiuu.dev/reference/security-data-integrity
+ * @see Fiuu Recurring API v7.1.4
  */
 export function verifyPaymentSkey(payload) {
   const secretKey = getFiuuSecretKey();
-  if (!secretKey) return false;
+  const verifyKey = getFiuuVerifyKey();
+  if (!secretKey && !verifyKey) return false;
 
   const tranID = String(payload.tranID ?? payload.txnID ?? '').trim();
   const orderid = String(payload.orderid ?? '').trim();
@@ -47,8 +51,36 @@ export function verifyPaymentSkey(payload) {
   if (!tranID || !orderid || !skey) return false;
 
   const key0 = md5Hex(`${tranID}${orderid}${status}${merchant}${amount}${currency}`);
-  const key1 = md5Hex(`${paydate}${merchant}${key0}${appcode}${secretKey}`);
-  return skey === key1;
+  if (secretKey) {
+    const key1Secret = md5Hex(`${paydate}${merchant}${key0}${appcode}${secretKey}`);
+    if (skey === key1Secret) return true;
+  }
+  if (verifyKey) {
+    const key1Verify = md5Hex(`${paydate}${merchant}${key0}${appcode}${verifyKey}`);
+    if (skey === key1Verify) return true;
+  }
+  return false;
+}
+
+/**
+ * Recurring MIT request checksum (RecordType T / E / K).
+ * md5(RecordType + MerchantID + SubMerchant + Token + OrderID + Currency + Amount + Verifykey)
+ */
+export function buildRecurringChecksum({
+  recordType = 'T',
+  merchantId,
+  subMerchant = '',
+  token,
+  orderid,
+  currency,
+  amount,
+}) {
+  const verifyKey = getFiuuVerifyKey();
+  const mid = String(merchantId ?? getFiuuMerchantId()).trim();
+  const amt = formatFiuuAmount(amount);
+  return md5Hex(
+    `${String(recordType).trim()}${mid}${String(subMerchant ?? '')}${String(token).trim()}${String(orderid).trim()}${String(currency).trim()}${amt}${verifyKey}`
+  );
 }
 
 /** FIUU success status code is typically "00". */
@@ -57,7 +89,14 @@ export function isFiuuPaymentSuccess(status) {
   return s === '00' || s.toLowerCase() === 'success' || s.toLowerCase() === 'captured';
 }
 
+/** Pending authorization (async MIT may return 22 before final result). */
+export function isFiuuPaymentPending(status) {
+  const s = String(status ?? '').trim();
+  return s === '22' || s.toLowerCase() === 'pending';
+}
+
 export function isFiuuPaymentFailed(status) {
   const s = String(status ?? '').trim();
-  return s === '11' || s === '22' || s.toLowerCase() === 'failed';
+  // 22 = pending (not failure) — keep gateway row pending for final notify
+  return s === '11' || s.toLowerCase() === 'failed';
 }

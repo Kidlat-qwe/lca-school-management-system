@@ -25,6 +25,9 @@ const Branch = () => {
     state_province_region: '',
     locale: '',
     currency: 'PHP',
+    deped_region: '',
+    deped_division: '',
+    deped_district: '',
   });
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -154,6 +157,9 @@ const Branch = () => {
       state_province_region: '',
       locale: '',
       currency: 'PHP',
+      deped_region: '',
+      deped_division: '',
+      deped_district: '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -179,6 +185,9 @@ const Branch = () => {
       state_province_region: branch.state_province_region || '',
       locale: branch.locale || '',
       currency: branch.currency || 'PHP',
+      deped_region: branch.deped_region || '',
+      deped_division: branch.deped_division || '',
+      deped_district: branch.deped_district || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -654,6 +663,58 @@ const Branch = () => {
                           className="input-field"
                         />
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* DepEd / Lesson Plan header */}
+                <div>
+                  <h3 className="mb-1 text-lg font-semibold text-gray-900">Lesson Plan Header (DepEd)</h3>
+                  <p className="mb-4 text-sm text-gray-500">
+                    Shown on lesson plans for this branch. School ID is always 411093 for all branches.
+                  </p>
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <label htmlFor="deped_region" className="label-field">
+                        Region
+                      </label>
+                      <input
+                        type="text"
+                        id="deped_region"
+                        name="deped_region"
+                        value={formData.deped_region}
+                        onChange={handleInputChange}
+                        placeholder="e.g. Region III"
+                        className="input-field"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="deped_division" className="label-field">
+                        Division
+                      </label>
+                      <input
+                        type="text"
+                        id="deped_division"
+                        name="deped_division"
+                        value={formData.deped_division}
+                        onChange={handleInputChange}
+                        placeholder="e.g. Bulacan"
+                        className="input-field"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="deped_district" className="label-field">
+                        District
+                      </label>
+                      <input
+                        type="text"
+                        id="deped_district"
+                        name="deped_district"
+                        value={formData.deped_district}
+                        onChange={handleInputChange}
+                        placeholder="e.g. City of Malolos"
+                        className="input-field"
+                      />
                     </div>
                   </div>
                 </div>

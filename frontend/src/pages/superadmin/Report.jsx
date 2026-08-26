@@ -120,6 +120,7 @@ const Report = () => {
   const [exportStatusScope, setExportStatusScope] = useState('all');
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState('');
+  const fetchSeqRef = useRef(0);
 
   const config = TAB_CONFIG[tab];
 
@@ -148,9 +149,14 @@ const Report = () => {
     setLoading(true);
   }, [tab]);
 
-  const fetchRows = async (page = 1) => {
+  const fetchRows = async (page = 1, { showLoading = false } = {}) => {
+    const seq = ++fetchSeqRef.current;
+    const shouldShowLoading = showLoading || !hasLoadedOnceRef.current;
     try {
-      if (!hasLoadedOnceRef.current) setLoading(true);
+      if (shouldShowLoading) {
+        setLoading(true);
+        setRows([]);
+      }
       const params = new URLSearchParams({
         status: filterStatus,
         page: String(page),
@@ -168,6 +174,7 @@ const Report = () => {
         params.set('summary_month', filterSummaryMonth);
       }
       const response = await apiRequest(`${config.endpoint}?${params.toString()}`);
+      if (seq !== fetchSeqRef.current) return;
       setRows(response.data || []);
       setReportMeta(tab === TAB_STUDENT_STATUS ? response.meta || null : null);
       if (response.pagination) {
@@ -181,18 +188,20 @@ const Report = () => {
       }
       setError('');
     } catch (err) {
+      if (seq !== fetchSeqRef.current) return;
       setError(err.message || 'Failed to load report.');
       setRows([]);
     } finally {
-      if (!hasLoadedOnceRef.current) {
+      if (seq === fetchSeqRef.current && shouldShowLoading) {
         setLoading(false);
         hasLoadedOnceRef.current = true;
       }
     }
   };
 
+  // Filter changes (Status, search, month, etc.) always reload the table with a spinner.
   useEffect(() => {
-    fetchRows(1);
+    fetchRows(1, { showLoading: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     tab,
@@ -396,7 +405,11 @@ const Report = () => {
           <label className="block text-xs font-medium text-gray-600 mb-1">Status</label>
           <select
             value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value)}
+            onChange={(e) => {
+              setFilterStatus(e.target.value);
+              setPagination((p) => ({ ...p, page: 1 }));
+              hasLoadedOnceRef.current = false;
+            }}
             className="input-field text-sm min-w-[200px]"
           >
             {config.statusOptions.map((opt) => (
@@ -549,7 +562,7 @@ const Report = () => {
               totalItems={pagination.total}
               itemsPerPage={pagination.limit}
               itemLabel={config.itemLabel}
-              onPageChange={fetchRows}
+              onPageChange={(nextPage) => fetchRows(nextPage, { showLoading: false })}
             />
           )}
         </div>

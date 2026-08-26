@@ -364,3 +364,17 @@ function sanitizeTokenRow(row) {
 export async function getActiveFiuuPaymentTokenSecretForStudent(studentId) {
   return getActiveFiuuPaymentTokenForStudent(studentId);
 }
+
+/** Full row including token by primary key — backend MIT only. */
+export async function getFiuuPaymentTokenSecretById(tokenId) {
+  const id = parseInt(tokenId, 10);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const result = await query(
+    `SELECT *
+     FROM fiuu_payment_tokenstbl
+     WHERE fiuu_payment_token_id = $1 AND status = 'active'
+     LIMIT 1`,
+    [id]
+  );
+  return result.rows[0] || null;
+}

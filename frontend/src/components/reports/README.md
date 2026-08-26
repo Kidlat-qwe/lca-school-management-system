@@ -10,6 +10,8 @@ Displays a concise status legend for report tabs:
 
 The legend is tab-aware and keeps label meanings short for end users.
 
+On Superadmin/Admin **Report** pages, changing the **Status** dropdown (any tab) clears the table, shows the loading spinner, and refetches page 1 so filtered results replace the previous rows.
+
 ## Excel export (Student Status)
 
 On **Report → Student Status**, use **Export to Excel** to download rows for the selected billing month.

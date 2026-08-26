@@ -15,7 +15,14 @@ import {
   formatFiuuDescription,
   formatAmount,
 } from './orderId.js';
-import { buildPaymentVcode, formatFiuuAmount, isFiuuPaymentFailed, isFiuuPaymentSuccess, verifyPaymentSkey } from './signature.js';
+import {
+  buildPaymentVcode,
+  formatFiuuAmount,
+  isFiuuPaymentFailed,
+  isFiuuPaymentPending,
+  isFiuuPaymentSuccess,
+  verifyPaymentSkey,
+} from './signature.js';
 import {
   findGatewayPaymentByOrderId,
   insertGatewayPayment,
@@ -713,6 +720,21 @@ export async function handleFiuuWebhookPayload(payload, { source = 'notify' } = 
       raw_webhook: payload,
     });
     return { ok: true, message: 'Payment failed recorded', orderid, ipnEcho: formatIpnAckBody(payload) };
+  }
+
+  if (isFiuuPaymentPending(status)) {
+    await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {
+      status: 'pending',
+      fiuu_tran_id: payload.tranID || null,
+      fiuu_channel: payload.channel || gatewayRow.fiuu_channel || null,
+      raw_webhook: payload,
+    });
+    return {
+      ok: true,
+      message: 'Payment pending recorded',
+      orderid,
+      ipnEcho: formatIpnAckBody(payload),
+    };
   }
 
   await updateGatewayPaymentStatus(gatewayRow.gateway_payment_id, {

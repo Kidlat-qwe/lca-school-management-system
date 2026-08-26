@@ -8,18 +8,76 @@ const createEmptyForm = () => ({
   lesson_date: new Date().toISOString().slice(0, 10),
   grade_level: '',
   subject: '',
+  phase: '',
+  session: '',
   topic: '',
-  learning_objectives: '',
-  materials_resources: '',
-  opening_routine: '',
-  review: '',
-  lesson_presentation: '',
-  guided_practice: '',
-  assessment: '',
-  closing_wrapping_up: '',
+  early_learning_goals: '',
+  objective_1: '',
+  objective_2: '',
+  objective_3: '',
+  assessment_method: '',
+  assessment_criteria: '',
+  materials_needed: '',
+  preliminaries_time: '',
+  preliminaries_activity: '',
+  lesson_proper_time: '',
+  lesson_proper_activity: '',
+  conclusion_time: '',
+  conclusion_activity: '',
+  class1_name: '',
+  class1_age_group: '',
+  class1_considerations: '',
+  class1_adjustments: '',
+  class2_name: '',
+  class2_age_group: '',
+  class2_considerations: '',
+  class2_adjustments: '',
+  class3_name: '',
+  class3_age_group: '',
+  class3_considerations: '',
+  class3_adjustments: '',
   reflection_went_well: '',
+  reflection_amazing_moments: '',
   reflection_challenges: '',
   reflection_improvements: '',
+});
+
+const populateFormFromPlan = (plan) => ({
+  lesson_date: plan.lesson_date ? String(plan.lesson_date).slice(0, 10) : '',
+  grade_level: plan.grade_level || '',
+  subject: plan.subject || '',
+  phase: plan.phase || '',
+  session: plan.session || '',
+  topic: plan.topic || '',
+  early_learning_goals: plan.early_learning_goals || '',
+  objective_1: plan.objective_1 || '',
+  objective_2: plan.objective_2 || '',
+  objective_3: plan.objective_3 || '',
+  assessment_method: plan.assessment_method || '',
+  assessment_criteria: plan.assessment_criteria || '',
+  materials_needed: plan.materials_needed || '',
+  preliminaries_time: plan.preliminaries_time || '',
+  preliminaries_activity: plan.preliminaries_activity || '',
+  lesson_proper_time: plan.lesson_proper_time || '',
+  lesson_proper_activity: plan.lesson_proper_activity || '',
+  conclusion_time: plan.conclusion_time || '',
+  conclusion_activity: plan.conclusion_activity || '',
+  class1_name: plan.class1_name || '',
+  class1_age_group: plan.class1_age_group || '',
+  class1_considerations: plan.class1_considerations || '',
+  class1_adjustments: plan.class1_adjustments || '',
+  class2_name: plan.class2_name || '',
+  class2_age_group: plan.class2_age_group || '',
+  class2_considerations: plan.class2_considerations || '',
+  class2_adjustments: plan.class2_adjustments || '',
+  class3_name: plan.class3_name || '',
+  class3_age_group: plan.class3_age_group || '',
+  class3_considerations: plan.class3_considerations || '',
+  class3_adjustments: plan.class3_adjustments || '',
+  reflection_went_well: plan.reflection_went_well || '',
+  reflection_amazing_moments: plan.reflection_amazing_moments || '',
+  reflection_challenges: plan.reflection_challenges || '',
+  reflection_improvements: plan.reflection_improvements || '',
 });
 
 const formatStatus = (status) => {
@@ -255,23 +313,7 @@ export default function TeacherLessonPlans() {
 
   const handleSelectPlan = (plan) => {
     setSelectedPlan(plan);
-    setFormData({
-      lesson_date: plan.lesson_date ? String(plan.lesson_date).slice(0, 10) : '',
-      grade_level: plan.grade_level || '',
-      subject: plan.subject || '',
-      topic: plan.topic || '',
-      learning_objectives: plan.learning_objectives || '',
-      materials_resources: plan.materials_resources || '',
-      opening_routine: plan.opening_routine || '',
-      review: plan.review || '',
-      lesson_presentation: plan.lesson_presentation || '',
-      guided_practice: plan.guided_practice || '',
-      assessment: plan.assessment || '',
-      closing_wrapping_up: plan.closing_wrapping_up || '',
-      reflection_went_well: plan.reflection_went_well || '',
-      reflection_challenges: plan.reflection_challenges || '',
-      reflection_improvements: plan.reflection_improvements || '',
-    });
+    setFormData(populateFormFromPlan(plan));
     setError('');
     flashLessonPlanSheet();
   };
@@ -285,6 +327,7 @@ export default function TeacherLessonPlans() {
       const payload = {
         ...formData,
         reflection_went_well: '',
+        reflection_amazing_moments: '',
         reflection_challenges: '',
         reflection_improvements: '',
       };
@@ -337,6 +380,7 @@ export default function TeacherLessonPlans() {
         method: 'PUT',
         body: JSON.stringify({
           reflection_went_well: formData.reflection_went_well,
+          reflection_amazing_moments: formData.reflection_amazing_moments,
           reflection_challenges: formData.reflection_challenges,
           reflection_improvements: formData.reflection_improvements,
         }),
@@ -345,6 +389,7 @@ export default function TeacherLessonPlans() {
       setFormData((prev) => ({
         ...prev,
         reflection_went_well: res.data.reflection_went_well || '',
+        reflection_amazing_moments: res.data.reflection_amazing_moments || '',
         reflection_challenges: res.data.reflection_challenges || '',
         reflection_improvements: res.data.reflection_improvements || '',
       }));
@@ -407,11 +452,7 @@ export default function TeacherLessonPlans() {
               : null),
           }}
         >
-          <LessonPlanHeader />
-
-          <h2 className="mb-[22px] mt-[18px] text-center text-[20px] font-semibold text-[#111111]">
-            Lesson Plan
-          </h2>
+          <LessonPlanHeader branch={meta?.branch || null} />
 
           {/* FormGrid */}
           <div className="grid grid-cols-1 gap-x-[34px] gap-y-[14px] md:grid-cols-2">
@@ -472,6 +513,30 @@ export default function TeacherLessonPlans() {
               </select>
             </label>
 
+            <label className={fieldLabelCls}>
+              <span className="shrink-0">Phase</span>
+              <input
+                disabled={!canEdit}
+                value={formData.phase}
+                onChange={(e) => handleInputChange('phase', e.target.value)}
+                placeholder="Enter phase"
+                className={fieldControlCls}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="phase" />
+
+            <label className={fieldLabelCls}>
+              <span className="shrink-0">Session</span>
+              <input
+                disabled={!canEdit}
+                value={formData.session}
+                onChange={(e) => handleInputChange('session', e.target.value)}
+                placeholder="Enter session"
+                className={fieldControlCls}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="session" />
+
             <label className={`${fieldLabelCls} col-span-full`}>
               <span className="shrink-0">Topic</span>
               <input
@@ -484,53 +549,41 @@ export default function TeacherLessonPlans() {
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="topic" />
 
+            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+              1. Early Learning Goals
+            </h3>
+
             <label className={blockLabelCls}>
-              Learning Objectives
+              Early Learning Goals
               <textarea
                 disabled={!canEdit}
                 rows={4}
-                value={formData.learning_objectives}
-                onChange={(e) => handleInputChange('learning_objectives', e.target.value)}
-                placeholder="List learning objectives"
+                value={formData.early_learning_goals}
+                onChange={(e) => handleInputChange('early_learning_goals', e.target.value)}
+                placeholder="List early learning goals"
                 className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
               />
             </label>
-            <FieldRevisionNotes plan={selectedPlan} fieldKey="learning_objectives" />
-
-            <label className={blockLabelCls}>
-              Materials/Resources
-              <textarea
-                disabled={!canEdit}
-                rows={3}
-                value={formData.materials_resources}
-                onChange={(e) => handleInputChange('materials_resources', e.target.value)}
-                placeholder="List materials and resources"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
-              />
-            </label>
-            <FieldRevisionNotes plan={selectedPlan} fieldKey="materials_resources" />
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="early_learning_goals" />
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
-              Lesson Flow
+              2. Learning Objectives
             </h3>
 
             {[
-              ['opening_routine', 'I. Opening Routine', 3],
-              ['review', 'II. Review', 3],
-              ['lesson_presentation', 'III. Lesson Presentation', 4],
-              ['guided_practice', 'IV. Guided Practice', 4],
-              ['assessment', 'VI. Assessment', 3],
-              ['closing_wrapping_up', 'VII. Closing/Wrapping Up', 3],
-            ].map(([field, title, rows]) => (
+              ['objective_1', 'Objective 1'],
+              ['objective_2', 'Objective 2'],
+              ['objective_3', 'Objective 3'],
+            ].map(([field, title]) => (
               <Fragment key={field}>
-                <label className={blockLabelCls}>
-                  {title}
-                  <textarea
+                <label className={`${fieldLabelCls} col-span-full`}>
+                  <span className="shrink-0">{title}</span>
+                  <input
                     disabled={!canEdit}
-                    rows={rows}
                     value={formData[field]}
                     onChange={(e) => handleInputChange(field, e.target.value)}
-                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                    placeholder={title}
+                    className={fieldControlCls}
                   />
                 </label>
                 <FieldRevisionNotes plan={selectedPlan} fieldKey={field} />
@@ -538,7 +591,153 @@ export default function TeacherLessonPlans() {
             ))}
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
-              Teacher&apos;s Reflection
+              3. Assessment
+            </h3>
+
+            <label className={blockLabelCls}>
+              Assessment Method
+              <textarea
+                disabled={!canEdit}
+                rows={3}
+                value={formData.assessment_method}
+                onChange={(e) => handleInputChange('assessment_method', e.target.value)}
+                placeholder="Describe assessment method"
+                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_method" />
+
+            <label className={blockLabelCls}>
+              Assessment Criteria
+              <textarea
+                disabled={!canEdit}
+                rows={3}
+                value={formData.assessment_criteria}
+                onChange={(e) => handleInputChange('assessment_criteria', e.target.value)}
+                placeholder="Describe assessment criteria"
+                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_criteria" />
+
+            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+              4. Materials Needed To Prepare
+            </h3>
+
+            <label className={blockLabelCls}>
+              Materials Needed
+              <textarea
+                disabled={!canEdit}
+                rows={3}
+                value={formData.materials_needed}
+                onChange={(e) => handleInputChange('materials_needed', e.target.value)}
+                placeholder="List materials needed to prepare"
+                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="materials_needed" />
+
+            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+              5. General Lesson Overview
+            </h3>
+
+            {[
+              ['preliminaries', 'Preliminaries'],
+              ['lesson_proper', 'Lesson Proper'],
+              ['conclusion', 'Conclusion'],
+            ].map(([prefix, title]) => (
+              <Fragment key={prefix}>
+                <p className="col-span-full mb-0 mt-1 text-[15px] font-semibold text-[#111111]">
+                  {title}
+                </p>
+                <label className={fieldLabelCls}>
+                  <span className="shrink-0">Time</span>
+                  <input
+                    disabled={!canEdit}
+                    value={formData[`${prefix}_time`]}
+                    onChange={(e) => handleInputChange(`${prefix}_time`, e.target.value)}
+                    placeholder="e.g. 10 mins"
+                    className={fieldControlCls}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`${prefix}_time`} />
+                <label className={blockLabelCls}>
+                  Activity &amp; Goal
+                  <textarea
+                    disabled={!canEdit}
+                    rows={3}
+                    value={formData[`${prefix}_activity`]}
+                    onChange={(e) => handleInputChange(`${prefix}_activity`, e.target.value)}
+                    placeholder={`${title} activity and goal`}
+                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`${prefix}_activity`} />
+              </Fragment>
+            ))}
+
+            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+              6. Class-Specific Adjustments
+            </h3>
+
+            {[1, 2, 3].map((n) => (
+              <Fragment key={`class${n}`}>
+                <p className="col-span-full mb-0 mt-1 text-[15px] font-semibold text-[#111111]">
+                  Class {n}
+                </p>
+                <label className={fieldLabelCls}>
+                  <span className="shrink-0">Name</span>
+                  <input
+                    disabled={!canEdit}
+                    value={formData[`class${n}_name`]}
+                    onChange={(e) => handleInputChange(`class${n}_name`, e.target.value)}
+                    placeholder={`Class ${n} name`}
+                    className={fieldControlCls}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_name`} />
+                <label className={fieldLabelCls}>
+                  <span className="shrink-0">Age Group</span>
+                  <input
+                    disabled={!canEdit}
+                    value={formData[`class${n}_age_group`]}
+                    onChange={(e) => handleInputChange(`class${n}_age_group`, e.target.value)}
+                    placeholder="Age group"
+                    className={fieldControlCls}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_age_group`} />
+                <label className={blockLabelCls}>
+                  Considerations
+                  <textarea
+                    disabled={!canEdit}
+                    rows={2}
+                    value={formData[`class${n}_considerations`]}
+                    onChange={(e) =>
+                      handleInputChange(`class${n}_considerations`, e.target.value)
+                    }
+                    placeholder="Class considerations"
+                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_considerations`} />
+                <label className={blockLabelCls}>
+                  Adjustments
+                  <textarea
+                    disabled={!canEdit}
+                    rows={2}
+                    value={formData[`class${n}_adjustments`]}
+                    onChange={(e) => handleInputChange(`class${n}_adjustments`, e.target.value)}
+                    placeholder="Class adjustments"
+                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                  />
+                </label>
+                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_adjustments`} />
+              </Fragment>
+            ))}
+
+            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+              7. Teacher&apos;s Reflection
             </h3>
 
             <p className="col-span-full -mt-1 mb-1 text-[13px] leading-snug text-[#7a4b00]">
@@ -546,9 +745,10 @@ export default function TeacherLessonPlans() {
             </p>
 
             {[
-              ['reflection_went_well', 'What went well?'],
-              ['reflection_challenges', 'What challenges occurred?'],
-              ['reflection_improvements', 'What can be improved?'],
+              ['reflection_went_well', 'Successes'],
+              ['reflection_amazing_moments', 'Amazing Moments'],
+              ['reflection_challenges', 'Challenges'],
+              ['reflection_improvements', 'Improvements'],
             ].map(([field, title]) => (
               <label key={field} className={blockLabelCls}>
                 {title}
@@ -561,6 +761,32 @@ export default function TeacherLessonPlans() {
                 />
               </label>
             ))}
+
+            {selectedPlan &&
+              ['awaiting_reflection', 'completed'].includes(selectedPlan.status) && (
+                <>
+                  <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+                    8. Head Teacher&apos;s Review and Feedback
+                  </h3>
+                  <p className="col-span-full -mt-1 mb-1 text-[13px] leading-snug text-[#555555]">
+                    Filled by the verifier when this lesson plan was approved. Read-only.
+                  </p>
+                  {[
+                    ['head_teacher_overall_assessment', 'Overall Assessment'],
+                    ['head_teacher_specific_feedback', 'Specific Feedback'],
+                    ['head_teacher_next_steps', 'Next Steps'],
+                  ].map(([field, title]) => (
+                    <div key={field} className={blockLabelCls}>
+                      {title}
+                      <div
+                        className={`${fieldControlCls} min-h-[60px] whitespace-pre-wrap leading-normal text-[#111111]`}
+                      >
+                        {(selectedPlan[field] || '').trim() || '—'}
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
 
             <label className={`${fieldLabelCls} col-span-full`}>
               <span className="shrink-0">Prepared by</span>

@@ -89,3 +89,29 @@ export function getFiuuPublicApiBaseUrl() {
   }
   return '';
 }
+
+/**
+ * FIUU Recurring / MIT API endpoint (RecordType T token charges).
+ * Spec: Fiuu Recurring API v7.1.4 — input_v7.php
+ */
+export function getFiuuRecurringUrl() {
+  const custom = trim(process.env.FIUU_RECURRING_URL);
+  if (custom) return custom;
+  const sandbox = trim(process.env.FIUU_SANDBOX) === 'true';
+  return sandbox
+    ? 'https://sandbox-payment.fiuu.com/RMS/API/Recurring/input_v7.php'
+    : 'https://pay.merchant.razer.com/RMS/API/Recurring/input_v7.php';
+}
+
+/** Optional SubMerchant ID for multi-outlet MIDs (usually empty). */
+export function getFiuuSubMerchantId() {
+  return trim(process.env.FIUU_SUB_MERCHANT_ID);
+}
+
+/**
+ * When true, charge saved tokens after installment invoice generation
+ * for active LCA AutoPay consents. Default OFF until Dev UAT passes.
+ */
+export function isFiuuAutopayMitEnabled() {
+  return trim(process.env.FIUU_AUTOPAY_MIT_ENABLED) === 'true';
+}

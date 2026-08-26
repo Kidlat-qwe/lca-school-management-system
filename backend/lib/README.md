@@ -216,7 +216,7 @@ Supports **Update Plan** on a class student (`POST .../package-change-preview` a
 | Change type | Target package | On settlement |
 |-------------|----------------|---------------|
 | `installment_to_installment` | Another installment / Phase+Installment package | Adjustment invoice; profile recurring amount updated |
-| `installment_to_fullpayment` | Fullpayment or Phase+Fullpayment package | Credits all prior class payments (downpayment, reservation fee, phase invoices); enrolls full target phase range (e.g. 1–10); deactivates installment profile and cancels pending installment invoices |
+| `installment_to_fullpayment` | Fullpayment or Phase+Fullpayment package | Credits prior **tuition** payments (downpayment, reservation fee, phase invoices); **late penalties are not credited**; enrolls full target phase range (e.g. 1–10); deactivates installment profile and cancels pending installment invoices |
 
 `countOpenPartialRecurringInvoices()` gates preview/invoice creation: Completed payments on non-Paid recurring invoices block Update Plan, except **settled balance-chain parents** (Partially Paid → Paid leaf via `balance_invoice_id`).
 
@@ -224,7 +224,9 @@ Zero-balance full payment conversion runs immediately without an invoice.
 
 `GET /installment-invoices/profiles/:id/phases` uses `resolveInstallmentProfileFullPaymentConversion()` and `applyFullPaymentUpgradePhaseDisplay()` so Student History **Installment** tab shows unpaid/cancelled/not-generated slots as **Paid** with note **Upgraded to Full Payment** and `total_outstanding` = 0 after conversion. Conversion invoices themselves appear on Student History **Full payment** (`GET /invoices/student/:id/full-payment`, `lib/studentFullPaymentInvoices`).
 
-Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLineItems()` (full price, then separate credit lines for reservation fee and downpayment/phase payments). Credits are stored as `discount_amount` on `invoiceitemstbl`; invoice-linked AR PDF uses net line amounts (`backend/utils/invoiceReceiptLineItems.js`).
+Conversion invoices use itemized lines via `buildFullPaymentConversionInvoiceLineItems()` (full price, then separate credit lines for reservation fee and downpayment/phase payments). Optional promo discount lines are included when `promo_id` / `promo_code` is passed to package-change preview/invoice. Credits are stored as `discount_amount` on `invoiceitemstbl`; invoice-linked AR PDF uses net line amounts (`backend/utils/invoiceReceiptLineItems.js`).
+
+`getStudentClassPaymentCreditBreakdown()` returns tuition-only credits (`credit_total`, reservation/installment credited) plus `penalty_paid_not_credited` when completed payments included late-penalty line amounts.
 
 Standalone acknowledgement receipt PDFs (`ackReceiptPdfGenerator.js`) build table rows via `backend/utils/ackReceiptTableLineItems.js`: package/merchandise lines at gross, then **Discount/Payment Adjustment** (inferred from gross − `payment_amount`) and **Tip/Payment Adjustment** when present.
 

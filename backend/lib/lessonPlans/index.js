@@ -1,5 +1,6 @@
 /**
  * Lesson plan field mapping and validation helpers.
+ * Form fields follow the LCA Lesson Plan PDF (teacher body + reflections + verifier Head Teacher review).
  */
 
 export const LESSON_PLAN_STATUSES = [
@@ -16,9 +17,17 @@ export const EDITABLE_STATUSES = new Set(['draft', 'revision_requested']);
 export const REFLECTION_EDITABLE_STATUSES = new Set(['awaiting_reflection']);
 
 export const REFLECTION_FIELDS = [
-  'reflection_went_well',
+  'reflection_went_well', // Successes
+  'reflection_amazing_moments',
   'reflection_challenges',
   'reflection_improvements',
+];
+
+/** Verifier-only Head Teacher review fields (saved on approve). */
+export const HEAD_TEACHER_REVIEW_FIELDS = [
+  'head_teacher_overall_assessment',
+  'head_teacher_specific_feedback',
+  'head_teacher_next_steps',
 ];
 
 export const GRADE_LEVEL_OPTIONS = [
@@ -83,17 +92,38 @@ export const SUBJECT_OPTIONS_BY_GRADE = {
   ],
 };
 
+/** Teacher-editable content fields (LCA form). */
 const TEXT_FIELDS = [
+  'phase',
+  'session',
   'topic',
-  'learning_objectives',
-  'materials_resources',
-  'opening_routine',
-  'review',
-  'lesson_presentation',
-  'guided_practice',
-  'assessment',
-  'closing_wrapping_up',
+  'early_learning_goals',
+  'objective_1',
+  'objective_2',
+  'objective_3',
+  'assessment_method',
+  'assessment_criteria',
+  'materials_needed',
+  'preliminaries_time',
+  'preliminaries_activity',
+  'lesson_proper_time',
+  'lesson_proper_activity',
+  'conclusion_time',
+  'conclusion_activity',
+  'class1_name',
+  'class1_age_group',
+  'class1_considerations',
+  'class1_adjustments',
+  'class2_name',
+  'class2_age_group',
+  'class2_considerations',
+  'class2_adjustments',
+  'class3_name',
+  'class3_age_group',
+  'class3_considerations',
+  'class3_adjustments',
   'reflection_went_well',
+  'reflection_amazing_moments',
   'reflection_challenges',
   'reflection_improvements',
 ];
@@ -104,6 +134,14 @@ export function normalizeLessonPlanBody(body = {}) {
   if (body.grade_level != null) out.grade_level = String(body.grade_level).trim();
   if (body.subject != null) out.subject = String(body.subject).trim();
   for (const key of TEXT_FIELDS) {
+    if (body[key] != null) out[key] = String(body[key]);
+  }
+  return out;
+}
+
+export function normalizeHeadTeacherReviewBody(body = {}) {
+  const out = {};
+  for (const key of HEAD_TEACHER_REVIEW_FIELDS) {
     if (body[key] != null) out[key] = String(body[key]);
   }
   return out;
@@ -124,6 +162,12 @@ export function validateLessonPlanPayload(payload, { requireAll = false } = {}) 
   }
   if (requireAll || payload.topic !== undefined) {
     if (!payload.topic?.trim()) errors.push('topic is required');
+  }
+  if (requireAll || payload.phase !== undefined) {
+    if (!String(payload.phase || '').trim()) errors.push('phase is required');
+  }
+  if (requireAll || payload.session !== undefined) {
+    if (!String(payload.session || '').trim()) errors.push('session is required');
   }
   return errors;
 }
@@ -159,6 +203,7 @@ export function clearReflectionFields(payload = {}) {
   return {
     ...payload,
     reflection_went_well: '',
+    reflection_amazing_moments: '',
     reflection_challenges: '',
     reflection_improvements: '',
   };
@@ -184,22 +229,40 @@ export function formatLessonPlanStatusForTeacher(status) {
   return String(status || 'draft').replace(/_/g, ' ');
 }
 
-/** Fields a verifier can flag for revision (API key → label). */
+/** Fields a verifier can flag for revision (API key → label). Excludes reflections. */
 export const REVISION_FIELD_LABELS = {
-  topic: 'Topic',
-  learning_objectives: 'Learning Objectives',
-  materials_resources: 'Materials/Resources',
-  opening_routine: 'I. Opening Routine',
-  review: 'II. Review',
-  lesson_presentation: 'III. Lesson Presentation',
-  guided_practice: 'IV. Guided Practice',
-  assessment: 'VI. Assessment',
-  closing_wrapping_up: 'VII. Closing/Wrapping Up',
+  topic: 'Lesson Topic',
+  phase: 'Phase',
+  session: 'Session',
+  early_learning_goals: 'Early Learning Goals',
+  objective_1: 'Objective 1',
+  objective_2: 'Objective 2',
+  objective_3: 'Objective 3',
+  assessment_method: 'Assessment Method',
+  assessment_criteria: 'Assessment Criteria',
+  materials_needed: 'Materials Needed To Prepare',
+  preliminaries_time: 'Preliminaries — Time',
+  preliminaries_activity: 'Preliminaries — Activity & Goal',
+  lesson_proper_time: 'Lesson Proper — Time',
+  lesson_proper_activity: 'Lesson Proper — Activity & Goal',
+  conclusion_time: 'Conclusion — Time',
+  conclusion_activity: 'Conclusion — Activity & Goal',
+  class1_name: 'Class 1 — Name',
+  class1_age_group: 'Class 1 — Age Group',
+  class1_considerations: 'Class 1 — Considerations',
+  class1_adjustments: 'Class 1 — Adjustments',
+  class2_name: 'Class 2 — Name',
+  class2_age_group: 'Class 2 — Age Group',
+  class2_considerations: 'Class 2 — Considerations',
+  class2_adjustments: 'Class 2 — Adjustments',
+  class3_name: 'Class 3 — Name',
+  class3_age_group: 'Class 3 — Age Group',
+  class3_considerations: 'Class 3 — Considerations',
+  class3_adjustments: 'Class 3 — Adjustments',
 };
 
 /**
  * Normalize verifier revision items into a JSON payload stored in revision_reason.
- * Supports highlighting quoted text and/or naming a specific field.
  */
 export function buildRevisionFeedbackPayload({ items = [], general = '' } = {}) {
   const cleaned = (Array.isArray(items) ? items : [])
@@ -282,7 +345,7 @@ export function validateRevisionFeedbackPayload(payload) {
   return errors;
 }
 
-/** Map DB row → API shape (review_section → review). */
+/** Map DB row → API shape (session_label → session). */
 export function mapLessonPlanRow(row) {
   if (!row) return null;
   const revisionReason = row.revision_reason;
@@ -291,23 +354,54 @@ export function mapLessonPlanRow(row) {
     branch_id: row.branch_id,
     branch_name: row.branch_name || null,
     branch_address: row.branch_address || null,
+    deped_region: row.deped_region || null,
+    deped_division: row.deped_division || null,
+    deped_district: row.deped_district || null,
+    region: row.deped_region || null,
+    division: row.deped_division || null,
+    district: row.deped_district || null,
+    school_id: '411093',
+
     teacher_user_id: row.teacher_user_id,
     teacher_name: row.teacher_name || null,
     lesson_date: row.lesson_date,
     grade_level: row.grade_level,
     subject: row.subject,
+    phase: row.phase || '',
+    session: row.session_label || '',
     topic: row.topic,
-    learning_objectives: row.learning_objectives,
-    materials_resources: row.materials_resources,
-    opening_routine: row.opening_routine,
-    review: row.review_section,
-    lesson_presentation: row.lesson_presentation,
-    guided_practice: row.guided_practice,
-    assessment: row.assessment,
-    closing_wrapping_up: row.closing_wrapping_up,
-    reflection_went_well: row.reflection_went_well,
-    reflection_challenges: row.reflection_challenges,
-    reflection_improvements: row.reflection_improvements,
+    early_learning_goals: row.early_learning_goals || '',
+    objective_1: row.objective_1 || '',
+    objective_2: row.objective_2 || '',
+    objective_3: row.objective_3 || '',
+    assessment_method: row.assessment_method || '',
+    assessment_criteria: row.assessment_criteria || '',
+    materials_needed: row.materials_needed || '',
+    preliminaries_time: row.preliminaries_time || '',
+    preliminaries_activity: row.preliminaries_activity || '',
+    lesson_proper_time: row.lesson_proper_time || '',
+    lesson_proper_activity: row.lesson_proper_activity || '',
+    conclusion_time: row.conclusion_time || '',
+    conclusion_activity: row.conclusion_activity || '',
+    class1_name: row.class1_name || '',
+    class1_age_group: row.class1_age_group || '',
+    class1_considerations: row.class1_considerations || '',
+    class1_adjustments: row.class1_adjustments || '',
+    class2_name: row.class2_name || '',
+    class2_age_group: row.class2_age_group || '',
+    class2_considerations: row.class2_considerations || '',
+    class2_adjustments: row.class2_adjustments || '',
+    class3_name: row.class3_name || '',
+    class3_age_group: row.class3_age_group || '',
+    class3_considerations: row.class3_considerations || '',
+    class3_adjustments: row.class3_adjustments || '',
+    reflection_went_well: row.reflection_went_well || '',
+    reflection_amazing_moments: row.reflection_amazing_moments || '',
+    reflection_challenges: row.reflection_challenges || '',
+    reflection_improvements: row.reflection_improvements || '',
+    head_teacher_overall_assessment: row.head_teacher_overall_assessment || '',
+    head_teacher_specific_feedback: row.head_teacher_specific_feedback || '',
+    head_teacher_next_steps: row.head_teacher_next_steps || '',
     status: row.status,
     submitted_at: row.submitted_at,
     revision_reason: revisionReason,
@@ -320,21 +414,42 @@ export function mapLessonPlanRow(row) {
   };
 }
 
+/** Columns written for teacher create/update (DB names). */
 export function lessonPlanWriteColumns(payload) {
   return {
     lesson_date: payload.lesson_date,
     grade_level: payload.grade_level,
     subject: payload.subject,
+    phase: payload.phase ?? '',
+    session_label: payload.session ?? '',
     topic: payload.topic ?? '',
-    learning_objectives: payload.learning_objectives ?? '',
-    materials_resources: payload.materials_resources ?? '',
-    opening_routine: payload.opening_routine ?? '',
-    review_section: payload.review ?? '',
-    lesson_presentation: payload.lesson_presentation ?? '',
-    guided_practice: payload.guided_practice ?? '',
-    assessment: payload.assessment ?? '',
-    closing_wrapping_up: payload.closing_wrapping_up ?? '',
+    early_learning_goals: payload.early_learning_goals ?? '',
+    objective_1: payload.objective_1 ?? '',
+    objective_2: payload.objective_2 ?? '',
+    objective_3: payload.objective_3 ?? '',
+    assessment_method: payload.assessment_method ?? '',
+    assessment_criteria: payload.assessment_criteria ?? '',
+    materials_needed: payload.materials_needed ?? '',
+    preliminaries_time: payload.preliminaries_time ?? '',
+    preliminaries_activity: payload.preliminaries_activity ?? '',
+    lesson_proper_time: payload.lesson_proper_time ?? '',
+    lesson_proper_activity: payload.lesson_proper_activity ?? '',
+    conclusion_time: payload.conclusion_time ?? '',
+    conclusion_activity: payload.conclusion_activity ?? '',
+    class1_name: payload.class1_name ?? '',
+    class1_age_group: payload.class1_age_group ?? '',
+    class1_considerations: payload.class1_considerations ?? '',
+    class1_adjustments: payload.class1_adjustments ?? '',
+    class2_name: payload.class2_name ?? '',
+    class2_age_group: payload.class2_age_group ?? '',
+    class2_considerations: payload.class2_considerations ?? '',
+    class2_adjustments: payload.class2_adjustments ?? '',
+    class3_name: payload.class3_name ?? '',
+    class3_age_group: payload.class3_age_group ?? '',
+    class3_considerations: payload.class3_considerations ?? '',
+    class3_adjustments: payload.class3_adjustments ?? '',
     reflection_went_well: payload.reflection_went_well ?? '',
+    reflection_amazing_moments: payload.reflection_amazing_moments ?? '',
     reflection_challenges: payload.reflection_challenges ?? '',
     reflection_improvements: payload.reflection_improvements ?? '',
   };

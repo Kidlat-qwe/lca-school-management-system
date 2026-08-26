@@ -60,12 +60,14 @@ import {
   countOpenPartialRecurringInvoices,
   getStudentClassPaymentCreditTotal,
   getStudentClassPaymentCreditBreakdown,
+  getInstallmentProfilePaymentCreditExcludingPenalties,
   isFullpaymentLikePackage,
   isInstallmentLikePackage,
   resolveCurrentInstallmentPhaseRange,
   resolveTargetFullPaymentPhaseRange,
   roundCurrency as roundPackageCurrency,
   applyInstallmentToFullPaymentConversion,
+  applyOptionalPromoToPackageChangePreview,
 } from '../lib/packageChangeConversion.js';
 
 const router = express.Router();
@@ -377,6 +379,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
         credit_total: creditTotal,
         reservation_fee_credited: creditBreakdown.reservation_fee_paid,
         installment_payments_credited: creditBreakdown.installment_payments_paid,
+        penalty_paid_not_credited: creditBreakdown.penalty_paid_not_credited || 0,
         target_full_price: targetFullPrice,
         difference,
       },
@@ -396,7 +399,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
     );
   }
 
-  const [paidRecurringResult, totalPaidResult] = await Promise.all([
+  const [paidRecurringResult, profilePaidBreakdown] = await Promise.all([
     client.query(
       `SELECT COUNT(*) AS paid_count
        FROM invoicestbl i
@@ -405,19 +408,15 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
          AND ($2::INTEGER IS NULL OR i.invoice_id != $2::INTEGER)`,
       [currentProfile.installmentinvoiceprofiles_id, currentProfile.downpayment_invoice_id || null]
     ),
-    client.query(
-      `SELECT COALESCE(SUM(COALESCE(p.payable_amount, 0) + COALESCE(p.discount_amount, 0)), 0) AS total_paid
-       FROM paymenttbl p
-       INNER JOIN invoicestbl i ON i.invoice_id = p.invoice_id
-       WHERE i.installmentinvoiceprofiles_id = $1
-         AND p.status = 'Completed'
-         AND COALESCE(p.approval_status, 'Pending') <> 'Rejected'`,
-      [currentProfile.installmentinvoiceprofiles_id]
-    ),
+    getInstallmentProfilePaymentCreditExcludingPenalties(client, {
+      studentId,
+      profileId: currentProfile.installmentinvoiceprofiles_id,
+    }),
   ]);
 
   const recurringPaidCount = parseInt(paidRecurringResult.rows[0]?.paid_count || 0, 10);
-  const currentPaidTotal = roundCurrency(totalPaidResult.rows[0]?.total_paid || 0);
+  const currentPaidTotal = roundCurrency(profilePaidBreakdown.credit || 0);
+  const penaltyPaidNotCredited = roundCurrency(profilePaidBreakdown.penalty_excluded || 0);
   const targetDownpayment = roundCurrency(targetPackage.downpayment_amount || 0);
   const targetRecurringAmount = roundCurrency(targetPackage.package_price || 0);
 
@@ -481,6 +480,7 @@ const buildPackageChangePreview = async ({ client, classId, studentId, targetPac
       current_profile_id: currentProfile.installmentinvoiceprofiles_id,
       recurring_paid_count: recurringPaidCount,
       current_paid_total: currentPaidTotal,
+      penalty_paid_not_credited: penaltyPaidNotCredited,
       target_equivalent_total: targetEquivalentTotal,
       difference,
       last_paid_phase: lastPaidPhase,
@@ -1837,6 +1837,8 @@ router.post(
     param('id').isInt().withMessage('Class ID must be an integer'),
     param('studentId').isInt().withMessage('Student ID must be an integer'),
     body('target_package_id').isInt().withMessage('target_package_id must be an integer'),
+    body('promo_id').optional({ nullable: true }).isInt().withMessage('promo_id must be an integer'),
+    body('promo_code').optional({ nullable: true }).trim(),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -1846,6 +1848,8 @@ router.post(
       const classId = parseInt(req.params.id, 10);
       const studentId = parseInt(req.params.studentId, 10);
       const targetPackageId = parseInt(req.body.target_package_id, 10);
+      const promoId = req.body.promo_id != null ? parseInt(req.body.promo_id, 10) : null;
+      const promoCode = req.body.promo_code || null;
 
       const preview = await buildPackageChangePreview({
         client,
@@ -1854,7 +1858,17 @@ router.post(
         targetPackageId,
       });
 
-      res.json(preview);
+      const withPromo = await applyOptionalPromoToPackageChangePreview(client, preview, {
+        promoId,
+        promoCode,
+        studentId,
+        targetPackageId,
+      });
+      if (!withPromo.ok) {
+        return res.status(withPromo.status).json(withPromo.body);
+      }
+
+      res.json(withPromo.data);
     } catch (error) {
       next(error);
     } finally {
@@ -1874,6 +1888,8 @@ router.post(
     param('id').isInt().withMessage('Class ID must be an integer'),
     param('studentId').isInt().withMessage('Student ID must be an integer'),
     body('target_package_id').isInt().withMessage('target_package_id must be an integer'),
+    body('promo_id').optional({ nullable: true }).isInt().withMessage('promo_id must be an integer'),
+    body('promo_code').optional({ nullable: true }).trim(),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -1885,14 +1901,27 @@ router.post(
       const classId = parseInt(req.params.id, 10);
       const studentId = parseInt(req.params.studentId, 10);
       const targetPackageId = parseInt(req.body.target_package_id, 10);
+      const promoId = req.body.promo_id != null ? parseInt(req.body.promo_id, 10) : null;
+      const promoCode = req.body.promo_code || null;
       const createdBy = req.user.userId || null;
 
-      const preview = await buildPackageChangePreview({
+      const previewBase = await buildPackageChangePreview({
         client,
         classId,
         studentId,
         targetPackageId,
       });
+      const withPromo = await applyOptionalPromoToPackageChangePreview(client, previewBase, {
+        promoId,
+        promoCode,
+        studentId,
+        targetPackageId,
+      });
+      if (!withPromo.ok) {
+        await client.query('ROLLBACK');
+        return res.status(withPromo.status).json(withPromo.body);
+      }
+      const preview = withPromo.data;
 
       if (!preview?.data?.allowed) {
         await client.query('ROLLBACK');
@@ -1981,12 +2010,24 @@ router.post(
         invoiceDescription = `Package change adjustment - ${details.target_package.package_name}`;
         remarks =
           `PACKAGE_CHANGE_ADJUSTMENT;CLASS_ID:${classId};STUDENT_ID:${studentId};CURRENT_PROFILE_ID:${details.current_profile_id};FROM_PACKAGE_ID:${details.current_package.package_id};TO_PACKAGE_ID:${details.target_package.package_id};CURRENT_PAID:${details.current_paid_total.toFixed(2)};TARGET_EQUIVALENT:${details.target_equivalent_total.toFixed(2)};RECURRING_PAID_COUNT:${details.recurring_paid_count}`;
+        const promoDiscount = roundPackageCurrency(details.promo_discount || 0);
+        const grossAdjustment = roundPackageCurrency(
+          details.difference_before_promo != null
+            ? details.difference_before_promo
+            : details.difference + promoDiscount
+        );
         lineItems = [
           {
             description: `Package change from ${details.current_package.package_name} to ${details.target_package.package_name}`,
-            amount: details.difference,
+            amount: grossAdjustment,
           },
         ];
+        if (promoDiscount > 0) {
+          lineItems.push({
+            description: `Promo discount: ${details.promo?.promo_name || 'Promo'}`,
+            amount: -promoDiscount,
+          });
+        }
       }
 
       const newInvoice = await insertInvoiceWithArNumber(

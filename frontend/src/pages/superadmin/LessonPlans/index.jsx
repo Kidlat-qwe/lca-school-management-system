@@ -20,37 +20,72 @@ const GRADE_LEVEL_OPTIONS = [
   'Grade 6',
 ];
 
-const INTRO_SECTIONS = [
-  ['Learning Objectives', 'learning_objectives'],
-  ['Materials/Resources', 'materials_resources'],
+/** LCA form sections shown in PDF order (flaggable when in revision mode). */
+const META_SECTIONS = [
+  ['Lesson Topic', 'topic'],
+  ['Phase', 'phase'],
+  ['Session', 'session'],
 ];
 
-const LESSON_FLOW_SECTIONS = [
-  ['I. Opening Routine', 'opening_routine'],
-  ['II. Review', 'review'],
-  ['III. Lesson Presentation', 'lesson_presentation'],
-  ['IV. Guided Practice', 'guided_practice'],
-  ['VI. Assessment', 'assessment'],
-  ['VII. Closing/Wrapping Up', 'closing_wrapping_up'],
+const GOALS_SECTIONS = [
+  ['Early Learning Goals', 'early_learning_goals'],
+  ['Objective 1', 'objective_1'],
+  ['Objective 2', 'objective_2'],
+  ['Objective 3', 'objective_3'],
+];
+
+const ASSESSMENT_SECTIONS = [
+  ['Assessment Method', 'assessment_method'],
+  ['Assessment Criteria', 'assessment_criteria'],
+];
+
+const MATERIALS_SECTIONS = [['Materials Needed To Prepare', 'materials_needed']];
+
+const PROCEDURE_SECTIONS = [
+  ['Preliminaries — Time', 'preliminaries_time'],
+  ['Preliminaries — Activity & Goal', 'preliminaries_activity'],
+  ['Lesson Proper — Time', 'lesson_proper_time'],
+  ['Lesson Proper — Activity & Goal', 'lesson_proper_activity'],
+  ['Conclusion — Time', 'conclusion_time'],
+  ['Conclusion — Activity & Goal', 'conclusion_activity'],
+];
+
+const CLASS_SECTIONS = [
+  ['Class 1 — Name', 'class1_name'],
+  ['Class 1 — Age Group', 'class1_age_group'],
+  ['Class 1 — Considerations', 'class1_considerations'],
+  ['Class 1 — Adjustments', 'class1_adjustments'],
+  ['Class 2 — Name', 'class2_name'],
+  ['Class 2 — Age Group', 'class2_age_group'],
+  ['Class 2 — Considerations', 'class2_considerations'],
+  ['Class 2 — Adjustments', 'class2_adjustments'],
+  ['Class 3 — Name', 'class3_name'],
+  ['Class 3 — Age Group', 'class3_age_group'],
+  ['Class 3 — Considerations', 'class3_considerations'],
+  ['Class 3 — Adjustments', 'class3_adjustments'],
 ];
 
 const REFLECTION_SECTIONS = [
-  ['What went well?', 'reflection_went_well'],
-  ['What challenges occurred?', 'reflection_challenges'],
-  ['What can be improved?', 'reflection_improvements'],
+  ['Successes', 'reflection_went_well'],
+  ['Amazing Moments', 'reflection_amazing_moments'],
+  ['Challenges', 'reflection_challenges'],
+  ['Improvements', 'reflection_improvements'],
 ];
 
 /** Fields verifiers can flag for revision (excludes Teacher's Reflection). */
 const REVISION_FIELD_OPTIONS = [
-  ['Topic', 'topic'],
-  ['Learning Objectives', 'learning_objectives'],
-  ['Materials/Resources', 'materials_resources'],
-  ['I. Opening Routine', 'opening_routine'],
-  ['II. Review', 'review'],
-  ['III. Lesson Presentation', 'lesson_presentation'],
-  ['IV. Guided Practice', 'guided_practice'],
-  ['VI. Assessment', 'assessment'],
-  ['VII. Closing/Wrapping Up', 'closing_wrapping_up'],
+  ...META_SECTIONS,
+  ...GOALS_SECTIONS,
+  ...ASSESSMENT_SECTIONS,
+  ...MATERIALS_SECTIONS,
+  ...PROCEDURE_SECTIONS,
+  ...CLASS_SECTIONS,
+];
+
+const HEAD_TEACHER_REVIEW_FIELDS = [
+  ['Overall Assessment', 'head_teacher_overall_assessment'],
+  ['Specific Feedback', 'head_teacher_specific_feedback'],
+  ['Next Steps', 'head_teacher_next_steps'],
 ];
 
 const createRevisionItem = (partial = {}) => ({
@@ -231,7 +266,7 @@ function ReviewSection({
 }
 
 /**
- * Lesson Plan review for configured Superadmin/Admin verifiers.
+ * Lesson Plan review for Superadmins (always) and configured Admin verifiers.
  * Folder navigation: Program (grade level) → Teacher → Lesson plans.
  * Admin verifiers only see plans for their designated branch (enforced by API).
  */
@@ -252,6 +287,9 @@ export default function SuperadminLessonPlans() {
   const [revisionGeneral, setRevisionGeneral] = useState('');
   const [reasonDraft, setReasonDraft] = useState(null);
   const [reasonNote, setReasonNote] = useState('');
+  const [headTeacherOverallAssessment, setHeadTeacherOverallAssessment] = useState('');
+  const [headTeacherSpecificFeedback, setHeadTeacherSpecificFeedback] = useState('');
+  const [headTeacherNextSteps, setHeadTeacherNextSteps] = useState('');
   const [loading, setLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState('');
@@ -310,6 +348,10 @@ export default function SuperadminLessonPlans() {
   }, [selectedTeacher, statusFilter]);
 
   const canReview = selectedPlan?.status === 'submitted';
+  const showHeadTeacherForm = canReview && !revisionMode;
+  const showSavedHeadTeacherReview =
+    Boolean(selectedPlan) &&
+    ['awaiting_reflection', 'completed'].includes(selectedPlan.status);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
@@ -383,6 +425,9 @@ export default function SuperadminLessonPlans() {
     setRevisionGeneral('');
     setReasonDraft(null);
     setReasonNote('');
+    setHeadTeacherOverallAssessment('');
+    setHeadTeacherSpecificFeedback('');
+    setHeadTeacherNextSteps('');
   };
 
   const openProgram = (program) => {
@@ -502,7 +547,11 @@ export default function SuperadminLessonPlans() {
       setReviewing(true);
       await apiRequest(`/lesson-plans/${selectedPlan.lesson_plan_id}/approve`, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          head_teacher_overall_assessment: headTeacherOverallAssessment,
+          head_teacher_specific_feedback: headTeacherSpecificFeedback,
+          head_teacher_next_steps: headTeacherNextSteps,
+        }),
       });
       await appAlert('Lesson plan verified. Status is now Awaiting Reflection.');
       setSelectedPlan(null);
@@ -766,11 +815,8 @@ export default function SuperadminLessonPlans() {
                   className="mx-auto w-full max-w-[960px] rounded-md border border-[#eeeeee] bg-white px-5 py-6 text-[#111111] shadow-[0_10px_30px_rgba(0,0,0,0.08)] sm:px-10 sm:py-9 lg:px-[42px] lg:py-[34px]"
                   style={{ fontFamily: '"Poppins", "Inter", "Segoe UI", sans-serif' }}
                 >
-                  <LessonPlanHeader />
+                  <LessonPlanHeader branch={selectedPlan} />
 
-                  <h3 className="mb-[22px] mt-[18px] text-center text-[20px] font-semibold text-[#111111]">
-                    Lesson Plan
-                  </h3>
                   <div className="mb-4 border-t-2 border-[#111111]" />
 
                   <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -814,43 +860,36 @@ export default function SuperadminLessonPlans() {
                     </p>
                   ) : null}
 
-                  <ReviewSection
-                    title="Topic"
-                    fieldKey="topic"
-                    content={selectedPlan.topic}
-                    canFlag={canReview && revisionMode}
-                    fieldChecked={isFieldChecked('topic')}
-                    onToggleField={handleToggleField}
-                    onHighlightSelection={handleHighlightSelection}
-                  />
-
-                  {INTRO_SECTIONS.map(([title, key]) => (
-                    <ReviewSection
-                      key={key}
-                      title={title}
-                      fieldKey={key}
-                      content={selectedPlan[key]}
-                      canFlag={canReview && revisionMode}
-                      fieldChecked={isFieldChecked(key)}
-                      onToggleField={handleToggleField}
-                      onHighlightSelection={handleHighlightSelection}
-                    />
-                  ))}
-
-                  <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
-                    Lesson Flow
-                  </h4>
-                  {LESSON_FLOW_SECTIONS.map(([title, key]) => (
-                    <ReviewSection
-                      key={key}
-                      title={title}
-                      fieldKey={key}
-                      content={selectedPlan[key]}
-                      canFlag={canReview && revisionMode}
-                      fieldChecked={isFieldChecked(key)}
-                      onToggleField={handleToggleField}
-                      onHighlightSelection={handleHighlightSelection}
-                    />
+                  {[
+                    { heading: null, sections: META_SECTIONS },
+                    { heading: 'Goals & Objectives', sections: GOALS_SECTIONS },
+                    { heading: 'Assessment', sections: ASSESSMENT_SECTIONS },
+                    { heading: null, sections: MATERIALS_SECTIONS },
+                    { heading: 'Procedure', sections: PROCEDURE_SECTIONS },
+                    {
+                      heading: 'Differentiation / Class Considerations',
+                      sections: CLASS_SECTIONS,
+                    },
+                  ].map((group) => (
+                    <div key={group.heading || group.sections[0][1]}>
+                      {group.heading ? (
+                        <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
+                          {group.heading}
+                        </h4>
+                      ) : null}
+                      {group.sections.map(([title, key]) => (
+                        <ReviewSection
+                          key={key}
+                          title={title}
+                          fieldKey={key}
+                          content={selectedPlan[key]}
+                          canFlag={canReview && revisionMode}
+                          fieldChecked={isFieldChecked(key)}
+                          onToggleField={handleToggleField}
+                          onHighlightSelection={handleHighlightSelection}
+                        />
+                      ))}
+                    </div>
                   ))}
 
                   <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
@@ -866,6 +905,65 @@ export default function SuperadminLessonPlans() {
                       </div>
                     </section>
                   ))}
+
+                  {(showHeadTeacherForm || showSavedHeadTeacherReview) && (
+                    <>
+                      <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
+                        Head Teacher&apos;s Review and Feedback
+                      </h4>
+                      {showHeadTeacherForm ? (
+                        <div className="space-y-3 py-3">
+                          <p className="text-xs text-gray-500">
+                            Complete this review before approving. Feedback is saved with the
+                            verification.
+                          </p>
+                          <label className="block text-[16px] font-medium text-[#111111]">
+                            Overall Assessment
+                            <textarea
+                              value={headTeacherOverallAssessment}
+                              onChange={(e) => setHeadTeacherOverallAssessment(e.target.value)}
+                              rows={3}
+                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
+                              placeholder="Overall assessment of this lesson plan"
+                            />
+                          </label>
+                          <label className="block text-[16px] font-medium text-[#111111]">
+                            Specific Feedback
+                            <textarea
+                              value={headTeacherSpecificFeedback}
+                              onChange={(e) => setHeadTeacherSpecificFeedback(e.target.value)}
+                              rows={3}
+                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
+                              placeholder="Specific feedback for the teacher"
+                            />
+                          </label>
+                          <label className="block text-[16px] font-medium text-[#111111]">
+                            Next Steps
+                            <textarea
+                              value={headTeacherNextSteps}
+                              onChange={(e) => setHeadTeacherNextSteps(e.target.value)}
+                              rows={3}
+                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
+                              placeholder="Recommended next steps"
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        HEAD_TEACHER_REVIEW_FIELDS.map(([title, key]) => (
+                          <section key={key} className="py-3">
+                            <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">
+                              {title}
+                            </h4>
+                            <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
+                              <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+                                {selectedPlan[key] || '—'}
+                              </p>
+                            </div>
+                          </section>
+                        ))
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
 

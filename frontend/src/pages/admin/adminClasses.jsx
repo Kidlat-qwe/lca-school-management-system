@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
@@ -75,6 +75,7 @@ import PackageMerchItemVariantPanel from '../../components/packageMerch/PackageM
 import EnrollStudentSelectionLayout from '../../components/enrollStudentSelection/EnrollStudentSelectionLayout';
 import EnrollWizardStepper from '../../components/enrollStudentSelection/EnrollWizardStepper';
 import EnrollOrderSummary from '../../components/enrollStudentSelection/EnrollOrderSummary';
+import UpdatePlanModal from '../../components/updatePlan/UpdatePlanModal';
 import {
   buildEnrollSummaryItems,
   formatEnrollPackagePrice,
@@ -233,7 +234,7 @@ const AdminClasses = () => {
   const [uniformCategoryFilters, setUniformCategoryFilters] = useState({});
   // Per-student merchandise selections: { [student_id]: [{merchandise_id, size, merchandise_name}] }
   const [studentMerchandiseSelections, setStudentMerchandiseSelections] = useState({});
-  /** Per student → package freebie type → { action, replacement_merchandise_id, reason } */
+  /** Per student ? package freebie type ? { action, replacement_merchandise_id, reason } */
   const [studentPackageMerchEntitlements, setStudentPackageMerchEntitlements] = useState({});
   const [pricingLists, setPricingLists] = useState([]);
   const [merchandise, setMerchandise] = useState([]);
@@ -388,7 +389,7 @@ const initializePackageMerchSelections = useCallback(
         // Check if this merchandise type requires sizing
         const requiresSizing = requiresSizingForMerchandise(typeName);
         
-        // For item-keyed types (Tool Kit, Moving Up Kit, …), per-student variant pick in UI
+        // For item-keyed types (Tool Kit, Moving Up Kit, �), per-student variant pick in UI
         if (
           requiresPackageItemVariantSelection(typeName, merchandise, {
             requiresSizing,
@@ -1497,7 +1498,7 @@ const initializePackageMerchSelections = useCallback(
       !(await appConfirm({
         title: 'Archive class',
         message:
-          'Archive this class? It will move to Settings → Archived Classes and can be restored for 30 days. After 30 days it is permanently deleted if not restored.',
+          'Archive this class? It will move to Settings ? Archived Classes and can be restored for 30 days. After 30 days it is permanently deleted if not restored.',
         destructive: true,
         confirmLabel: 'Archive',
       }))
@@ -1511,7 +1512,7 @@ const initializePackageMerchSelections = useCallback(
       });
       fetchClasses();
       appAlert(
-        'Class archived. Open Settings → Archived Classes to restore it within 30 days.'
+        'Class archived. Open Settings ? Archived Classes to restore it within 30 days.'
       );
     } catch (err) {
       appAlert(err.message || 'Failed to archive class');
@@ -1740,7 +1741,7 @@ const initializePackageMerchSelections = useCallback(
       setLoadingEnrolledStudents(true);
 
       if (isPending) {
-        // Pending students only have a downpayment profile — no active phase rows.
+        // Pending students only have a downpayment profile � no active phase rows.
         const res = await apiRequest(`/students/class/${classId}/pending/${student.user_id}`, { method: 'DELETE' });
         if (res?.success) {
           appAlert(`${studentName} has been removed from the class.`);
@@ -1791,7 +1792,7 @@ const initializePackageMerchSelections = useCallback(
         enrolledStudents = enrolledStudents.filter(s => s.phase_number === phaseNumber);
       }
       
-      // One row per student; combine phase enrollments (e.g. Phase 1–2, single status badge).
+      // One row per student; combine phase enrollments (e.g. Phase 1�2, single status badge).
       const uniqueEnrolledStudents = enrolledStudents.reduce((acc, student) => {
         const phaseRow = {
           classstudent_id: student.classstudent_id,
@@ -3090,7 +3091,7 @@ const initializePackageMerchSelections = useCallback(
       (pkg.package_type === 'Phase' &&
         String(pkg.payment_option || '').toLowerCase() === 'fullpayment'));
 
-  const formatMoney = (value) => `₱${Number(value || 0).toLocaleString('en-US', {
+  const formatMoney = (value) => `?${Number(value || 0).toLocaleString('en-US', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -3113,7 +3114,7 @@ const initializePackageMerchSelections = useCallback(
       formatPackageTypeLabel(pkg),
       pkg?.level_tag ? String(pkg.level_tag).trim() : '',
     ].filter(Boolean);
-    return parts.join(' · ');
+    return parts.join(' � ');
   };
 
   const packageMatchesUpdatePlanBranchScope = (pkg, classBranchId, classLevelTag) => {
@@ -3268,19 +3269,23 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const fetchPackageChangePreview = async (targetPackage) => {
+  const fetchPackageChangePreview = async (targetPackage, promo = {}) => {
     if (!targetPackage || !changePackageSourceClass || !studentToChangePackage) return;
 
     setLoadingChangePackagePreview(true);
     setChangePackagePreview(null);
     try {
+      const body = {
+        target_package_id: targetPackage.package_id,
+      };
+      if (promo?.promo_id) body.promo_id = promo.promo_id;
+      if (promo?.promo_code) body.promo_code = promo.promo_code;
+
       const response = await apiRequest(
         `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-preview`,
         {
           method: 'POST',
-          body: JSON.stringify({
-            target_package_id: targetPackage.package_id,
-          }),
+          body: JSON.stringify(body),
         }
       );
       setChangePackagePreview(response.data || null);
@@ -3296,30 +3301,37 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const handleChangePackageSelection = async (packageId) => {
-    const targetPackage = changePackageOptions.find((pkg) => pkg.package_id === Number(packageId)) || null;
+  const handleUpdatePlanSelectPackage = async (targetPackage, promo = {}) => {
     setSelectedTargetPackageForChange(targetPackage);
     setChangePackagePreview(null);
-
     if (targetPackage) {
-      await fetchPackageChangePreview(targetPackage);
+      await fetchPackageChangePreview(targetPackage, promo);
     }
   };
 
-  const handleCreatePackageChangeInvoice = async () => {
+  const handleUpdatePlanBackToPackages = () => {
+    setSelectedTargetPackageForChange(null);
+    setChangePackagePreview(null);
+  };
+
+  const handleCreatePackageChangeInvoice = async (promo = {}) => {
     if (!selectedTargetPackageForChange || !changePackageSourceClass || !studentToChangePackage || !changePackagePreview?.allowed) {
       return;
     }
 
     setChangePackageSubmitting(true);
     try {
+      const body = {
+        target_package_id: selectedTargetPackageForChange.package_id,
+      };
+      if (promo?.promo_id) body.promo_id = promo.promo_id;
+      if (promo?.promo_code) body.promo_code = promo.promo_code;
+
       const response = await apiRequest(
         `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-invoice`,
         {
           method: 'POST',
-          body: JSON.stringify({
-            target_package_id: selectedTargetPackageForChange.package_id,
-          }),
+          body: JSON.stringify(body),
         }
       );
 
@@ -4220,7 +4232,7 @@ const initializePackageMerchSelections = useCallback(
     if (!includeStock) {
       return baseLabel;
     }
-    return `${baseLabel} • Available: ${item.quantity ?? 0}`;
+    return `${baseLabel} � Available: ${item.quantity ?? 0}`;
   };
 
   const fetchInstallmentScheduleSettings = async (branchId = null) => {
@@ -4285,7 +4297,7 @@ const initializePackageMerchSelections = useCallback(
       const selection = packageMerchSelections[typeName];
       if (selection && selection.length > 0) return false;
 
-      // Sized uniforms are chosen per student (Top/Bottom/Set) — accept those as selected
+      // Sized uniforms are chosen per student (Top/Bottom/Set) � accept those as selected
       if (requiresSizingForMerchandise(typeName) && selectedStudents.length > 0) {
         const itemsForType = getMerchandiseItemsByType(typeName);
         const everyStudentConfigured = selectedStudents.every((student) => {
@@ -4300,7 +4312,7 @@ const initializePackageMerchSelections = useCallback(
         return !everyStudentConfigured;
       }
 
-      // Item-keyed variants (Tool Kit, …) — per-student merchandise_id required
+      // Item-keyed variants (Tool Kit, �) � per-student merchandise_id required
       if (requiresItemVariantForMerchandise(typeName) && selectedStudents.length > 0) {
         const everyStudentConfigured = selectedStudents.every((student) =>
           isStudentItemVariantSelectionComplete(
@@ -4473,7 +4485,7 @@ const initializePackageMerchSelections = useCallback(
       const hasSize = item.size != null && String(item.size).trim() !== '';
       const itemCategory = getUniformCategory(item);
 
-      // Sized merchandise (uniforms): one selection per Top/Bottom slot — replace prior size
+      // Sized merchandise (uniforms): one selection per Top/Bottom slot � replace prior size
       if (hasSize) {
         const filtered = currentSelections.filter((selection) => {
           if (selection.merchandise_id === item.merchandise_id) return false;
@@ -8128,7 +8140,7 @@ const resolvedBranchId =
             selectedClassForDetails?.class_name || selectedClassForDetails?.level_tag,
           ]
             .filter(Boolean)
-            .join(' — ')}
+            .join(' � ')}
         />
 
         {/* Attendance Modal */}
@@ -9961,7 +9973,7 @@ const resolvedBranchId =
                         <p className="mt-1 text-xs text-gray-500">
                           {editingClass
                             ? 'End date is automatically calculated from the class schedule and updates when start date or days change.'
-                            : `End date is automatically calculated based on curriculum (${selectedProgram.number_of_phase} phases × ${selectedProgram.number_of_session_per_phase} sessions) and selected days`}
+                            : `End date is automatically calculated based on curriculum (${selectedProgram.number_of_phase} phases � ${selectedProgram.number_of_session_per_phase} sessions) and selected days`}
                         </p>
                       )}
                       {formErrors.end_date && (
@@ -10320,7 +10332,7 @@ const resolvedBranchId =
                   {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') && 'Add students to package'}
                 </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {selectedClassForEnrollment.program_name} • {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
+                  {selectedClassForEnrollment.program_name} � {selectedClassForEnrollment.class_name || selectedClassForEnrollment.level_tag}
                 </p>
               </div>
               {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') ? (
@@ -10467,11 +10479,11 @@ const resolvedBranchId =
 
                             const reservationFee = isReserved
                               ? (student.reservation_fee !== null && student.reservation_fee !== undefined
-                                  ? `₱${parseFloat(student.reservation_fee).toFixed(2)}`
+                                  ? `?${parseFloat(student.reservation_fee).toFixed(2)}`
                                   : '-')
                               : (reservationForStudent && reservationForStudent.reservation_fee !== null &&
                                   reservationForStudent.reservation_fee !== undefined
-                                  ? `₱${parseFloat(reservationForStudent.reservation_fee).toFixed(2)}`
+                                  ? `?${parseFloat(reservationForStudent.reservation_fee).toFixed(2)}`
                                   : '-');
 
                             const reservationStatus = isReserved 
@@ -10614,7 +10626,7 @@ const resolvedBranchId =
                                       </button>
                                     </div>
                                   ) : isRemovedEnrollment ? (
-                                    <span className="text-sm text-gray-400">—</span>
+                                    <span className="text-sm text-gray-400">�</span>
                                   ) : isReserved ? (
                                     (() => {
                                       const resObj = enrollReservedStudents.find(
@@ -10636,7 +10648,7 @@ const resolvedBranchId =
                                           <span className="text-xs text-gray-500">Pay fee first</span>
                                         );
                                       }
-                                      return <span className="text-sm text-gray-400">—</span>;
+                                      return <span className="text-sm text-gray-400">�</span>;
                                     })()
                                   ) : reservationForStudent &&
                                     canUpgradeReservationRecord(reservationForStudent) ? (
@@ -10778,7 +10790,7 @@ const resolvedBranchId =
 
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts�</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -10933,21 +10945,21 @@ const resolvedBranchId =
                                         <div className="flex items-baseline space-x-2">
                                           <span className="text-sm text-gray-600">Down payment:</span>
                                           <span className="text-lg font-bold text-gray-900">
-                                            ₱{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            ?{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                           </span>
                                         </div>
                                       )}
                                       <div className="flex items-baseline space-x-2">
                                         <span className="text-sm text-gray-600">Monthly:</span>
                                         <span className="text-lg font-bold text-gray-900">
-                                          ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          ?{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                         </span>
                                       </div>
                                     </>
                                   ) : (
                                     <div className="flex items-baseline space-x-2">
                                       <span className="text-xl font-bold text-gray-900">
-                                        ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                        ?{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                       </span>
                                     </div>
                                   )}
@@ -11016,7 +11028,7 @@ const resolvedBranchId =
                       </span>
                       {selectedPackage.package_price && (
                         <span className="inline-flex items-center rounded-md bg-white/80 px-2.5 py-1 text-xs font-medium text-amber-900 border border-amber-200">
-                          Monthly: ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          Monthly: ?{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                       )}
                     </div>
@@ -11133,14 +11145,14 @@ const resolvedBranchId =
                                 </span>
                                 <span className="block text-xs text-gray-600 mt-1">
                                   {hasDownpayment
-                                    ? `Downpayment amount: ₱${Number(selectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    ? `Downpayment amount: ?${Number(selectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                     : 'This package has no configured downpayment amount.'}
                                 </span>
                                 {selectedEnrollmentOption === 'ack-receipt' && selectedAckReceipt && (
                                   <span className="block text-xs text-amber-700 mt-1">
                                     Paid via Acknowledgement Receipt:{' '}
                                     {String(selectedAckReceipt.installment_option || 'downpayment_only').replaceAll('_', ' ')}{' '}
-                                    — Amount: ₱
+                                    � Amount: ?
                                     {getEnrollmentAckReceiptLineTotal(selectedAckReceipt).toLocaleString('en-US', {
                                       minimumFractionDigits: 2,
                                       maximumFractionDigits: 2,
@@ -11343,7 +11355,7 @@ const resolvedBranchId =
                                 {selectedPackage.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
                                     <span className="text-base font-bold text-gray-900">
-                                      ₱{parseFloat(selectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      ?{parseFloat(selectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                     <span className="text-xs text-gray-600 font-medium">Down payment</span>
                                   </div>
@@ -11351,7 +11363,7 @@ const resolvedBranchId =
                                 {selectedPackage.package_price && (
                                   <div className="flex items-baseline space-x-2">
                                     <span className="text-base font-bold text-gray-900">
-                                      ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      ?{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                     <span className="text-xs text-gray-600 font-medium">Monthly</span>
                                   </div>
@@ -11361,7 +11373,7 @@ const resolvedBranchId =
                               selectedPackage.package_price && (
                                 <div className="flex items-baseline space-x-2 mt-1">
                                   <span className="text-xl font-bold text-gray-900">
-                                    ₱{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    ?{parseFloat(selectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </span>
                                   <span className="text-xs text-gray-600 font-medium">Package Price</span>
                                 </div>
@@ -11530,7 +11542,7 @@ const resolvedBranchId =
                                         )}
                                         {validatedPromoFromCode.promo_type === 'fixed_discount' && validatedPromoFromCode.discount_amount && (
                                           <span className="text-xs font-bold bg-blue-100 text-blue-800 px-2.5 py-1 rounded-full">
-                                            ₱{parseFloat(validatedPromoFromCode.discount_amount).toFixed(2)} OFF
+                                            ?{parseFloat(validatedPromoFromCode.discount_amount).toFixed(2)} OFF
                                           </span>
                                         )}
                                         {validatedPromoFromCode.merchandise && validatedPromoFromCode.merchandise.length > 0 && (
@@ -11543,7 +11555,7 @@ const resolvedBranchId =
                                         <div className="mt-2 pt-2 border-t border-gray-200">
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-xs text-gray-500 line-through">
-                                              ₱{((selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
+                                              ?{((selectedPackage?.package_type === 'Installment' || (selectedPackage?.package_type === 'Phase' && selectedPackage?.payment_option === 'Installment')) && selectedPackage?.downpayment_amount != null && parseFloat(selectedPackage.downpayment_amount) > 0
                                                 ? parseFloat(selectedPackage.downpayment_amount)
                                                 : parseFloat(selectedPackage?.package_price || 0)
                                               ).toFixed(2)}
@@ -11608,7 +11620,7 @@ const resolvedBranchId =
                                           )}
                                           {promo.promo_type === 'fixed_discount' && promo.discount_amount && (
                                             <span className="text-xs font-bold bg-blue-100 text-blue-800 px-2.5 py-1 rounded-full">
-                                              ₱{parseFloat(promo.discount_amount).toFixed(2)} OFF
+                                              ?{parseFloat(promo.discount_amount).toFixed(2)} OFF
                                             </span>
                                           )}
                                           {promo.merchandise && promo.merchandise.length > 0 && (
@@ -11654,7 +11666,7 @@ const resolvedBranchId =
                               </p>
                               {selectedPromo.calculated_discount > 0 && (
                                 <p className="text-xs text-green-700 mt-0.5">
-                                  You save ₱{parseFloat(selectedPromo.calculated_discount).toFixed(2)}!
+                                  You save ?{parseFloat(selectedPromo.calculated_discount).toFixed(2)}!
                                 </p>
                               )}
                             </div>
@@ -11780,7 +11792,7 @@ const resolvedBranchId =
                                       )}
                                       {pricing.price && (
                                         <span className="ml-1.5 text-xs text-gray-600">
-                                          - ₱{parseFloat(pricing.price).toFixed(2)}
+                                          - ?{parseFloat(pricing.price).toFixed(2)}
                                         </span>
                                       )}
                                     </div>
@@ -11837,7 +11849,7 @@ const resolvedBranchId =
                                           <div className="flex items-center justify-between">
                                           <span className="text-xs font-medium text-gray-900">{item.merchandise_name}</span>
                                             {item.price && (
-                                              <span className="text-xs text-gray-500 ml-2">₱{parseFloat(item.price).toFixed(2)}</span>
+                                              <span className="text-xs text-gray-500 ml-2">?{parseFloat(item.price).toFixed(2)}</span>
                                             )}
                                           </div>
                                           {(item.gender || item.type) && (
@@ -12025,7 +12037,7 @@ const resolvedBranchId =
                                                           {currentSelection?.size && (
                                                             <div className="mt-1.5 flex flex-wrap gap-1">
                                                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
-                                                                ✓ {currentSelection.size}
+                                                                ? {currentSelection.size}
                                                               </span>
                                                               {(() => {
                                                                 const selectedMeta = genderFilteredItems.find(
@@ -12090,7 +12102,7 @@ const resolvedBranchId =
                         slotsAvailable={getAvailableSlots()}
                         configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
                         showInvoiceNote={enrollStep === 'review'}
-                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' � ')}
                       />
                     }
                   />
@@ -12252,7 +12264,7 @@ const resolvedBranchId =
                             {selectedStudents.length} of {selectedStudents.length} students configured
                           </p>
                           <p className="text-xs text-gray-500 mt-2">
-                            Zero-stock items can still be selected. They are issued later from Merchandise → Pending issue after restock (and first payment).
+                            Zero-stock items can still be selected. They are issued later from Merchandise ? Pending issue after restock (and first payment).
                           </p>
                         </div>
                         <div className="space-y-3">
@@ -12446,7 +12458,7 @@ const resolvedBranchId =
                                                       {currentSelection?.size && (
                                                         <div className="mt-1.5 flex flex-wrap gap-1">
                                                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800">
-                                                            ✓ {currentSelection.size}
+                                                            ? {currentSelection.size}
                                                           </span>
                                                           {(() => {
                                                             const selectedMeta = genderFilteredItems.find(
@@ -12599,7 +12611,7 @@ const resolvedBranchId =
                         slotsAvailable={getAvailableSlots()}
                         configuredCount={enrollStep === 'merchandise-config' || enrollStep === 'review' ? selectedStudents.length : null}
                         showInvoiceNote={enrollStep === 'review'}
-                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
+                        classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' � ')}
                       />
                     }
                   />
@@ -12616,7 +12628,7 @@ const resolvedBranchId =
                       selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag,
                     ]
                       .filter(Boolean)
-                      .join(' — ');
+                      .join(' � ');
                     const branchLabel =
                       selectedClassForEnrollment?.branch_name ||
                       selectedBranchName ||
@@ -12744,7 +12756,7 @@ const resolvedBranchId =
                               Enrolling into
                             </p>
                             <p className="text-sm font-semibold text-gray-900 leading-snug">
-                              {classLabel || '—'}
+                              {classLabel || '�'}
                             </p>
                             {branchLabel ? (
                               <p className="text-xs text-gray-600 mt-1.5">{branchLabel}</p>
@@ -12836,7 +12848,7 @@ const resolvedBranchId =
                                                 ) : null}
                                               </div>
                                               <p className="text-xs text-gray-600 mt-0.5 truncate">
-                                                {[line.size, line.gender].filter(Boolean).join(' · ') ||
+                                                {[line.size, line.gender].filter(Boolean).join(' � ') ||
                                                   (line.swapped ? line.subtitle : 'Included')}
                                               </p>
                                             </div>
@@ -12899,7 +12911,7 @@ const resolvedBranchId =
                             <div className="space-y-1 text-xs">
                               <p><strong>Invoice ID:</strong> {item.invoice.invoice_id}</p>
                               <p><strong>Description:</strong> {item.invoice.invoice_description}</p>
-                              <p><strong>Total Amount:</strong> ₱{parseFloat(item.invoice.amount || 0).toFixed(2)}</p>
+                              <p><strong>Total Amount:</strong> ?{parseFloat(item.invoice.amount || 0).toFixed(2)}</p>
                               <p><strong>Status:</strong> {item.invoice.status}</p>
                               {item.invoice.items && item.invoice.items.length > 0 && (
                                 <div className="mt-2">
@@ -12907,7 +12919,7 @@ const resolvedBranchId =
                                   <ul className="list-disc list-inside space-y-0.5">
                                     {item.invoice.items.map((invoiceItem, itemIdx) => (
                                       <li key={itemIdx}>
-                                        {invoiceItem.description} - ₱{parseFloat(invoiceItem.amount || 0).toFixed(2)}
+                                        {invoiceItem.description} - ?{parseFloat(invoiceItem.amount || 0).toFixed(2)}
                                       </li>
                                     ))}
                                   </ul>
@@ -14609,254 +14621,21 @@ const resolvedBranchId =
         document.body
       )}
 
-      {isChangePackageModalOpen && studentToChangePackage && changePackageSourceClass && createPortal(
-        <div
-          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
-          onClick={closeChangePackageModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">Update Plan</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Switch installment plan or convert to full payment. Prior payments (downpayment, reservation, phases) are credited.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeChangePackageModal}
-                className="text-gray-400 hover:text-gray-500 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">
-              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                <div className="text-sm text-gray-900">
-                  <span className="font-semibold">{studentToChangePackage.full_name}</span>
-                  <span className="text-gray-500"> · {changePackageSourceClass.class_name || changePackageSourceClass.level_tag}</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  Installment-to-installment updates recurring billing. Full payment conversion enrolls all target phases and stops installment invoices after settlement.
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="change-package-select" className="block text-sm font-medium text-gray-700 mb-1">
-                  Target package <span className="text-red-500">*</span>
-                </label>
-                {loadingChangePackageOptions ? (
-                  <div className="py-3 text-sm text-gray-500">Loading package options...</div>
-                ) : changePackageOptions.length === 0 ? (
-                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">
-                    No installment or full payment packages are available for this branch.
-                  </div>
-                ) : (
-                  <select
-                    id="change-package-select"
-                    value={selectedTargetPackageForChange?.package_id ?? ''}
-                    onChange={(e) => handleChangePackageSelection(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
-                  >
-                    <option value="">— Select package —</option>
-                    {changePackageOptions.map((pkg) => {
-                      const activePackageId = Number(
-                        studentToChangePackage?.current_package_id || 0
-                      );
-                      const isCurrent =
-                        activePackageId > 0 &&
-                        Number(pkg.package_id) === activePackageId;
-                      return (
-                        <option
-                          key={pkg.package_id}
-                          value={pkg.package_id}
-                          disabled={isCurrent}
-                        >
-                          {formatChangePackageOptionLabel(pkg)}
-                          {isCurrent ? ' (current plan)' : ''}
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
-              </div>
-
-              {loadingChangePackagePreview && (
-                <div className="flex items-center justify-center py-10">
-                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200 border-t-gray-500"></div>
-                </div>
-              )}
-
-              {!loadingChangePackagePreview && changePackagePreview && (
-                <div className="space-y-4">
-                  <div
-                    className={`rounded-lg border px-4 py-3 ${
-                      changePackagePreview.allowed
-                        ? 'border-emerald-200 bg-emerald-50'
-                        : 'border-amber-200 bg-amber-50'
-                    }`}
-                  >
-                    <p className={`text-sm font-medium ${changePackagePreview.allowed ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {changePackagePreview.message}
-                    </p>
-                  </div>
-
-                  {changePackagePreview.current_package && changePackagePreview.target_package && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="rounded-lg border border-gray-200 p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Current package</h3>
-                        <div className="space-y-2 text-sm text-gray-600">
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Package</span>
-                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.current_package.package_name}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Downpayment</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.downpayment_amount)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Recurring amount</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.recurring_amount)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-gray-200 p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Target package</h3>
-                        <div className="space-y-2 text-sm text-gray-600">
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Package</span>
-                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.target_package.package_name}</span>
-                          </div>
-                          {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
-                            <>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Full payment price</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.full_payment_price)}</span>
-                              </div>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Enrollment after conversion</span>
-                                <span className="font-medium text-gray-900 text-right">
-                                  Phases {changePackagePreview.target_phase_start}–{changePackagePreview.target_phase_end}
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Downpayment</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.downpayment_amount)}</span>
-                              </div>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Recurring amount</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.recurring_amount)}</span>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="rounded-lg border border-gray-200 p-4">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Calculation summary</h3>
-                    <div className="space-y-2 text-sm text-gray-600">
-                      {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
-                        <>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Current installment scope</span>
-                            <span className="font-medium text-gray-900">
-                              Phases {changePackagePreview.current_phase_start}–{changePackagePreview.current_phase_end}
-                            </span>
-                          </div>
-                          {(changePackagePreview.reservation_fee_credited ?? 0) > 0 && (
-                            <div className="flex items-center justify-between gap-4">
-                              <span>Reservation fee credited</span>
-                              <span className="font-medium text-gray-900">
-                                {formatMoney(changePackagePreview.reservation_fee_credited)}
-                              </span>
-                            </div>
-                          )}
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Downpayment &amp; phase payments credited</span>
-                            <span className="font-medium text-gray-900">
-                              {formatMoney(changePackagePreview.installment_payments_credited ?? changePackagePreview.credit_total)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-2">
-                            <span>Total payments credited</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.credit_total)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Full payment package price</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_full_price)}</span>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Paid recurring phases</span>
-                            <span className="font-medium text-gray-900">{changePackagePreview.recurring_paid_count ?? 0}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Current package paid total</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_paid_total)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Target package equivalent total</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_equivalent_total)}</span>
-                          </div>
-                        </>
-                      )}
-                      <div className="border-t border-gray-200 pt-2 flex items-center justify-between gap-4">
-                        <span className="font-semibold text-gray-900">
-                          {changePackagePreview.change_type === 'installment_to_fullpayment' && changePackagePreview.difference === 0
-                            ? 'Balance due'
-                            : 'Additional amount to invoice'}
-                        </span>
-                        <span className={`font-semibold ${changePackagePreview.difference > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                          {formatMoney(changePackagePreview.difference)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={closeChangePackageModal}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleCreatePackageChangeInvoice}
-                disabled={!changePackagePreview?.allowed || !selectedTargetPackageForChange || changePackageSubmitting}
-                className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {changePackageSubmitting
-                  ? 'Processing...'
-                  : changePackagePreview?.change_type === 'installment_to_fullpayment' && changePackagePreview?.difference === 0
-                    ? 'Convert to Full Payment'
-                    : changePackagePreview?.change_type === 'installment_to_fullpayment'
-                      ? 'Create Conversion Invoice'
-                      : 'Create Adjustment Invoice'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <UpdatePlanModal
+        open={isChangePackageModalOpen && Boolean(studentToChangePackage && changePackageSourceClass)}
+        student={studentToChangePackage}
+        sourceClass={changePackageSourceClass}
+        packages={changePackageOptions}
+        loadingPackages={loadingChangePackageOptions}
+        selectedPackage={selectedTargetPackageForChange}
+        preview={changePackagePreview}
+        loadingPreview={loadingChangePackagePreview}
+        submitting={changePackageSubmitting}
+        onClose={closeChangePackageModal}
+        onSelectPackage={handleUpdatePlanSelectPackage}
+        onBackToPackages={handleUpdatePlanBackToPackages}
+        onConfirm={handleCreatePackageChangeInvoice}
+      />
 
       {/* Move Student to Another Class Modal (admin) */}
       {isMoveStudentModalOpen && studentToMove && moveSourceClass && createPortal(
@@ -15140,7 +14919,7 @@ const resolvedBranchId =
                           <td className="px-4 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-900">
                               {reservation.reservation_fee !== null && reservation.reservation_fee !== undefined
-                                ? `₱${parseFloat(reservation.reservation_fee).toFixed(2)}`
+                                ? `?${parseFloat(reservation.reservation_fee).toFixed(2)}`
                                 : '-'}
                             </div>
                           </td>
@@ -15302,7 +15081,7 @@ const resolvedBranchId =
                     </div>
                     <div className="mt-2">
                       {ackReceiptsLoading ? (
-                        <p className="text-sm text-gray-600">Loading acknowledgement receipts…</p>
+                        <p className="text-sm text-gray-600">Loading acknowledgement receipts�</p>
                       ) : ackReceiptsError ? (
                         <p className="text-sm text-red-600">{ackReceiptsError}</p>
                       ) : ackReceipts.length === 0 ? (
@@ -15389,21 +15168,21 @@ const resolvedBranchId =
                                           <div className="flex items-baseline space-x-2">
                                             <span className="text-sm text-gray-600">Down payment:</span>
                                             <span className="text-lg font-bold text-gray-900">
-                                              ₱{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                              ?{parseFloat(pkg.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                             </span>
                                           </div>
                                         )}
                                         <div className="flex items-baseline space-x-2">
                                           <span className="text-sm text-gray-600">Monthly:</span>
                                           <span className="text-lg font-bold text-gray-900">
-                                            ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                            ?{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                           </span>
                                         </div>
                                       </>
                                     ) : (
                                       <div className="flex items-baseline space-x-2">
                                         <span className="text-xl font-bold text-gray-900">
-                                          ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                          ?{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                         </span>
                                       </div>
                                     )}
@@ -15454,7 +15233,7 @@ const resolvedBranchId =
                           </span>
                           {upgradeSelectedPackage.package_price && (
                             <span className="inline-flex items-center rounded-md bg-white/80 px-2.5 py-1 text-xs font-medium text-amber-900 border border-amber-200">
-                              Monthly: ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              Monthly: ?{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           )}
                         </div>
@@ -15497,7 +15276,7 @@ const resolvedBranchId =
                         ) : null}
                         {curriculumPhaseCount == null && phaseOptions.length <= 1 ? (
                           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                            Could not load curriculum phase count from this class or program. Phase list may be limited — open the class from the list after refresh, or confirm the program has a curriculum with phases.
+                            Could not load curriculum phase count from this class or program. Phase list may be limited � open the class from the list after refresh, or confirm the program has a curriculum with phases.
                           </div>
                         ) : null}
                         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-12 gap-4 xl:gap-6 items-end">
@@ -15570,7 +15349,7 @@ const resolvedBranchId =
                                 </span>
                                 <span className="block text-xs text-gray-600 mt-1">
                                   {hasDownpayment
-                                    ? `Downpayment amount: ₱${Number(upgradeSelectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                    ? `Downpayment amount: ?${Number(upgradeSelectedPackage.downpayment_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                                     : 'This package has no configured downpayment amount.'}
                                 </span>
                               </span>
@@ -15614,7 +15393,7 @@ const resolvedBranchId =
                                 {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                                   <div className="flex items-baseline space-x-2">
                                     <span className="text-base font-bold text-gray-900">
-                                      ₱{parseFloat(upgradeSelectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      ?{parseFloat(upgradeSelectedPackage.downpayment_amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                     <span className="text-xs text-gray-600 font-medium">Down payment</span>
                                   </div>
@@ -15622,7 +15401,7 @@ const resolvedBranchId =
                                 {upgradeSelectedPackage.package_price && (
                                   <div className="flex items-baseline space-x-2">
                                     <span className="text-base font-bold text-gray-900">
-                                      ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      ?{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                     <span className="text-xs text-gray-600 font-medium">Monthly</span>
                                   </div>
@@ -15632,7 +15411,7 @@ const resolvedBranchId =
                               upgradeSelectedPackage.package_price && (
                                 <div className="flex items-baseline space-x-2 mt-1">
                                   <span className="text-xl font-bold text-gray-900">
-                                    ₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    ?{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </span>
                                   <span className="text-xs text-gray-600 font-medium">Package Price</span>
                                 </div>
@@ -15651,7 +15430,7 @@ const resolvedBranchId =
                       </button>
                     </div>
 
-                  {/* Available Promos — directly under Selected Package */}
+                  {/* Available Promos � directly under Selected Package */}
                   {upgradeSelectedPackage && (
                     <div className="space-y-3">
                       <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-lg">
@@ -15803,7 +15582,7 @@ const resolvedBranchId =
                                       )}
                                       {promo.promo_type === 'fixed_discount' && promo.discount_amount && (
                                         <span className="text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded">
-                                          ₱{parseFloat(promo.discount_amount).toFixed(2)} OFF
+                                          ?{parseFloat(promo.discount_amount).toFixed(2)} OFF
                                         </span>
                                       )}
                                       {promo.promo_type === 'combined' && (
@@ -16264,7 +16043,7 @@ const resolvedBranchId =
                                 {pkg.package_price && (
                                   <div className="flex items-baseline space-x-2 mb-2">
                                     <span className="text-xl font-bold text-gray-900">
-                                      ₱{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                      ?{parseFloat(pkg.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                     <span className="text-xs text-gray-600 font-medium">Phase Package Price</span>
                                   </div>
@@ -16323,7 +16102,7 @@ const resolvedBranchId =
                     <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
                       <h4 className="font-semibold text-amber-900 mb-1">Acknowledgement receipt</h4>
                       <p className="text-sm text-amber-900">
-                        {upgradeSelectedAckReceipt.prospect_student_name || '—'} — Ref:{' '}
+                        {upgradeSelectedAckReceipt.prospect_student_name || '�'} � Ref:{' '}
                         {upgradeSelectedAckReceipt.ack_receipt_number ||
                           `#${upgradeSelectedAckReceipt.ack_receipt_id}`}
                       </p>
@@ -16342,12 +16121,12 @@ const resolvedBranchId =
                           <div className="mt-2 space-y-2">
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
                               <p className="text-sm text-gray-700">
-                                <strong>Down payment:</strong> <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.downpayment_amount).toFixed(2)}</span>
+                                <strong>Down payment:</strong> <span className="font-medium">?{parseFloat(upgradeSelectedPackage.downpayment_amount).toFixed(2)}</span>
                               </p>
                             )}
                             {upgradeSelectedPackage.package_price && (
                               <p className="text-sm text-gray-700">
-                                <strong>Monthly:</strong> <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.package_price).toFixed(2)}</span>
+                                <strong>Monthly:</strong> <span className="font-medium">?{parseFloat(upgradeSelectedPackage.package_price).toFixed(2)}</span>
                               </p>
                             )}
                             {upgradeSelectedPromo && (() => {
@@ -16362,13 +16141,13 @@ const resolvedBranchId =
                               }
                               return promoDiscount > 0 ? (
                                 <p className="text-sm text-blue-700">
-                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Promo Discount on Down payment ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               ) : null;
                             })()}
                             {reservationFeePaid > 0 && (
                               <p className="text-sm text-green-700">
-                                Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                             )}
                             {upgradeSelectedPackage.downpayment_amount != null && parseFloat(upgradeSelectedPackage.downpayment_amount) > 0 && (
@@ -16395,7 +16174,7 @@ const resolvedBranchId =
                           upgradeSelectedPackage.package_price && (
                             <div className="mt-2 space-y-1">
                               <p className="text-sm text-gray-700">
-                                Original Price: <span className="font-medium">₱{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                Original Price: <span className="font-medium">?{parseFloat(upgradeSelectedPackage.package_price).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                               {upgradeSelectedPromo && (() => {
                                 const packagePrice = parseFloat(upgradeSelectedPackage.package_price);
@@ -16407,13 +16186,13 @@ const resolvedBranchId =
                                 }
                                 return promoDiscount > 0 ? (
                                   <p className="text-sm text-blue-700">
-                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-₱{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Promo Discount ({upgradeSelectedPromo.promo_name}): <span className="font-medium">-?{promoDiscount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 ) : null;
                               })()}
                               {reservationFeePaid > 0 && (
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                               )}
                               <div className="pt-2 border-t border-gray-300">
@@ -16454,7 +16233,7 @@ const resolvedBranchId =
                         <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
                           <h4 className="font-semibold text-amber-900 mb-2">Installment scope</h4>
                           <p className="text-sm text-amber-900">
-                            <strong>Phases:</strong> Phase {upgradeInstallmentScopeSettings.phase_start} → Phase{' '}
+                            <strong>Phases:</strong> Phase {upgradeInstallmentScopeSettings.phase_start} ? Phase{' '}
                             {upgradeInstallmentScopeSettings.phase_end}
                           </p>
                           <p className="text-sm text-amber-900 mt-1">
@@ -16465,7 +16244,7 @@ const resolvedBranchId =
                             parseFloat(upgradeSelectedPackage.downpayment_amount || 0) > 0 &&
                             upgradeSelectedPackage.package_price && (
                               <p className="text-sm text-amber-800 mt-2">
-                                Estimated recurring installment (profile amount): ₱
+                                Estimated recurring installment (profile amount): ?
                                 {(() => {
                                   const base = parseFloat(upgradeSelectedPackage.package_price);
                                   const dp = parseFloat(upgradeSelectedPackage.downpayment_amount || 0);
@@ -16502,23 +16281,23 @@ const resolvedBranchId =
                         {upgradePerPhaseAmount && (
                           <div className="mt-2 space-y-1">
                             <p className="text-sm text-gray-700">
-                              Original Amount: <span className="font-medium">₱{parseFloat(upgradePerPhaseAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              Original Amount: <span className="font-medium">?{parseFloat(upgradePerPhaseAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </p>
                             {reservationFeePaid > 0 && (
                               <>
                                 <p className="text-sm text-green-700">
-                                  Reservation Fee Paid: <span className="font-medium">-₱{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                  Reservation Fee Paid: <span className="font-medium">-?{reservationFeePaid.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                 </p>
                                 <div className="pt-2 border-t border-gray-300">
                                   <p className="text-sm font-semibold text-gray-900">
-                                    Final Amount: <span className="text-lg">₱{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                    Final Amount: <span className="text-lg">?{Math.max(0, parseFloat(upgradePerPhaseAmount || 0) - reservationFeePaid).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                                   </p>
                                 </div>
                               </>
                             )}
                             {reservationFeePaid === 0 && (
                               <p className="text-sm font-semibold text-gray-900 mt-1">
-                                Final Amount: <span className="text-lg">₱{parseFloat(upgradePerPhaseAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                Final Amount: <span className="text-lg">?{parseFloat(upgradePerPhaseAmount || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               </p>
                             )}
                           </div>

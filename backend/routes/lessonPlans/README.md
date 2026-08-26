@@ -17,26 +17,16 @@
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/verifiers/me` | Whether the current Superadmin/Admin is a configured verifier |
-| GET | `/verifiers` | Configured verifier users (Settings; Superadmin only) |
-| PUT | `/verifiers` | Replace verifier list (`user_ids`: Superadmin and Admin). Admin users must have a `branch_id`. |
-| GET | `/?status=…` | Review queue (configured verifiers). Admin scoped to their branch. |
-| GET | `/:id` | One plan (configured verifiers; Admin branch-scoped) |
-| POST | `/:id/approve` | Approve (configured verifier; Admin branch-scoped) |
+| GET | `/verifiers/me` | Whether the current user may verify (`true` for all Superadmins; Admins only if selected in Settings) |
+| GET | `/verifiers` | Selected Admin verifier users (Settings; Superadmin only) |
+| PUT | `/verifiers` | Replace Admin verifier list (`user_ids`: Admin only, must have `branch_id`). Superadmins are not stored. |
+| GET | `/?status=…` | Review queue. Superadmin: all branches. Admin verifier: own branch. |
+| GET | `/:id` | One plan (Superadmin or configured Admin; Admin branch-scoped) |
+| POST | `/:id/approve` | Approve; optional Head Teacher review body: `head_teacher_overall_assessment`, `head_teacher_specific_feedback`, `head_teacher_next_steps` |
 | POST | `/:id/request-revision` | Send back with structured feedback: `items[{ field, highlight, note }]` and/or `reason` (general). Stored as JSON in `revision_reason`. |
 
-Review UI:
-- Superadmin **Lesson Plans** (`/superadmin/lesson-plans`) — all branches
-- Admin **Lesson Plans** (`/admin/lesson-plans`) — designated branch only
+Teacher body fields follow the **LCA Lesson Plan PDF** (phase/session, goals, objectives, assessment, materials, lesson overview, class 1–3 adjustments). Reflections: Successes / Amazing Moments / Challenges / Improvements.
 
-Settings only manages the verifier list.
+Migrations: `141_create_lesson_plan_tables.sql`, `145_align_lesson_plan_fields_to_lca_form.sql`, `146_add_deped_meta_to_branchestbl.sql`
 
-## Notifications
-
-| Event | Recipients | `navigation_key` |
-|-------|------------|------------------|
-| Teacher submits | Matching verifiers: Superadmin + Admin for plan branch (fallback: all Superadmins) | `lesson-plans` |
-| Verifier approves | Teacher who authored the plan | `lesson-plans` |
-| Verifier requests revision | Teacher who authored the plan | `lesson-plans` |
-
-Migration: `141_create_lesson_plan_tables.sql`
+`/meta` and plan rows return per-branch DepEd header fields (`region` / `division` / `district` from `branchestbl`); `school_id` is always `411093`.

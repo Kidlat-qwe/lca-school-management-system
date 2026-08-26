@@ -75,6 +75,7 @@ import PackageMerchItemVariantPanel from '../../components/packageMerch/PackageM
 import EnrollStudentSelectionLayout from '../../components/enrollStudentSelection/EnrollStudentSelectionLayout';
 import EnrollWizardStepper from '../../components/enrollStudentSelection/EnrollWizardStepper';
 import EnrollOrderSummary from '../../components/enrollStudentSelection/EnrollOrderSummary';
+import UpdatePlanModal from '../../components/updatePlan/UpdatePlanModal';
 import {
   buildEnrollSummaryItems,
   formatEnrollPackagePrice,
@@ -2002,19 +2003,23 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const fetchPackageChangePreview = async (targetPackage) => {
+  const fetchPackageChangePreview = async (targetPackage, promo = {}) => {
     if (!targetPackage || !changePackageSourceClass || !studentToChangePackage) return;
 
     setLoadingChangePackagePreview(true);
     setChangePackagePreview(null);
     try {
+      const body = {
+        target_package_id: targetPackage.package_id,
+      };
+      if (promo?.promo_id) body.promo_id = promo.promo_id;
+      if (promo?.promo_code) body.promo_code = promo.promo_code;
+
       const response = await apiRequest(
         `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-preview`,
         {
           method: 'POST',
-          body: JSON.stringify({
-            target_package_id: targetPackage.package_id,
-          }),
+          body: JSON.stringify(body),
         }
       );
       setChangePackagePreview(response.data || null);
@@ -2030,30 +2035,37 @@ const initializePackageMerchSelections = useCallback(
     }
   };
 
-  const handleChangePackageSelection = async (packageId) => {
-    const targetPackage = changePackageOptions.find((pkg) => pkg.package_id === Number(packageId)) || null;
+  const handleUpdatePlanSelectPackage = async (targetPackage, promo = {}) => {
     setSelectedTargetPackageForChange(targetPackage);
     setChangePackagePreview(null);
-
     if (targetPackage) {
-      await fetchPackageChangePreview(targetPackage);
+      await fetchPackageChangePreview(targetPackage, promo);
     }
   };
 
-  const handleCreatePackageChangeInvoice = async () => {
+  const handleUpdatePlanBackToPackages = () => {
+    setSelectedTargetPackageForChange(null);
+    setChangePackagePreview(null);
+  };
+
+  const handleCreatePackageChangeInvoice = async (promo = {}) => {
     if (!selectedTargetPackageForChange || !changePackageSourceClass || !studentToChangePackage || !changePackagePreview?.allowed) {
       return;
     }
 
     setChangePackageSubmitting(true);
     try {
+      const body = {
+        target_package_id: selectedTargetPackageForChange.package_id,
+      };
+      if (promo?.promo_id) body.promo_id = promo.promo_id;
+      if (promo?.promo_code) body.promo_code = promo.promo_code;
+
       const response = await apiRequest(
         `/classes/${changePackageSourceClass.class_id}/students/${studentToChangePackage.user_id}/package-change-invoice`,
         {
           method: 'POST',
-          body: JSON.stringify({
-            target_package_id: selectedTargetPackageForChange.package_id,
-          }),
+          body: JSON.stringify(body),
         }
       );
 
@@ -15074,254 +15086,21 @@ const initializePackageMerchSelections = useCallback(
         document.body
       )}
 
-      {isChangePackageModalOpen && studentToChangePackage && changePackageSourceClass && createPortal(
-        <div
-          className="fixed inset-0 backdrop-blur-sm bg-black/5 flex items-center justify-center z-[9999] p-4"
-          onClick={closeChangePackageModal}
-        >
-          <div
-            className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900">Update Plan</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Switch installment plan or convert to full payment. Prior payments (downpayment, reservation, phases) are credited.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeChangePackageModal}
-                className="text-gray-400 hover:text-gray-500 transition-colors"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">
-              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                <div className="text-sm text-gray-900">
-                  <span className="font-semibold">{studentToChangePackage.full_name}</span>
-                  <span className="text-gray-500"> · {changePackageSourceClass.class_name || changePackageSourceClass.level_tag}</span>
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  Installment-to-installment updates recurring billing. Full payment conversion enrolls all target phases and stops installment invoices after settlement.
-                </div>
-              </div>
-
-              <div>
-                <label htmlFor="change-package-select" className="block text-sm font-medium text-gray-700 mb-1">
-                  Target package <span className="text-red-500">*</span>
-                </label>
-                {loadingChangePackageOptions ? (
-                  <div className="py-3 text-sm text-gray-500">Loading package options...</div>
-                ) : changePackageOptions.length === 0 ? (
-                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">
-                    No installment or full payment packages are available for this branch.
-                  </div>
-                ) : (
-                  <select
-                    id="change-package-select"
-                    value={selectedTargetPackageForChange?.package_id ?? ''}
-                    onChange={(e) => handleChangePackageSelection(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#F7C844] focus:border-[#F7C844]"
-                  >
-                    <option value="">— Select package —</option>
-                    {changePackageOptions.map((pkg) => {
-                      const activePackageId = Number(
-                        studentToChangePackage?.current_package_id || 0
-                      );
-                      const isCurrent =
-                        activePackageId > 0 &&
-                        Number(pkg.package_id) === activePackageId;
-                      return (
-                        <option
-                          key={pkg.package_id}
-                          value={pkg.package_id}
-                          disabled={isCurrent}
-                        >
-                          {formatChangePackageOptionLabel(pkg)}
-                          {isCurrent ? ' (current plan)' : ''}
-                        </option>
-                      );
-                    })}
-                  </select>
-                )}
-              </div>
-
-              {loadingChangePackagePreview && (
-                <div className="flex items-center justify-center py-10">
-                  <div className="animate-spin rounded-full h-8 w-8 border-2 border-gray-200 border-t-gray-500"></div>
-                </div>
-              )}
-
-              {!loadingChangePackagePreview && changePackagePreview && (
-                <div className="space-y-4">
-                  <div
-                    className={`rounded-lg border px-4 py-3 ${
-                      changePackagePreview.allowed
-                        ? 'border-emerald-200 bg-emerald-50'
-                        : 'border-amber-200 bg-amber-50'
-                    }`}
-                  >
-                    <p className={`text-sm font-medium ${changePackagePreview.allowed ? 'text-emerald-700' : 'text-amber-700'}`}>
-                      {changePackagePreview.message}
-                    </p>
-                  </div>
-
-                  {changePackagePreview.current_package && changePackagePreview.target_package && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="rounded-lg border border-gray-200 p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Current package</h3>
-                        <div className="space-y-2 text-sm text-gray-600">
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Package</span>
-                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.current_package.package_name}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Downpayment</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.downpayment_amount)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Recurring amount</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_package.recurring_amount)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="rounded-lg border border-gray-200 p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 mb-3">Target package</h3>
-                        <div className="space-y-2 text-sm text-gray-600">
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Package</span>
-                            <span className="font-medium text-gray-900 text-right">{changePackagePreview.target_package.package_name}</span>
-                          </div>
-                          {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
-                            <>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Full payment price</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.full_payment_price)}</span>
-                              </div>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Enrollment after conversion</span>
-                                <span className="font-medium text-gray-900 text-right">
-                                  Phases {changePackagePreview.target_phase_start}–{changePackagePreview.target_phase_end}
-                                </span>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Downpayment</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.downpayment_amount)}</span>
-                              </div>
-                              <div className="flex items-center justify-between gap-4">
-                                <span>Recurring amount</span>
-                                <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_package.recurring_amount)}</span>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="rounded-lg border border-gray-200 p-4">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3">Calculation summary</h3>
-                    <div className="space-y-2 text-sm text-gray-600">
-                      {changePackagePreview.change_type === 'installment_to_fullpayment' ? (
-                        <>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Current installment scope</span>
-                            <span className="font-medium text-gray-900">
-                              Phases {changePackagePreview.current_phase_start}–{changePackagePreview.current_phase_end}
-                            </span>
-                          </div>
-                          {(changePackagePreview.reservation_fee_credited ?? 0) > 0 && (
-                            <div className="flex items-center justify-between gap-4">
-                              <span>Reservation fee credited</span>
-                              <span className="font-medium text-gray-900">
-                                {formatMoney(changePackagePreview.reservation_fee_credited)}
-                              </span>
-                            </div>
-                          )}
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Downpayment &amp; phase payments credited</span>
-                            <span className="font-medium text-gray-900">
-                              {formatMoney(changePackagePreview.installment_payments_credited ?? changePackagePreview.credit_total)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4 border-t border-gray-100 pt-2">
-                            <span>Total payments credited</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.credit_total)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Full payment package price</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_full_price)}</span>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Paid recurring phases</span>
-                            <span className="font-medium text-gray-900">{changePackagePreview.recurring_paid_count ?? 0}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Current package paid total</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.current_paid_total)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span>Target package equivalent total</span>
-                            <span className="font-medium text-gray-900">{formatMoney(changePackagePreview.target_equivalent_total)}</span>
-                          </div>
-                        </>
-                      )}
-                      <div className="border-t border-gray-200 pt-2 flex items-center justify-between gap-4">
-                        <span className="font-semibold text-gray-900">
-                          {changePackagePreview.change_type === 'installment_to_fullpayment' && changePackagePreview.difference === 0
-                            ? 'Balance due'
-                            : 'Additional amount to invoice'}
-                        </span>
-                        <span className={`font-semibold ${changePackagePreview.difference > 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                          {formatMoney(changePackagePreview.difference)}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={closeChangePackageModal}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleCreatePackageChangeInvoice}
-                disabled={!changePackagePreview?.allowed || !selectedTargetPackageForChange || changePackageSubmitting}
-                className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {changePackageSubmitting
-                  ? 'Processing...'
-                  : changePackagePreview?.change_type === 'installment_to_fullpayment' && changePackagePreview?.difference === 0
-                    ? 'Convert to Full Payment'
-                    : changePackagePreview?.change_type === 'installment_to_fullpayment'
-                      ? 'Create Conversion Invoice'
-                      : 'Create Adjustment Invoice'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      <UpdatePlanModal
+        open={isChangePackageModalOpen && Boolean(studentToChangePackage && changePackageSourceClass)}
+        student={studentToChangePackage}
+        sourceClass={changePackageSourceClass}
+        packages={changePackageOptions}
+        loadingPackages={loadingChangePackageOptions}
+        selectedPackage={selectedTargetPackageForChange}
+        preview={changePackagePreview}
+        loadingPreview={loadingChangePackagePreview}
+        submitting={changePackageSubmitting}
+        onClose={closeChangePackageModal}
+        onSelectPackage={handleUpdatePlanSelectPackage}
+        onBackToPackages={handleUpdatePlanBackToPackages}
+        onConfirm={handleCreatePackageChangeInvoice}
+      />
 
       {/* Move Student to Another Class Modal */}
       {isMoveStudentModalOpen && studentToMove && moveSourceClass && createPortal(
