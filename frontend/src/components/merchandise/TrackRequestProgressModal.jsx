@@ -2,6 +2,11 @@ import { createPortal } from 'react-dom';
 import { formatDateTimeManila } from '../../utils/dateUtils';
 import { getMerchandiseRequestApprovedBy } from '../../utils/merchandiseRequests/approvedBy';
 import { buildTrackProgressSteps } from '../../utils/merchandiseRequests/trackProgress';
+import {
+  formatRequestQuantityLabel,
+  getRequestQuantityAdjustmentRemarks,
+  hasInventoryQuantityAdjustment,
+} from '../../utils/merchandiseRequests/quantityAdjustment';
 
 function stepCircleClass(state) {
   if (state === 'completed') return 'bg-green-600 border-green-600 text-white';
@@ -112,8 +117,16 @@ export default function TrackRequestProgressModal({
                   {request.size ? <span>Size: {request.size}</span> : null}
                   {request.gender ? <span>Gender: {request.gender}</span> : null}
                   {request.type ? <span>Type: {request.type}</span> : null}
-                  <span>Qty: {request.requested_quantity}</span>
+                  <span>Qty: {formatRequestQuantityLabel(request)}</span>
                 </div>
+                {hasInventoryQuantityAdjustment(request) ? (
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+                    <span className="font-medium">Qty adjusted by warehouse</span>
+                    {getRequestQuantityAdjustmentRemarks(request) ? (
+                      <span className="text-amber-900"> — {getRequestQuantityAdjustmentRemarks(request)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
                 {sku ? <div className="text-xs text-gray-500">SKU: {sku}</div> : null}
                 <div className="text-xs text-gray-500 break-words">
                   Requested: {formatDateTimeManila(request.created_at)}

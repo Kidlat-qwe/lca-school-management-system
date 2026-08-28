@@ -1,4 +1,5 @@
 import { getAnnouncementsPathForUser } from './announcementsNav';
+import { LESSON_PLANS_ENABLED } from './lessonPlansFeature';
 import {
   buildDailySummaryPath,
   DAILY_SUMMARY_KIND,
@@ -31,6 +32,7 @@ function getNotificationBasePath(navigationKey, userInfo) {
       return getAnnouncementsPathForUser(userInfo);
 
     case 'lesson-plans':
+      if (!LESSON_PLANS_ENABLED) return getAnnouncementsPathForUser(userInfo);
       if (userType === 'Superadmin') return '/superadmin/lesson-plans';
       if (userType === 'Admin') return '/admin/lesson-plans';
       if (userType === 'Teacher') return '/teacher/lesson-plans';
@@ -72,9 +74,10 @@ function inferNotificationNavigation(notification) {
     return { navigationKey: 'merchandise', navigationQuery: 'notificationTab=requests' };
   }
   if (
-    title.includes('lesson plan submitted') ||
-    title.includes('lesson plan approved') ||
-    title.includes('lesson plan revision')
+    LESSON_PLANS_ENABLED &&
+    (title.includes('lesson plan submitted') ||
+      title.includes('lesson plan approved') ||
+      title.includes('lesson plan revision'))
   ) {
     return { navigationKey: 'lesson-plans', navigationQuery: '' };
   }

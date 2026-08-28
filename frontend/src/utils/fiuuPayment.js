@@ -9,9 +9,10 @@ import API_BASE_URL from '../config/api';
 
 /**
  * Show Pay via FIUU on Record Payment and AR Create Step 2 (Admin/Superadmin).
- * Set false to hide the tab while FIUU UAT is paused.
+ * Hidden by default — set VITE_FIUU_PAYMENT_UI_ENABLED=true in frontend env to show.
  */
-export const FIUU_PAYMENT_UI_ENABLED = true;
+export const FIUU_PAYMENT_UI_ENABLED =
+  String(import.meta.env.VITE_FIUU_PAYMENT_UI_ENABLED || '').toLowerCase() === 'true';
 
 export async function fetchFiuuConfig() {
   if (!FIUU_PAYMENT_UI_ENABLED) {

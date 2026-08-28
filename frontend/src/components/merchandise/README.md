@@ -50,9 +50,12 @@ Request Stock panel for Learning Kit: kit picker + BOM component collector
 ## MerchandiseRequestStatusModules
 
 RHET Inventory-style status chips for Merchandise → **My Requests** /
-**Stock Requests**:
+**Stock Requests** tab:
 
 `Pending` · `Shipped` · `Delivered` · `Returned` · `Rejected`
+
+**RequestQuantityDisplay** — read-only qty when RHET adjusted before ship
+(Requested N · Approved for ship M + warehouse remarks).
 
 Shows live counts and filters the request table. Legacy `Approved` counts as Delivered.
 Each module has its own pagination (10 requests per page via `FixedTablePagination`).

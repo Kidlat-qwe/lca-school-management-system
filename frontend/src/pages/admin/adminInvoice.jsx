@@ -66,7 +66,7 @@ import {
   invoicePayActionLabel,
 } from '../../utils/invoicePaymentTarget';
 import FiuuPayOnlinePanel from '../../components/payments/FiuuPayOnlinePanel';
-import { fetchFiuuConfig } from '../../utils/fiuuPayment';
+import { FIUU_PAYMENT_UI_ENABLED, fetchFiuuConfig } from '../../utils/fiuuPayment';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -997,7 +997,10 @@ const AdminInvoice = () => {
   };
 
   useEffect(() => {
-    if (!showPaymentModal) return;
+    if (!showPaymentModal || !FIUU_PAYMENT_UI_ENABLED) {
+      setFiuuEnabled(false);
+      return undefined;
+    }
     let cancelled = false;
     fetchFiuuConfig()
       .then((cfg) => {

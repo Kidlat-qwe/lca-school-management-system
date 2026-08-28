@@ -196,6 +196,13 @@ for normal fulfills — that script is one-time legacy cleanup only.
 | `135_...` | Document lifecycle statuses (Pending/Shipped/Delivered/Returned) |
 | `137_...` | Allow `Set` on type CHECKs (uniform Request Stock) |
 | `139_...` | Allow `ACC` / `Beeli` / `LCA` on type CHECKs (RHET Shirt logos) |
+| `147_...` | `inventory_original_quantity`, `inventory_adjustment_remarks`, `inventory_adjusted_by`, `inventory_adjusted_at` |
+
+## RHET quantity adjustment (before ship)
+
+Warehouse may reduce a **PENDING** line qty in RHET (`stock_request.quantity_adjusted`).
+CMS stores the approved ship qty on `requested_quantity`, preserves the original on
+`inventory_original_quantity`, and credits branch stock using the **adjusted** qty on deliver.
 
 ## Repair stuck DELIVERED (e.g. PSMS-33)
 
@@ -244,9 +251,11 @@ See `frontend/src/utils/packageMerchSwap/`,
 - `node backend/tests/stockRequestLifecycle.test.js` — shipped/delivered/returned helpers
 - `node backend/tests/inventoryBranchNamePayload.test.js` — `branchName` + `batchReference` + Return Stock `PSMS-RET-*`
 - `node backend/tests/inventoryReturnLifecycle.test.js` — PENDING create success + stock_return.* vs stock_request.returned
+- `node backend/tests/inventoryQuantityAdjustment.test.js` — RHET qty adjustment patch + fulfill qty
 - Grep: no `merchandisestbl` SQL should reference `updated_at`
 - Shipped webhook → 200, Shipped, stock unchanged
-- Delivered webhook → 200, Delivered, stock +qty once; fulfilled alias replay → stock unchanged
+- quantity_adjusted webhook → requested_quantity updated, original stored, no branch stock
+- Delivered webhook → 200, Delivered, stock +qty once (adjusted qty if RHET reduced line)
 - Returned (wasDelivered) → Returned, stock reversed once
 - Reject webhook → Rejected, no stock add
 - Branch has type Backpack qty 0 → deliver Backpack/lca-backpack → Backpack qty += N;

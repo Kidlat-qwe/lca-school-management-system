@@ -12,6 +12,7 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | `catalogBundleFilter.js` | Virtual-bundle filter: parent categories (Tool Kit) show kit SKUs only, not raw BOM parts in `components[]`. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
+| `quantityAdjustment.js` | RHET qty adjustment display: Requested vs Approved for ship + warehouse remarks. |
 | `requestActionMenu.js` | Ellipsis menu items + `canConfirmReceived` (Shipped, not return, has RHET id). Admin My Requests Shipped tab uses checkboxes for bulk Confirm received. |
 | `requestStatusModules.js` | Count/filter/paginate helpers for My Requests status modules (Pending / Shipped / Delivered / Returned / Rejected). |
 | `uniqueCartCategory.js` | Request / Return carts: one category per row (no double-select). |

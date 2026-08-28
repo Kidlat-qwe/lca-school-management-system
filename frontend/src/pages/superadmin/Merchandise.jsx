@@ -23,6 +23,7 @@ import MerchandiseReleaseLogsPanel from '../../components/merchandise/Merchandis
 import PackageMerchPendingQueue from '../../components/packageMerch/PackageMerchPendingQueue';
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
+import RequestQuantityDisplay from '../../components/merchandise/RequestQuantityDisplay';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import FixedTablePagination, {
@@ -1845,7 +1846,7 @@ const Merchandise = () => {
                     </div>
                     <div>
                       <span className="text-gray-500">Quantity:</span>
-                      <p className="font-medium text-gray-900">{selectedRequest.requested_quantity}</p>
+                      <RequestQuantityDisplay request={selectedRequest} className="mt-0.5" />
                     </div>
                     <div className="col-span-2">
                       <span className="text-gray-500">Reason:</span>
@@ -2007,7 +2008,7 @@ const Merchandise = () => {
                     </div>
                     <div>
                       <span className="text-gray-500">Quantity:</span>
-                      <p className="font-medium text-gray-900">{selectedRequest.requested_quantity}</p>
+                      <RequestQuantityDisplay request={selectedRequest} className="mt-0.5" />
                     </div>
                     {selectedRequest.merchandise_price && (
                       <div>

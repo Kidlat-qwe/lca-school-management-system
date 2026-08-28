@@ -3,6 +3,7 @@ import { apiRequest } from '../../config/api';
 import TemplateEditorCard from '../../components/settings/TemplateEditorCard';
 import ArchivedClassesPanel from '../../components/settings/ArchivedClassesPanel';
 import LessonPlanSettingsPanel from '../../components/settings/LessonPlanSettingsPanel';
+import { LESSON_PLANS_ENABLED } from '../../utils/lessonPlansFeature';
 import {
   TEMPLATE_DEFS,
   TEMPLATE_KEYS,
@@ -24,6 +25,10 @@ const TABS = [
   { id: 'lesson_plans', label: 'Lesson Plans' },
   { id: 'archived', label: 'Archived Classes' },
 ];
+
+const visibleSettingsTabs = TABS.filter(
+  (tab) => tab.id !== 'lesson_plans' || LESSON_PLANS_ENABLED
+);
 
 // Returns today as YYYY-MM-DD (local)
 const todayStr = () => {
@@ -562,7 +567,7 @@ const Settings = () => {
         <div className="rounded-2xl bg-white shadow-sm ring-1 ring-gray-100 overflow-hidden">
           <div className="border-b border-gray-200 px-4 sm:px-5">
             <nav className="-mb-px flex gap-0" aria-label="Settings tabs">
-              {TABS.map((tab) => (
+              {visibleSettingsTabs.map((tab) => (
                 <button
                   key={tab.id}
                   type="button"

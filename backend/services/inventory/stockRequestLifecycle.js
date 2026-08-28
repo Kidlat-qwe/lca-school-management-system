@@ -155,3 +155,10 @@ export function isStockReturnReceivedEvent(payload) {
   if (event.includes('stock_return') && event.includes('received')) return true;
   return isStockReturnWebhookEvent(payload) && !isStockReturnAcceptedEvent(payload);
 }
+
+export function isQuantityAdjustedEvent(payload) {
+  const event = normalizeEventName(payload?.event);
+  return (
+    event === 'stock_request.quantity_adjusted' || event.endsWith('.quantity_adjusted')
+  );
+}

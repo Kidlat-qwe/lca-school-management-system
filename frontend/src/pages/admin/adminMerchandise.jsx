@@ -22,6 +22,7 @@ import PackageMerchPendingQueue from '../../components/packageMerch/PackageMerch
 import RhetCategorySelect from '../../components/merchandise/RhetCategorySelect';
 import LearningKitRequestFields from '../../components/merchandise/LearningKitRequestFields';
 import TrackRequestProgressModal from '../../components/merchandise/TrackRequestProgressModal';
+import RequestQuantityDisplay from '../../components/merchandise/RequestQuantityDisplay';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
@@ -3193,7 +3194,7 @@ const AdminMerchandise = () => {
                           <div className="text-sm text-gray-900">{request.size || 'N/A'}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm text-gray-900">{request.requested_quantity}</div>
+                          <RequestQuantityDisplay request={request} />
                         </td>
                         <td className="px-6 py-4">
                           <div

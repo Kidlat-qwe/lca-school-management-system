@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { AlertModalProvider } from './contexts/AlertModalContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
+import { LESSON_PLANS_ENABLED } from './utils/lessonPlansFeature';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
 import FiuuPublicPayPage from './pages/public/FiuuPublicPayPage';
@@ -156,7 +157,16 @@ function App() {
             <Route path="calendar-schedule" element={<CalendarSchedule />} />
             <Route path="holidays" element={<Holidays />} />
             <Route path="announcements" element={<Announcements />} />
-            <Route path="lesson-plans" element={<SuperadminLessonPlans />} />
+            <Route
+              path="lesson-plans"
+              element={
+                LESSON_PLANS_ENABLED ? (
+                  <SuperadminLessonPlans />
+                ) : (
+                  <Navigate to="/superadmin/monthly-operational-dashboard" replace />
+                )
+              }
+            />
             <Route path="settings" element={<Settings />} />
             <Route path="system-logs" element={<SystemLogs />} />
           </Route>
@@ -191,7 +201,16 @@ function App() {
             <Route path="program" element={<AdminProgram />} />
             <Route path="classes" element={<AdminClasses />} />
             <Route path="announcements" element={<AdminAnnouncements />} />
-            <Route path="lesson-plans" element={<SuperadminLessonPlans />} />
+            <Route
+              path="lesson-plans"
+              element={
+                LESSON_PLANS_ENABLED ? (
+                  <SuperadminLessonPlans />
+                ) : (
+                  <Navigate to="/admin/monthly-operational-dashboard" replace />
+                )
+              }
+            />
             <Route path="package" element={<AdminPackage />} />
             <Route path="pricinglist" element={<AdminPricingList />} />
             <Route path="merchandise" element={<AdminMerchandise />} />
@@ -229,7 +248,16 @@ function App() {
             <Route path="student-list" element={<TeacherStudentList />} />
             <Route path="program" element={<TeacherProgram />} />
             <Route path="curriculum" element={<TeacherCurriculum />} />
-            <Route path="lesson-plans" element={<TeacherLessonPlans />} />
+            <Route
+              path="lesson-plans"
+              element={
+                LESSON_PLANS_ENABLED ? (
+                  <TeacherLessonPlans />
+                ) : (
+                  <Navigate to="/teacher" replace />
+                )
+              }
+            />
           </Route>
           
           {/* Student Routes */}

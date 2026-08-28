@@ -51,6 +51,11 @@ import {
   isStockCreditedLocalStatus,
   normalizeRemoteStatus,
 } from '../services/inventory/stockRequestLifecycle.js';
+import {
+  applyQuantityAdjustmentUpdate,
+  buildQuantityAdjustmentPatch,
+  withFulfillQuantity,
+} from '../services/inventory/quantityAdjustment.js';
 
 const router = express.Router();
 
@@ -1617,7 +1622,7 @@ router.post(
         return res.status(404).json({ success: false, message: 'Request not found' });
       }
 
-      const request = locked.rows[0];
+      let request = locked.rows[0];
       if (!request.inventory_request_id) {
         await client.query('ROLLBACK');
         return res.status(400).json({
@@ -1682,6 +1687,30 @@ router.post(
       const processedBy = pickApproverName(remote.data || remote);
       const storeStatus =
         remoteStatus === 'FULFILLED' ? 'DELIVERED' : remoteStatus || null;
+
+      const qtyPatch = buildQuantityAdjustmentPatch(request, remote.data || {});
+      if (qtyPatch && !isStockCreditedLocalStatus(request.status)) {
+        try {
+          await applyQuantityAdjustmentUpdate(
+            client.query.bind(client),
+            request.request_id,
+            request,
+            qtyPatch
+          );
+          const qtyRefresh = await client.query(
+            'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1',
+            [request.request_id]
+          );
+          if (qtyRefresh.rows[0]) {
+            request = qtyRefresh.rows[0];
+          }
+        } catch (qtyErr) {
+          console.warn(
+            '[merchandise-requests] sync-inventory quantity sync skipped:',
+            qtyErr.message
+          );
+        }
+      }
 
       await runIgnoringMissingUpdatedAt(
         client.query.bind(client),
@@ -1759,19 +1788,25 @@ router.post(
         request,
         payload: remote.data || {},
       });
-      const stockResult = await applyMerchandiseRequestStock(client, {
-        ...request,
-        inventory_matched_sku:
-          remote.data?.matchedSku || request.inventory_matched_sku || null,
-        inventory_category_name:
-          remote.data?.categoryName ||
-          remote.data?.category_name ||
-          request.inventory_category_name ||
-          null,
-        gender: identity.gender,
-        type: identity.type,
-        size: identity.size,
-      });
+      const stockResult = await applyMerchandiseRequestStock(
+        client,
+        withFulfillQuantity(
+          {
+            ...request,
+            inventory_matched_sku:
+              remote.data?.matchedSku || request.inventory_matched_sku || null,
+            inventory_category_name:
+              remote.data?.categoryName ||
+              remote.data?.category_name ||
+              request.inventory_category_name ||
+              null,
+            gender: identity.gender,
+            type: identity.type,
+            size: identity.size,
+          },
+          remote.data || {}
+        )
+      );
       if (stockResult?.merchandiseId) {
         await client.query(
           `UPDATE merchandiserequestlogtbl SET merchandise_id = $1 WHERE request_id = $2`,
@@ -1967,24 +2002,30 @@ router.post(
         request,
         payload: remoteData || {},
       });
-      const stockResult = await applyMerchandiseRequestStock(client, {
-        ...request,
-        inventory_matched_sku:
-          remoteData?.matchedSku || request.inventory_matched_sku || null,
-        inventory_item_name:
-          remoteData?.itemName ||
-          remoteData?.item_name ||
-          request.inventory_item_name ||
-          null,
-        inventory_category_name:
-          remoteData?.categoryName ||
-          remoteData?.category_name ||
-          request.inventory_category_name ||
-          null,
-        gender: identity.gender,
-        type: identity.type,
-        size: identity.size,
-      });
+      const stockResult = await applyMerchandiseRequestStock(
+        client,
+        withFulfillQuantity(
+          {
+            ...request,
+            inventory_matched_sku:
+              remoteData?.matchedSku || request.inventory_matched_sku || null,
+            inventory_item_name:
+              remoteData?.itemName ||
+              remoteData?.item_name ||
+              request.inventory_item_name ||
+              null,
+            inventory_category_name:
+              remoteData?.categoryName ||
+              remoteData?.category_name ||
+              request.inventory_category_name ||
+              null,
+            gender: identity.gender,
+            type: identity.type,
+            size: identity.size,
+          },
+          remoteData || {}
+        )
+      );
 
       if (stockResult?.merchandiseId) {
         await client.query(

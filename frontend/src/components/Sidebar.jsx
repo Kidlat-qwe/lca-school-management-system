@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiRequest } from '../config/api';
+import { LESSON_PLANS_ENABLED } from '../utils/lessonPlansFeature';
 
 const Sidebar = ({ isOpen, onClose }) => {
   const location = useLocation();
@@ -43,7 +44,7 @@ const Sidebar = ({ isOpen, onClose }) => {
   const [expandedNestedMenu, setExpandedNestedMenu] = useState(null);
 
   useEffect(() => {
-    if (userType !== 'Superadmin' && userType !== 'Admin') {
+    if (!LESSON_PLANS_ENABLED || (userType !== 'Superadmin' && userType !== 'Admin')) {
       setIsLessonPlanVerifier(false);
       return undefined;
     }
@@ -468,6 +469,7 @@ const Sidebar = ({ isOpen, onClose }) => {
   const menuItems = allMenuItems
     .filter((item) => {
       if (!item.roles.includes(userType)) return false;
+      if (item.name === 'Lesson Plans' && !LESSON_PLANS_ENABLED) return false;
       if (item.requiresLessonPlanVerifier && !isLessonPlanVerifier) return false;
       return true;
     })

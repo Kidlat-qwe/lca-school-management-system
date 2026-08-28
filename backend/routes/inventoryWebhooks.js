@@ -18,6 +18,13 @@ import {
   runIgnoringMissingUpdatedAt,
 } from '../services/inventory/runMerchRequestSql.js';
 import {
+  buildQuantityAdjustmentPatch,
+  isQuantityAdjustmentNoOp,
+  resolveFulfillQuantity,
+  withFulfillQuantity,
+  applyQuantityAdjustmentUpdate,
+} from '../services/inventory/quantityAdjustment.js';
+import {
   LOCAL_REQUEST_STATUS,
   isDeliveredEvent,
   isRejectedEvent,
@@ -30,6 +37,7 @@ import {
   isStockReturnWebhookEvent,
   isStockReturnAcceptedEvent,
   isStockReturnReceivedEvent,
+  isQuantityAdjustedEvent,
 } from '../services/inventory/stockRequestLifecycle.js';
 
 const router = express.Router();
@@ -219,22 +227,135 @@ async function syncInventoryFields(
 
 function buildStockApplyRequest(request, payload) {
   const identity = resolveUniformFulfillIdentity({ request, payload });
-  return {
-    ...request,
-    inventory_matched_sku: payload.matchedSku || request.inventory_matched_sku || null,
-    inventory_item_name:
-      payload.itemName || payload.item_name || request.inventory_item_name || null,
-    inventory_requested_sku:
-      request.inventory_requested_sku || payload.matchedSku || null,
-    inventory_category_name:
-      payload.categoryName ||
-      payload.category_name ||
-      request.inventory_category_name ||
-      null,
-    gender: identity.gender,
-    type: identity.type,
-    size: identity.size,
-  };
+  return withFulfillQuantity(
+    {
+      ...request,
+      inventory_matched_sku: payload.matchedSku || request.inventory_matched_sku || null,
+      inventory_item_name:
+        payload.itemName || payload.item_name || request.inventory_item_name || null,
+      inventory_requested_sku:
+        request.inventory_requested_sku || payload.matchedSku || null,
+      inventory_category_name:
+        payload.categoryName ||
+        payload.category_name ||
+        request.inventory_category_name ||
+        null,
+      gender: identity.gender,
+      type: identity.type,
+      size: identity.size,
+    },
+    payload
+  );
+}
+
+function isMissingQuantityAdjustmentColumn(error) {
+  return (
+    isMissingColumnError(error, 'inventory_original_quantity') ||
+    isMissingColumnError(error, 'inventory_adjustment_remarks') ||
+    isMissingColumnError(error, 'inventory_adjusted_by') ||
+    isMissingColumnError(error, 'inventory_adjusted_at')
+  );
+}
+
+/**
+ * RHET warehouse reduced qty on a PENDING line (stock_request.quantity_adjusted).
+ * Updates local row only — no branch stock change.
+ */
+async function handleQuantityAdjusted(localRequest, payload) {
+  const patch = buildQuantityAdjustmentPatch(localRequest, payload);
+  if (!patch) {
+    return { applied: false, reason: 'invalid_quantity' };
+  }
+
+  if (isQuantityAdjustmentNoOp(localRequest, patch)) {
+    return { applied: false, reason: 'already_synced' };
+  }
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const locked = await client.query(
+      'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1 FOR UPDATE',
+      [localRequest.request_id]
+    );
+    const request = locked.rows[0];
+    if (!request) {
+      await client.query('ROLLBACK');
+      return { applied: false, reason: 'not_found' };
+    }
+
+    if (isQuantityAdjustmentNoOp(request, patch)) {
+      await client.query('COMMIT');
+      return { applied: false, reason: 'already_synced' };
+    }
+
+    // Do not adjust qty after branch stock was credited
+    if (isStockCreditedLocalStatus(request.status)) {
+      await client.query('COMMIT');
+      return { applied: false, reason: `status_${request.status}` };
+    }
+
+    try {
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET requested_quantity = $1,
+             inventory_original_quantity = COALESCE(inventory_original_quantity, $2),
+             inventory_adjustment_remarks = $3,
+             inventory_adjusted_by = $4,
+             inventory_adjusted_at = COALESCE($5::timestamptz, CURRENT_TIMESTAMP),
+             inventory_request_id = COALESCE($6, inventory_request_id),
+             inventory_external_reference = COALESCE($7, inventory_external_reference),
+             inventory_matched_sku = COALESCE($8, inventory_matched_sku),
+             inventory_status = COALESCE($9, inventory_status),
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $10`,
+        [
+          patch.adjustedQty,
+          patch.originalQty,
+          patch.remarks,
+          patch.adjustedBy,
+          patch.adjustedAt,
+          payload.requestId || null,
+          payload.externalReference || null,
+          payload.matchedSku || null,
+          payload.status ? String(payload.status).toUpperCase() : 'PENDING',
+          request.request_id,
+        ]
+      );
+    } catch (error) {
+      if (!isMissingQuantityAdjustmentColumn(error)) throw error;
+      console.error(
+        '[inventory-webhook] quantity adjustment columns missing — run migration 147. Falling back to requested_quantity only.'
+      );
+      await runIgnoringMissingUpdatedAt(
+        client.query.bind(client),
+        `UPDATE merchandiserequestlogtbl
+         SET requested_quantity = $1,
+             inventory_synced_at = CURRENT_TIMESTAMP,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE request_id = $2`,
+        [patch.adjustedQty, request.request_id]
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log(
+      `[inventory-webhook] quantity_adjusted local=${request.request_id} ${patch.originalQty ?? '?'}→${patch.adjustedQty}`
+    );
+    return {
+      applied: true,
+      adjustedQty: patch.adjustedQty,
+      originalQty: patch.originalQty,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -254,6 +375,27 @@ async function handleShipped(localRequest, payload, inventoryStatus) {
     if (!request) {
       await client.query('ROLLBACK');
       return { applied: false, reason: 'not_found' };
+    }
+
+    const qtyPatch = buildQuantityAdjustmentPatch(request, payload);
+    if (qtyPatch && !isStockCreditedLocalStatus(request.status)) {
+      try {
+        await applyQuantityAdjustmentUpdate(
+          client.query.bind(client),
+          request.request_id,
+          request,
+          qtyPatch
+        );
+        const refreshed = await client.query(
+          'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1',
+          [request.request_id]
+        );
+        if (refreshed.rows[0]) {
+          Object.assign(request, refreshed.rows[0]);
+        }
+      } catch (qtyErr) {
+        if (!isMissingQuantityAdjustmentColumn(qtyErr)) throw qtyErr;
+      }
     }
 
     // Already past shipped (delivered/approved/returned) — sync fields only
@@ -331,13 +473,14 @@ async function handleShipped(localRequest, payload, inventoryStatus) {
       );
     }
 
+    const shipQty = resolveFulfillQuantity(request, payload);
     const shipperLabel = processedBy ? ` (${processedBy})` : '';
     await client.query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         'Stock Request Shipped',
-        `${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked shipped by RHET Central Inventory${shipperLabel}. Stock will be added to your branch when delivery is confirmed.`,
+        `${shipQty} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked shipped by RHET Central Inventory${shipperLabel}. Stock will be added to your branch when delivery is confirmed.`,
         ['Admin'],
         'Active',
         'Medium',
@@ -378,6 +521,27 @@ async function handleDelivered(localRequest, payload, inventoryStatus, rejection
     if (!request) {
       await client.query('ROLLBACK');
       return { applied: false, reason: 'not_found' };
+    }
+
+    const qtyPatch = buildQuantityAdjustmentPatch(request, payload);
+    if (qtyPatch && !isStockCreditedLocalStatus(request.status)) {
+      try {
+        await applyQuantityAdjustmentUpdate(
+          client.query.bind(client),
+          request.request_id,
+          request,
+          qtyPatch
+        );
+        const refreshed = await client.query(
+          'SELECT * FROM merchandiserequestlogtbl WHERE request_id = $1',
+          [request.request_id]
+        );
+        if (refreshed.rows[0]) {
+          Object.assign(request, refreshed.rows[0]);
+        }
+      } catch (qtyErr) {
+        if (!isMissingQuantityAdjustmentColumn(qtyErr)) throw qtyErr;
+      }
     }
 
     const processedBy = await syncInventoryFields(
@@ -461,13 +625,14 @@ async function handleDelivered(localRequest, payload, inventoryStatus, rejection
       );
     }
 
+    const deliverQty = resolveFulfillQuantity(request, payload);
     const approverLabel = processedBy ? ` (${processedBy})` : '';
     await client.query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         'Stock Delivered from Central Inventory',
-        `${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked delivered by RHET Central Inventory${approverLabel} and added to your branch stock.`,
+        `${deliverQty} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} were marked delivered by RHET Central Inventory${approverLabel} and added to your branch stock.`,
         ['Admin'],
         'Active',
         'Medium',
@@ -747,6 +912,7 @@ async function handleReturned(localRequest, payload, inventoryStatus) {
       );
     }
 
+    const returnQty = resolveFulfillQuantity(request, payload);
     const actorLabel = processedBy ? ` (${processedBy})` : '';
     await client.query(
       `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
@@ -754,8 +920,8 @@ async function handleReturned(localRequest, payload, inventoryStatus) {
       [
         'Stock Request Returned',
         wasDelivered
-          ? `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel}. Branch stock was reversed.`
-          : `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel} before delivery. Branch stock was unchanged.`,
+          ? `Your request for ${returnQty} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel}. Branch stock was reversed.`
+          : `Your request for ${returnQty} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was returned to RHET warehouse${actorLabel} before delivery. Branch stock was unchanged.`,
         ['Admin'],
         'Active',
         'Medium',
@@ -856,6 +1022,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
         );
       }
 
+      const rejectQty = resolveFulfillQuantity(request, payload);
       const rejectorLabel = processedBy ? ` by ${processedBy}` : '';
 
       await client.query(
@@ -863,7 +1030,7 @@ async function handleRejected(localRequest, payload, inventoryStatus, rejectionR
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           'Stock Request Rejected by Central Inventory',
-          `Your request for ${request.requested_quantity} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was rejected by RHET Central Inventory${rejectorLabel}.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
+          `Your request for ${rejectQty} units of ${request.merchandise_name}${request.size ? ` (Size: ${request.size})` : ''} was rejected by RHET Central Inventory${rejectorLabel}.${rejectionReason ? ` Reason: ${rejectionReason}` : ''}`,
           ['Admin'],
           'Active',
           'Medium',
@@ -971,6 +1138,11 @@ router.post('/', async (req, res) => {
         message: 'Ignored stock_request event for Return Stock row',
         ignored: true,
       });
+    }
+
+    if (isQuantityAdjustedEvent(payload)) {
+      const result = await handleQuantityAdjusted(localRequest, payload);
+      return res.json({ success: true, ...result });
     }
 
     // Order matters: returned/rejected before delivered; shipped before created fallback.
