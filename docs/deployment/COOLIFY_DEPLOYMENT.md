@@ -126,10 +126,11 @@ env are correct.
   BREVO_FROM_EMAIL=no-reply@little-champion.com
   BREVO_FROM_NAME=Little Champions Academy Inc.
 
-  # SMS
+  # SMS (Semaphore)
   SMS_NOTIFICATIONS_ENABLED=true
   SEMAPHORE_API_KEY=your-semaphore-key
-  SEMAPHORE_SENDER_NAME=LCAcademy
+  # Optional — omit to use Semaphore account default (e.g. LittleCham). Do NOT use unapproved names.
+  # SEMAPHORE_SENDER_NAME=LittleCham
   SEMAPHORE_API_URL=https://api.semaphore.co/api/v4/messages
 
   # RHET Inventory (optional)

@@ -87,9 +87,16 @@ if (cliProduction && cliDevelopment) {
   }
 }
 
-// Linode/local: .env wins over shell/PM2 (override: true) — same as before.
-// Coolify: UI-injected process.env wins over any generated/mounted .env.
-dotenv.config({ path: envPath, override: !isCoolify });
+// Linode/local: .env wins over shell/PM2 (override: true).
+// Coolify: never load backend/.env — only UI-injected vars count. Otherwise a
+// mounted/stale .env can repopulate removed keys (e.g. SEMAPHORE_SENDER_NAME=LCAcademy).
+if (existsSync(envPath)) {
+  if (isCoolify) {
+    console.log('ℹ️ Coolify runtime: backend/.env ignored (UI-injected env only)');
+  } else {
+    dotenv.config({ path: envPath, override: true });
+  }
+}
 
 process.env.NODE_ENV = nodeEnv;
 
@@ -107,3 +114,10 @@ console.log(
     ` | host: ${process.env.DB_HOST || '(not set)'}` +
     (isCoolify ? ' | runtime=coolify' : '')
 );
+
+if (process.env.SEMAPHORE_API_KEY && process.env.SMS_NOTIFICATIONS_ENABLED !== 'false') {
+  const smsSender = String(process.env.SEMAPHORE_SENDER_NAME || '').trim();
+  console.log(
+    `📱 SMS: Semaphore enabled, sender=${smsSender || '(account default — LittleCham if approved)'}`
+  );
+}

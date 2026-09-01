@@ -1,13 +1,8 @@
 /**
  * Semaphore.co SMS gateway (Philippines).
+ * Env is loaded by backend/config/loadEnv.js (server) or script entrypoints.
  * @see https://semaphore.co/docs
  */
-import dotenv from 'dotenv';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: resolve(__dirname, '../../.env') });
 
 const SEMAPHORE_API_URL =
   (process.env.SEMAPHORE_API_URL || 'https://api.semaphore.co/api/v4/messages').trim();
