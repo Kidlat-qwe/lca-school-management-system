@@ -115,7 +115,8 @@ router.get(
   [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
   async (req, res, next) => {
     try {
-      const html = await getPublicFiuuGoHtmlByToken(req.params.token);
+      const ready = String(req.query?.ready || '') === '1';
+      const html = await getPublicFiuuGoHtmlByToken(req.params.token, { allowFiuuAutoPost: ready });
       return sendFiuuGoHtml(res, html);
     } catch (err) {
       if (err.statusCode) {
@@ -143,7 +144,7 @@ router.post(
           terms_accepted: true,
           skipOtpCheck: true,
         });
-        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}?ready=1`);
       }
       const ctx = await startAutopayOtpVerification(token);
       return sendFiuuGoHtml(res, buildAutopayOtpVerificationHtml(ctx));
@@ -168,7 +169,7 @@ router.get(
         exp: req.query?.exp,
         sig: req.query?.sig,
       });
-      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}?ready=1`);
     } catch (err) {
       if (err.statusCode) return sendFiuuGoErrorHtml(res, err);
       next(err);
@@ -189,7 +190,7 @@ router.get(
       const mode = String(req.query?.mode || '').toLowerCase() === 'email' ? 'email' : 'sms';
       const ctx = await getAutopayOtpPageContext(token, { mode });
       if (ctx.verified) {
-        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}?ready=1`);
       }
       const sent = String(req.query?.sent || '') === '1';
       return sendFiuuGoHtml(res, buildAutopayOtpVerificationHtml(ctx, { sent }));
@@ -221,21 +222,33 @@ router.post(
         `${req.baseUrl}/go/${encodeURIComponent(token)}/autopay-otp?mode=sms&sent=1`
       );
     } catch (err) {
-      if (err.statusCode) {
-        try {
-          const channel = String(req.body?.channel || 'sms').toLowerCase();
-          const ctx = await getAutopayOtpPageContext(req.params.token, {
-            mode: channel === 'email' ? 'email' : 'sms',
-          });
-          return sendFiuuGoHtml(
-            res,
-            buildAutopayOtpVerificationHtml(ctx, { error: err.message })
-          );
-        } catch {
-          return sendFiuuGoErrorHtml(res, err);
-        }
+      try {
+        const channel = String(req.body?.channel || 'sms').toLowerCase();
+        const ctx = await getAutopayOtpPageContext(req.params.token, {
+          mode: channel === 'email' ? 'email' : 'sms',
+        });
+        return sendFiuuGoHtml(
+          res,
+          buildAutopayOtpVerificationHtml(
+            {
+              ...ctx,
+              enteredMobile:
+                channel === 'sms'
+                  ? String(req.body?.mobile || ctx.enteredMobile || ctx.suggestedMobile || '')
+                  : ctx.enteredMobile,
+              enteredEmail:
+                channel === 'email'
+                  ? String(req.body?.email || ctx.enteredEmail || ctx.suggestedEmail || '')
+                  : ctx.enteredEmail,
+            },
+            {
+              error: err?.message || 'Could not send verification. Try email instead.',
+            }
+          )
+        );
+      } catch {
+        return sendFiuuGoErrorHtml(res, err, 'Verification error');
       }
-      next(err);
     }
   }
 );
@@ -248,7 +261,7 @@ router.post(
     try {
       const token = req.params.token;
       await verifyAutopayOtpCode(token, req.body?.code);
-      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}?ready=1`);
     } catch (err) {
       if (err.statusCode) {
         try {
@@ -306,7 +319,7 @@ router.post(
         decision: decision === 'accept' ? 'accept' : 'decline',
         terms_accepted: termsAccepted || decision === 'decline',
       });
-      const redirectTo = `${req.baseUrl}/go/${encodeURIComponent(req.params.token)}`;
+      const redirectTo = `${req.baseUrl}/go/${encodeURIComponent(req.params.token)}?ready=1`;
       return res.redirect(303, redirectTo);
     } catch (err) {
       if (err.statusCode) return sendFiuuGoErrorHtml(res, err, 'Consent error');

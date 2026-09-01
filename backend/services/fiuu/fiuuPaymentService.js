@@ -336,16 +336,19 @@ export async function getPublicFiuuPayByToken(token) {
 }
 
 /** HTML bridge for email "Pay now" — consent gate (if needed) then auto-POST to FIUU. */
-export async function getPublicFiuuGoHtmlByToken(token) {
+export async function getPublicFiuuGoHtmlByToken(token, { allowFiuuAutoPost = false } = {}) {
   const row = await findGatewayPaymentByPayToken(token);
   const payload = await buildPublicPayPayloadForRow(row);
-  // Relative URL so consent POSTs to the same host that served /go (local or Coolify).
-  const consentActionUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/consent`;
-  const autopayOtpStartUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/autopay-otp`;
+  const encoded = encodeURIComponent(token);
+  const consentActionUrl = `/api/sms/payments/fiuu/go/${encoded}/consent`;
+  const autopayOtpStartUrl = `/api/sms/payments/fiuu/go/${encoded}/autopay-otp`;
+  const readyPayUrl = `/api/sms/payments/fiuu/go/${encoded}?ready=1`;
   return buildFiuuAutoPostHtml(payload, {
     consentActionUrl,
     autopayOtpStartUrl,
+    readyPayUrl,
     autopayOtpEnabled: isFiuuAutopayOtpEnabled(),
+    allowFiuuAutoPost,
     terms: getAutodebitTermsPayload(),
   });
 }

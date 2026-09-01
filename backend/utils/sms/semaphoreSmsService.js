@@ -104,13 +104,24 @@ export async function sendSemaphoreSms({ numbers, message, sendername }) {
   body.set('message', text);
   body.set('sendername', sender);
 
-  const response = await fetch(SEMAPHORE_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
+  let response;
+  let rawText = '';
+  try {
+    response = await fetch(SEMAPHORE_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+    });
+    rawText = await response.text();
+  } catch (netErr) {
+    console.error('[semaphoreSms] Network error:', netErr?.message || netErr);
+    return {
+      success: false,
+      error: netErr?.message || 'Network error contacting SMS provider',
+      reason: 'network_error',
+    };
+  }
 
-  const rawText = await response.text();
   let data;
   try {
     data = rawText ? JSON.parse(rawText) : null;
@@ -124,7 +135,18 @@ export async function sendSemaphoreSms({ numbers, message, sendername }) {
       data?.message ||
       data?.error ||
       `Semaphore HTTP ${response.status}`;
-    throw new Error(errMsg);
+    console.error('[semaphoreSms] API error:', {
+      status: response.status,
+      errMsg,
+      recipients: normalized,
+      sender,
+    });
+    return {
+      success: false,
+      error: errMsg,
+      httpStatus: response.status,
+      reason: 'semaphore_api_error',
+    };
   }
 
   console.log('[semaphoreSms] Sent:', {

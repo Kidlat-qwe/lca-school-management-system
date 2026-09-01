@@ -154,11 +154,10 @@ export async function resolveAutopayVerificationContacts(studentId) {
 }
 
 function buildOtpMessage({ code, studentName, classLabel }) {
+  const plan = classLabel ? ` (${classLabel})` : '';
   return (
-    `${DEFAULT_SCHOOL_NAME}: Your verification code is ${code}. ` +
-    `Enter this on the payment page to authorize LCA AutoPay for ${studentName}'s recurring installment invoices` +
-    (classLabel ? ` (${classLabel})` : '') +
-    `. Valid 10 minutes. Do not share this code.`
+    `${DEFAULT_SCHOOL_NAME}: Code ${code} — verify LCA AutoPay for ${studentName}'s installment plan${plan}. ` +
+    `Valid 10 min. Do not share.`
   );
 }
 
@@ -240,6 +239,26 @@ export async function startAutopayOtpVerification(token) {
   return buildPageContext(row, meta, contacts, meta.autopay_otp_ui_mode || 'sms', token);
 }
 
+function mapSmsSendFailure(smsResult) {
+  if (smsResult.reason === 'missing_sender_name') {
+    return 'SMS is not fully configured (missing sender name). Use email verification or contact the school.';
+  }
+  if (smsResult.reason === 'semaphore_not_configured') {
+    return 'SMS is not configured on the server. Use email verification instead.';
+  }
+  if (smsResult.reason === 'no_valid_phone_numbers') {
+    return 'Enter a valid Philippine mobile number (e.g. 09XXXXXXXXX).';
+  }
+  if (smsResult.reason === 'network_error') {
+    return 'Could not reach the SMS provider. Try again or use email verification.';
+  }
+  const detail = String(smsResult.error || '').trim();
+  if (detail) {
+    return `SMS could not be sent (${detail}). Try email verification or contact the school.`;
+  }
+  return 'Could not send SMS verification code. Try email verification or contact the school.';
+}
+
 export async function sendAutopaySmsOtp(token, mobileRaw) {
   if (!isFiuuAutopayOtpEnabled()) {
     throw Object.assign(new Error('AutoPay verification is not enabled'), { statusCode: 503 });
@@ -267,11 +286,11 @@ export async function sendAutopaySmsOtp(token, mobileRaw) {
   const message = buildOtpMessage({ code, studentName: contacts.studentName, classLabel });
 
   const smsResult = await sendSemaphoreSms({ numbers: mobile, message });
-  if (!smsResult.success && !smsResult.skipped) {
-    throw Object.assign(new Error('Failed to send SMS verification code'), { statusCode: 502 });
-  }
   if (smsResult.skipped) {
-    throw Object.assign(new Error('Could not send SMS to that mobile number.'), { statusCode: 400 });
+    throw Object.assign(new Error(mapSmsSendFailure(smsResult)), { statusCode: 400 });
+  }
+  if (!smsResult.success) {
+    throw Object.assign(new Error(mapSmsSendFailure(smsResult)), { statusCode: 502 });
   }
 
   meta.autopay_otp_ui_mode = 'sms';

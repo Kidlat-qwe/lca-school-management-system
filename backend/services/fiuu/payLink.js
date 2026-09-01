@@ -204,6 +204,15 @@ export function buildPublicPayPayload(row, { billAlreadySettled = false } = {}) 
     parent_autodebit_decision: row.metadata?.parent_autodebit_decision || null,
     autodebit_class_name: row.metadata?.autodebit_class_name || null,
     autodebit_terms_version: row.metadata?.autodebit_terms_version || null,
+    parent_autodebit_opt_in: Boolean(row.metadata?.parent_autodebit_opt_in),
+    autopay_otp_verified: Boolean(row.metadata?.autopay_otp_verified_at),
+    /** Show AutoPay gate on /go until parent continues (email links never skip straight to FIUU). */
+    show_autodebit_consent_gate: Boolean(
+      openOk &&
+        row.metadata?.autodebit_eligible &&
+        (row.metadata?.autodebit_offered !== false)
+    ),
+    /** @deprecated use show_autodebit_consent_gate — kept for JSON public API */
     needs_parent_autodebit_decision: Boolean(
       openOk &&
         row.metadata?.autodebit_eligible &&
@@ -285,7 +294,14 @@ function buildBrandedPayPageHtml({ title, heading, message, bodyHtml = '', statu
  */
 export function buildFiuuAutoPostHtml(
   payload,
-  { consentActionUrl = null, autopayOtpStartUrl = null, autopayOtpEnabled = false, terms = null } = {}
+  {
+    consentActionUrl = null,
+    autopayOtpStartUrl = null,
+    readyPayUrl = null,
+    autopayOtpEnabled = false,
+    allowFiuuAutoPost = false,
+    terms = null,
+  } = {}
 ) {
   if (!payload?.payUrl || !payload?.formFields) {
     const isPaid = payload?.status === 'paid';
@@ -302,10 +318,15 @@ export function buildFiuuAutoPostHtml(
     });
   }
 
-  if (payload.needs_parent_autodebit_decision && consentActionUrl) {
+  if (payload.show_autodebit_consent_gate && consentActionUrl && !allowFiuuAutoPost) {
     const classLabel = escapeHtmlAttr(
       payload.autodebit_class_name || 'this class installment plan'
     );
+    const priorDecision = String(payload.parent_autodebit_decision || '');
+    const priorAccepted = priorDecision === 'accepted' && payload.parent_autodebit_opt_in;
+    const priorOtpVerified = Boolean(payload.autopay_otp_verified);
+    const initialEnabled = priorAccepted ? 'true' : 'false';
+    const initialTermsAccepted = priorAccepted ? 'true' : 'false';
     const termsTitle = escapeHtmlAttr(terms?.title || 'LCA AutoPay Terms & Conditions');
     const termsBody = String(terms?.body || '')
       .split(/\n\n/)
@@ -326,6 +347,7 @@ export function buildFiuuAutoPostHtml(
       .join('');
     const action = escapeHtmlAttr(consentActionUrl);
     const otpStartAction = escapeHtmlAttr(autopayOtpStartUrl || '');
+    const readyAction = escapeHtmlAttr(readyPayUrl || '');
     const otpEnabled = autopayOtpEnabled ? 'true' : 'false';
 
     const bodyHtml = `
@@ -371,6 +393,7 @@ export function buildFiuuAutoPostHtml(
                 <form id="autopayOtpStartForm" method="POST" action="${otpStartAction}" style="display:none;">
                   <input type="hidden" name="terms_accepted" value="1" />
                 </form>
+                <form id="readyPayForm" method="GET" action="${readyAction}" style="display:none;"></form>
               </div>
 
               <div id="termsModal" style="display:none;position:fixed;inset:0;z-index:50;
@@ -410,8 +433,10 @@ export function buildFiuuAutoPostHtml(
 
               <script>
                 (function () {
-                  var enabled = false;
-                  var termsAccepted = false;
+                  var enabled = ${initialEnabled};
+                  var termsAccepted = ${initialTermsAccepted};
+                  var priorAccepted = ${priorAccepted ? 'true' : 'false'};
+                  var priorOtpVerified = ${priorOtpVerified ? 'true' : 'false'};
                   var toggle = document.getElementById('autodebitToggle');
                   var knob = document.getElementById('autodebitKnob');
                   var status = document.getElementById('autodebitStatus');
@@ -422,6 +447,7 @@ export function buildFiuuAutoPostHtml(
                   var acceptForm = document.getElementById('acceptForm');
                   var declineForm = document.getElementById('declineForm');
                   var otpStartForm = document.getElementById('autopayOtpStartForm');
+                  var readyPayForm = document.getElementById('readyPayForm');
                   var otpEnabled = ${otpEnabled};
 
                   function paintToggle() {
@@ -481,11 +507,15 @@ export function buildFiuuAutoPostHtml(
 
                   continueBtn.addEventListener('click', function () {
                     if (enabled && termsAccepted) {
-                      if (otpEnabled && otpStartForm) {
+                      if (priorAccepted && priorOtpVerified && otpEnabled && readyPayForm) {
+                        readyPayForm.submit();
+                      } else if (otpEnabled && otpStartForm) {
                         otpStartForm.submit();
-                      } else {
+                      } else if (acceptForm) {
                         acceptForm.submit();
                       }
+                    } else if (priorAccepted && !enabled && readyPayForm) {
+                      declineForm.submit();
                     } else {
                       declineForm.submit();
                     }
@@ -499,6 +529,35 @@ export function buildFiuuAutoPostHtml(
       title: 'LCA AutoPay option',
       heading: 'Before you pay',
       message: 'LCA AutoPay stays off unless you turn it on and accept the Terms.',
+      bodyHtml,
+      statusTone: 'neutral',
+    });
+  }
+
+  if (!allowFiuuAutoPost) {
+    const inputs = Object.entries(payload.formFields)
+      .filter(([, v]) => v != null && v !== '')
+      .map(
+        ([key, value]) =>
+          `<input type="hidden" name="${escapeHtmlAttr(key)}" value="${escapeHtmlAttr(value)}" />`
+      )
+      .join('\n');
+    const readyHref = escapeHtmlAttr(readyPayUrl || '#');
+    const bodyHtml = `
+              <div style="margin-top:18px;text-align:center;">
+                <p style="margin:0 0 14px;font-size:14px;line-height:1.5;color:#475569;">
+                  When you are ready, continue to the secure FIUU payment page to complete this invoice.
+                </p>
+                <a href="${readyHref}"
+                  style="display:inline-block;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
+                         font-weight:600;font-size:14px;padding:12px 22px;cursor:pointer;text-decoration:none;">
+                  Continue to payment
+                </a>
+              </div>`;
+    return buildBrandedPayPageHtml({
+      title: 'Continue to payment',
+      heading: 'Ready to pay',
+      message: 'Your payment has not been completed yet.',
       bodyHtml,
       statusTone: 'neutral',
     });
