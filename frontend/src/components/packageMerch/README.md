@@ -5,9 +5,15 @@
 Enroll modal controls for package-included **freebies** (non-uniform):
 
 - **Keep** — release the package’s included item (default). Shows type stock (e.g. `12 in stock`).
-- **Swap** — deduct a different **existing CMS merchandise** row instead; package price unchanged.
+- **Swap** — deduct a different **existing CMS merchandise** row instead (including **uniform SKUs**); package price unchanged.
 - Offered for any non-sizing package freebie (not a hard-coded name list).
 - Zero stock is allowed; fulfill later from **Pending issue**
+
+## PackageMerchSwapReplacementPicker
+
+Category accordion for **Swap → replacement item**: shows merchandise type names first
+(School Uniform, ID Lace, …); tap/click a category to expand SKUs/variants inside.
+Used inside `PackageMerchEntitlementPanel`.
 
 ## PackageMerchItemVariantPanel
 

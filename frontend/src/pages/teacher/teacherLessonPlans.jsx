@@ -3,11 +3,18 @@ import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { appAlert } from '../../utils/appAlert';
 import { LessonPlanHeader } from '../../components/lessonPlanHeader';
+import {
+  buildLessonPlanPhaseOptions,
+  buildLessonPlanPhaseSessionPayload,
+  buildLessonPlanSessionOptions,
+  findLessonPlanSession,
+  parseLessonPlanPhaseSessionForm,
+} from '../../utils/lessonPlanPhaseSession';
 
 const createEmptyForm = () => ({
   lesson_date: new Date().toISOString().slice(0, 10),
   grade_level: '',
-  subject: '',
+  class_id: '',
   phase: '',
   session: '',
   topic: '',
@@ -18,36 +25,25 @@ const createEmptyForm = () => ({
   assessment_method: '',
   assessment_criteria: '',
   materials_needed: '',
-  preliminaries_time: '',
   preliminaries_activity: '',
-  lesson_proper_time: '',
   lesson_proper_activity: '',
-  conclusion_time: '',
   conclusion_activity: '',
-  class1_name: '',
-  class1_age_group: '',
   class1_considerations: '',
   class1_adjustments: '',
-  class2_name: '',
-  class2_age_group: '',
-  class2_considerations: '',
-  class2_adjustments: '',
-  class3_name: '',
-  class3_age_group: '',
-  class3_considerations: '',
-  class3_adjustments: '',
   reflection_went_well: '',
   reflection_amazing_moments: '',
   reflection_challenges: '',
   reflection_improvements: '',
 });
 
-const populateFormFromPlan = (plan) => ({
+const populateFormFromPlan = (plan) => {
+  const { phase, session } = parseLessonPlanPhaseSessionForm(plan);
+  return {
   lesson_date: plan.lesson_date ? String(plan.lesson_date).slice(0, 10) : '',
   grade_level: plan.grade_level || '',
-  subject: plan.subject || '',
-  phase: plan.phase || '',
-  session: plan.session || '',
+  class_id: plan.class_id != null ? String(plan.class_id) : '',
+  phase,
+  session,
   topic: plan.topic || '',
   early_learning_goals: plan.early_learning_goals || '',
   objective_1: plan.objective_1 || '',
@@ -56,29 +52,17 @@ const populateFormFromPlan = (plan) => ({
   assessment_method: plan.assessment_method || '',
   assessment_criteria: plan.assessment_criteria || '',
   materials_needed: plan.materials_needed || '',
-  preliminaries_time: plan.preliminaries_time || '',
   preliminaries_activity: plan.preliminaries_activity || '',
-  lesson_proper_time: plan.lesson_proper_time || '',
   lesson_proper_activity: plan.lesson_proper_activity || '',
-  conclusion_time: plan.conclusion_time || '',
   conclusion_activity: plan.conclusion_activity || '',
-  class1_name: plan.class1_name || '',
-  class1_age_group: plan.class1_age_group || '',
   class1_considerations: plan.class1_considerations || '',
   class1_adjustments: plan.class1_adjustments || '',
-  class2_name: plan.class2_name || '',
-  class2_age_group: plan.class2_age_group || '',
-  class2_considerations: plan.class2_considerations || '',
-  class2_adjustments: plan.class2_adjustments || '',
-  class3_name: plan.class3_name || '',
-  class3_age_group: plan.class3_age_group || '',
-  class3_considerations: plan.class3_considerations || '',
-  class3_adjustments: plan.class3_adjustments || '',
   reflection_went_well: plan.reflection_went_well || '',
   reflection_amazing_moments: plan.reflection_amazing_moments || '',
   reflection_challenges: plan.reflection_challenges || '',
   reflection_improvements: plan.reflection_improvements || '',
-});
+  };
+};
 
 const formatStatus = (status) => {
   if (status === 'awaiting_reflection') return 'Awaiting Reflection';
@@ -108,6 +92,48 @@ function getManilaTodayYmd() {
 function isLessonDateToday(lessonDate, todayYmd = getManilaTodayYmd()) {
   if (!lessonDate) return false;
   return String(lessonDate).slice(0, 10) === todayYmd;
+}
+
+function normalizeGradeLevelKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, ' ');
+}
+
+function classMatchesGradeLevel(classRow, gradeLevel) {
+  if (!gradeLevel || !classRow) return false;
+  return normalizeGradeLevelKey(classRow.level_tag) === normalizeGradeLevelKey(gradeLevel);
+}
+
+/** Header + sections 1–6 must be complete before submit for verification. */
+const LESSON_PLAN_SECTION_REQUIRED_FIELDS = [
+  'early_learning_goals',
+  'objective_1',
+  'objective_2',
+  'objective_3',
+  'assessment_method',
+  'assessment_criteria',
+  'materials_needed',
+  'preliminaries_activity',
+  'lesson_proper_activity',
+  'conclusion_activity',
+  'class1_considerations',
+  'class1_adjustments',
+];
+
+function isLessonPlanSubmitReady(formData = {}) {
+  if (!formData.lesson_date || !/^\d{4}-\d{2}-\d{2}$/.test(String(formData.lesson_date).slice(0, 10))) {
+    return false;
+  }
+  if (!String(formData.grade_level || '').trim()) return false;
+  if (!String(formData.class_id || '').trim()) return false;
+  if (!String(formData.phase || '').trim()) return false;
+  if (!String(formData.session || '').trim()) return false;
+  if (!String(formData.topic || '').trim()) return false;
+  return LESSON_PLAN_SECTION_REQUIRED_FIELDS.every((key) =>
+    String(formData[key] || '').trim()
+  );
 }
 
 function parseRevisionFeedbackClient(raw) {
@@ -218,6 +244,8 @@ export default function TeacherLessonPlans() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [classSessions, setClassSessions] = useState([]);
+  const [classSessionsLoading, setClassSessionsLoading] = useState(false);
   const [sheetFlash, setSheetFlash] = useState(false);
   const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
   const flashTimerRef = useRef(null);
@@ -235,10 +263,47 @@ export default function TeacherLessonPlans() {
     return isLessonDateToday(selectedPlan.lesson_date || formData.lesson_date, manilaToday);
   }, [selectedPlan, formData.lesson_date, manilaToday]);
 
-  const subjectOptions = useMemo(() => {
-    if (!meta?.subjects_by_grade || !formData.grade_level) return [];
-    return meta.subjects_by_grade[formData.grade_level] || [];
-  }, [meta, formData.grade_level]);
+  const branchClasses = useMemo(() => meta?.classes || [], [meta]);
+
+  const gradeLevelOptions = useMemo(() => meta?.grade_levels || [], [meta]);
+
+  const classOptions = useMemo(() => {
+    if (!formData.grade_level) return [];
+    const filtered = branchClasses.filter((cls) =>
+      classMatchesGradeLevel(cls, formData.grade_level)
+    );
+    if (!formData.class_id) return filtered;
+    const selected = branchClasses.find(
+      (c) => String(c.class_id) === String(formData.class_id)
+    );
+    if (selected && !filtered.some((c) => c.class_id === selected.class_id)) {
+      return [selected, ...filtered];
+    }
+    return filtered;
+  }, [branchClasses, formData.grade_level, formData.class_id]);
+
+  const phaseOptions = useMemo(
+    () => buildLessonPlanPhaseOptions(classSessions),
+    [classSessions]
+  );
+
+  const sessionOptions = useMemo(
+    () => buildLessonPlanSessionOptions(classSessions, formData.phase),
+    [classSessions, formData.phase]
+  );
+
+  const selectedSessionDate = useMemo(() => {
+    const row = findLessonPlanSession(classSessions, formData.session);
+    return row?.scheduled_date ? String(row.scheduled_date).slice(0, 10) : '';
+  }, [classSessions, formData.session]);
+
+  const selectedClassLabel = useMemo(() => {
+    if (!formData.class_id) {
+      return selectedPlan?.class_label || selectedPlan?.subject || '';
+    }
+    const match = classOptions.find((c) => String(c.class_id) === String(formData.class_id));
+    return match?.label || selectedPlan?.class_label || selectedPlan?.subject || '';
+  }, [formData.class_id, classOptions, selectedPlan]);
 
   const filteredPlans = useMemo(() => {
     if (statusFilter === 'all') return lessonPlans;
@@ -249,6 +314,11 @@ export default function TeacherLessonPlans() {
     selectedPlan?.status === 'revision_requested'
       ? 'Resubmit for Verification'
       : 'Submit for Verification';
+
+  const canSubmitForVerification = useMemo(
+    () => canEdit && isLessonPlanSubmitReady(formData),
+    [canEdit, formData]
+  );
 
   useEffect(() => {
     const tick = () => setManilaToday(getManilaTodayYmd());
@@ -286,6 +356,41 @@ export default function TeacherLessonPlans() {
   }, [fetchPlans]);
 
   useEffect(() => {
+    const classId = formData.class_id;
+    if (!classId) {
+      setClassSessions([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setClassSessionsLoading(true);
+      try {
+        const res = await apiRequest(`/classes/${classId}/sessions`);
+        if (!cancelled) {
+          setClassSessions(Array.isArray(res.data) ? res.data : []);
+        }
+      } catch {
+        if (!cancelled) setClassSessions([]);
+      } finally {
+        if (!cancelled) setClassSessionsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.class_id]);
+
+  useEffect(() => {
+    if (!formData.session || !selectedSessionDate) return;
+    setFormData((prev) => {
+      if (prev.lesson_date === selectedSessionDate) return prev;
+      return { ...prev, lesson_date: selectedSessionDate };
+    });
+  }, [formData.session, selectedSessionDate]);
+
+  useEffect(() => {
     return () => {
       if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     };
@@ -313,7 +418,14 @@ export default function TeacherLessonPlans() {
 
   const handleSelectPlan = (plan) => {
     setSelectedPlan(plan);
-    setFormData(populateFormFromPlan(plan));
+    let nextForm = populateFormFromPlan(plan);
+    if (plan.class_id && branchClasses.length) {
+      const cls = branchClasses.find((c) => String(c.class_id) === String(plan.class_id));
+      if (cls?.level_tag) {
+        nextForm = { ...nextForm, grade_level: cls.level_tag };
+      }
+    }
+    setFormData(nextForm);
     setError('');
     flashLessonPlanSheet();
   };
@@ -323,9 +435,20 @@ export default function TeacherLessonPlans() {
       setSaving(true);
       setError('');
 
+      if (submit && !isLessonPlanSubmitReady(formData)) {
+        setError(
+          'Complete lesson date, grade level, class, phase, session, topic, and all fields in sections 1–6 before submitting.'
+        );
+        return;
+      }
+
+      const phaseSessionFields = buildLessonPlanPhaseSessionPayload(formData, classSessions);
+
       // Reflections are never saved during draft/submit — locked until lesson date after approval.
       const payload = {
         ...formData,
+        ...phaseSessionFields,
+        class_id: formData.class_id ? Number(formData.class_id) : null,
         reflection_went_well: '',
         reflection_amazing_moments: '',
         reflection_challenges: '',
@@ -476,17 +599,30 @@ export default function TeacherLessonPlans() {
                 value={formData.grade_level}
                 onChange={(e) => {
                   const gradeLevel = e.target.value;
-                  const nextSubjects = meta?.subjects_by_grade?.[gradeLevel] || [];
-                  setFormData((prev) => ({
-                    ...prev,
-                    grade_level: gradeLevel,
-                    subject: nextSubjects.includes(prev.subject) ? prev.subject : '',
-                  }));
+                  setFormData((prev) => {
+                    const next = { ...prev, grade_level: gradeLevel };
+                    if (
+                      prev.class_id &&
+                      !classMatchesGradeLevel(
+                        branchClasses.find((c) => String(c.class_id) === String(prev.class_id)),
+                        gradeLevel
+                      )
+                    ) {
+                      next.class_id = '';
+                      next.phase = '';
+                      next.session = '';
+                    }
+                    return next;
+                  });
                 }}
                 className={fieldControlCls}
               >
-                <option value="">Select grade level</option>
-                {(meta?.grade_levels || []).map((g) => (
+                <option value="">
+                  {gradeLevelOptions.length
+                    ? 'Select grade level'
+                    : 'No classes in your branch yet'}
+                </option>
+                {gradeLevelOptions.map((g) => (
                   <option key={g} value={g}>
                     {g}
                   </option>
@@ -495,47 +631,112 @@ export default function TeacherLessonPlans() {
             </label>
 
             <label className={`${fieldLabelCls} col-span-full`}>
-              <span className="shrink-0">Subject</span>
+              <span className="shrink-0">Class</span>
               <select
-                disabled={!canEdit || !formData.grade_level}
-                value={formData.subject}
-                onChange={(e) => handleInputChange('subject', e.target.value)}
+                disabled={!canEdit || loading || !formData.grade_level}
+                value={formData.class_id}
+                onChange={(e) => {
+                  const classId = e.target.value;
+                  const selected =
+                    branchClasses.find((c) => String(c.class_id) === String(classId)) || null;
+                  setFormData((prev) => ({
+                    ...prev,
+                    class_id: classId,
+                    grade_level: selected?.level_tag || prev.grade_level,
+                    phase: '',
+                    session: '',
+                  }));
+                }}
                 className={fieldControlCls}
               >
                 <option value="">
-                  {formData.grade_level ? 'Select subject' : 'Select grade level first'}
+                  {!formData.grade_level
+                    ? 'Select grade level first'
+                    : classOptions.length
+                      ? 'Select class'
+                      : 'No classes for this grade level'}
                 </option>
-                {subjectOptions.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+                {classOptions.map((cls) => (
+                  <option key={cls.class_id} value={String(cls.class_id)}>
+                    {cls.label}
                   </option>
                 ))}
               </select>
             </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="class_id" />
 
             <label className={fieldLabelCls}>
               <span className="shrink-0">Phase</span>
-              <input
-                disabled={!canEdit}
+              <select
+                disabled={!canEdit || !formData.class_id || classSessionsLoading}
                 value={formData.phase}
-                onChange={(e) => handleInputChange('phase', e.target.value)}
-                placeholder="Enter phase"
+                onChange={(e) => {
+                  const phase = e.target.value;
+                  setFormData((prev) => ({
+                    ...prev,
+                    phase,
+                    session: '',
+                  }));
+                }}
                 className={fieldControlCls}
-              />
+              >
+                <option value="">
+                  {!formData.class_id
+                    ? 'Select class first'
+                    : classSessionsLoading
+                      ? 'Loading phases…'
+                      : phaseOptions.length
+                        ? 'Select phase'
+                        : 'No phases scheduled for this class'}
+                </option>
+                {phaseOptions.map((phaseNum) => (
+                  <option key={phaseNum} value={String(phaseNum)}>
+                    Phase {phaseNum}
+                  </option>
+                ))}
+              </select>
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="phase" />
 
             <label className={fieldLabelCls}>
               <span className="shrink-0">Session</span>
-              <input
-                disabled={!canEdit}
+              <select
+                disabled={!canEdit || !formData.phase || classSessionsLoading}
                 value={formData.session}
-                onChange={(e) => handleInputChange('session', e.target.value)}
-                placeholder="Enter session"
+                onChange={(e) => {
+                  const sessionKey = e.target.value;
+                  const row = findLessonPlanSession(classSessions, sessionKey);
+                  setFormData((prev) => ({
+                    ...prev,
+                    session: sessionKey,
+                    lesson_date: row?.scheduled_date
+                      ? String(row.scheduled_date).slice(0, 10)
+                      : prev.lesson_date,
+                  }));
+                }}
                 className={fieldControlCls}
-              />
+              >
+                <option value="">
+                  {!formData.phase
+                    ? 'Select phase first'
+                    : sessionOptions.length
+                      ? 'Select session'
+                      : 'No sessions for this phase'}
+                </option>
+                {sessionOptions.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                    {opt.scheduled_date ? ` (${opt.scheduled_date})` : ''}
+                  </option>
+                ))}
+              </select>
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="session" />
+            {selectedSessionDate ? (
+              <p className="col-span-full -mt-1 mb-1 text-[12px] text-[#444444]">
+                Lesson date auto-filled from session schedule ({selectedSessionDate}).
+              </p>
+            ) : null}
 
             <label className={`${fieldLabelCls} col-span-full`}>
               <span className="shrink-0">Topic</span>
@@ -647,22 +848,8 @@ export default function TeacherLessonPlans() {
               ['conclusion', 'Conclusion'],
             ].map(([prefix, title]) => (
               <Fragment key={prefix}>
-                <p className="col-span-full mb-0 mt-1 text-[15px] font-semibold text-[#111111]">
-                  {title}
-                </p>
-                <label className={fieldLabelCls}>
-                  <span className="shrink-0">Time</span>
-                  <input
-                    disabled={!canEdit}
-                    value={formData[`${prefix}_time`]}
-                    onChange={(e) => handleInputChange(`${prefix}_time`, e.target.value)}
-                    placeholder="e.g. 10 mins"
-                    className={fieldControlCls}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={`${prefix}_time`} />
                 <label className={blockLabelCls}>
-                  Activity &amp; Goal
+                  {title} — Activity &amp; Goal
                   <textarea
                     disabled={!canEdit}
                     rows={3}
@@ -680,61 +867,41 @@ export default function TeacherLessonPlans() {
               6. Class-Specific Adjustments
             </h3>
 
-            {[1, 2, 3].map((n) => (
-              <Fragment key={`class${n}`}>
-                <p className="col-span-full mb-0 mt-1 text-[15px] font-semibold text-[#111111]">
-                  Class {n}
-                </p>
-                <label className={fieldLabelCls}>
-                  <span className="shrink-0">Name</span>
-                  <input
-                    disabled={!canEdit}
-                    value={formData[`class${n}_name`]}
-                    onChange={(e) => handleInputChange(`class${n}_name`, e.target.value)}
-                    placeholder={`Class ${n} name`}
-                    className={fieldControlCls}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_name`} />
-                <label className={fieldLabelCls}>
-                  <span className="shrink-0">Age Group</span>
-                  <input
-                    disabled={!canEdit}
-                    value={formData[`class${n}_age_group`]}
-                    onChange={(e) => handleInputChange(`class${n}_age_group`, e.target.value)}
-                    placeholder="Age group"
-                    className={fieldControlCls}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_age_group`} />
-                <label className={blockLabelCls}>
-                  Considerations
-                  <textarea
-                    disabled={!canEdit}
-                    rows={2}
-                    value={formData[`class${n}_considerations`]}
-                    onChange={(e) =>
-                      handleInputChange(`class${n}_considerations`, e.target.value)
-                    }
-                    placeholder="Class considerations"
-                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_considerations`} />
-                <label className={blockLabelCls}>
-                  Adjustments
-                  <textarea
-                    disabled={!canEdit}
-                    rows={2}
-                    value={formData[`class${n}_adjustments`]}
-                    onChange={(e) => handleInputChange(`class${n}_adjustments`, e.target.value)}
-                    placeholder="Class adjustments"
-                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={`class${n}_adjustments`} />
-              </Fragment>
-            ))}
+            {selectedClassLabel ? (
+              <p className="col-span-full -mt-1 mb-1 text-[13px] text-[#444444]">
+                Selected class:{' '}
+                <span className="font-semibold text-[#111111]">{selectedClassLabel}</span>
+              </p>
+            ) : (
+              <p className="col-span-full -mt-1 mb-1 text-[13px] text-[#7a4b00]">
+                Select a class above to attach this lesson plan to one class.
+              </p>
+            )}
+
+            <label className={blockLabelCls}>
+              Considerations
+              <textarea
+                disabled={!canEdit}
+                rows={2}
+                value={formData.class1_considerations}
+                onChange={(e) => handleInputChange('class1_considerations', e.target.value)}
+                placeholder="Class considerations"
+                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_considerations" />
+            <label className={blockLabelCls}>
+              Adjustments
+              <textarea
+                disabled={!canEdit}
+                rows={2}
+                value={formData.class1_adjustments}
+                onChange={(e) => handleInputChange('class1_adjustments', e.target.value)}
+                placeholder="Class adjustments"
+                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_adjustments" />
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
               7. Teacher&apos;s Reflection
@@ -832,7 +999,12 @@ export default function TeacherLessonPlans() {
                 </button>
                 <button
                   type="button"
-                  disabled={saving || !canEdit}
+                  disabled={saving || !canSubmitForVerification}
+                  title={
+                    canSubmitForVerification
+                      ? undefined
+                      : 'Complete all header fields and sections 1–6 to submit for verification'
+                  }
                   onClick={() => saveLessonPlan({ submit: true })}
                   className={btnPrimaryCls}
                 >
@@ -909,7 +1081,7 @@ export default function TeacherLessonPlans() {
                       {plan.topic || 'Untitled topic'}
                     </h4>
                     <p className="mb-2.5 text-[13px] text-[#666666]">
-                      {plan.grade_level || 'No grade'} | {plan.subject || 'No subject'} |{' '}
+                      {plan.grade_level || 'No grade'} | {plan.class_label || plan.subject || 'No class'} |{' '}
                       {plan.lesson_date
                         ? new Date(plan.lesson_date).toLocaleDateString()
                         : 'No date'}

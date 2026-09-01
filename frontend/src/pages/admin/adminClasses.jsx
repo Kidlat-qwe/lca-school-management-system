@@ -78,7 +78,7 @@ import EnrollOrderSummary from '../../components/enrollStudentSelection/EnrollOr
 import UpdatePlanModal from '../../components/updatePlan/UpdatePlanModal';
 import {
   buildEnrollSummaryItems,
-  formatEnrollPackagePrice,
+  buildEnrollPricingSummary,
 } from '../../components/enrollStudentSelection/buildEnrollSummaryItems';
 import { pickFirstInStockMerchandiseItem, isItemNamedStockCategory } from '../../utils/merchandiseStock';
 import { promptNavigateToEnrollmentInvoice } from '../../utils/enrollmentInvoiceNavigation';
@@ -4197,6 +4197,17 @@ const initializePackageMerchSelections = useCallback(
       selectedPackageSwappableTypes.length > 0 ||
       selectedPackageDetails.includedMerchandiseTypes.length > 0 ||
       selectedPackageDetails.paidMerchandiseTypes.length > 0);
+  const getEnrollPricingSummary = () =>
+    buildEnrollPricingSummary({
+      selectedPackage,
+      selectedPromo,
+      students: selectedStudents,
+      swappableTypeNames: selectedPackageSwappableTypes,
+      entitlementsByStudent: studentPackageMerchEntitlements,
+      merchandiseList: merchandise,
+      packageDetails: selectedPackage?.details || [],
+      packageMerchSelections,
+    });
   
   // Calculate total quantity needed for all selected students
   const getTotalQuantityNeeded = () => {
@@ -4872,7 +4883,7 @@ const initializePackageMerchSelections = useCallback(
                         merchandise_id: m.merchandise_id,
                         size: m.size || null,
                         merchandise_name: m.merchandise_name,
-                        category: null,
+                        category: m.category || null,
                         action: PACKAGE_MERCH_ACTION.SWAP,
                         original_type_name: originalType,
                         reason: lineReason,
@@ -12084,11 +12095,16 @@ const resolvedBranchId =
                       </>
                     )}
                     right={
+                      (() => {
+                        const pricing = getEnrollPricingSummary();
+                        return (
                       <EnrollOrderSummary
                         packageName={selectedPackage?.package_name}
-                        packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
-                        totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
-                        promoName={selectedPromo?.promo_name}
+                        packagePrice={pricing.packagePrice}
+                        totalPrice={pricing.totalPrice}
+                        promoName={pricing.promoName}
+                        swapAdjustments={pricing.swapAdjustments}
+                        adjustmentTotal={pricing.adjustmentTotal}
                         students={selectedStudents}
                         items={buildEnrollSummaryItems({
                           includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
@@ -12104,6 +12120,8 @@ const resolvedBranchId =
                         showInvoiceNote={enrollStep === 'review'}
                         classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
                       />
+                        );
+                      })()
                     }
                   />
 
@@ -12593,11 +12611,16 @@ const resolvedBranchId =
                       </>
                     )}
                     summary={
+                      (() => {
+                        const pricing = getEnrollPricingSummary();
+                        return (
                       <EnrollOrderSummary
                         packageName={selectedPackage?.package_name}
-                        packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
-                        totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
-                        promoName={selectedPromo?.promo_name}
+                        packagePrice={pricing.packagePrice}
+                        totalPrice={pricing.totalPrice}
+                        promoName={pricing.promoName}
+                        swapAdjustments={pricing.swapAdjustments}
+                        adjustmentTotal={pricing.adjustmentTotal}
                         students={selectedStudents}
                         items={buildEnrollSummaryItems({
                           includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
@@ -12613,6 +12636,8 @@ const resolvedBranchId =
                         showInvoiceNote={enrollStep === 'review'}
                         classLabel={[selectedClassForEnrollment?.program_name, selectedClassForEnrollment?.class_name || selectedClassForEnrollment?.level_tag].filter(Boolean).join(' • ')}
                       />
+                        );
+                      })()
                     }
                   />
                 </div>
@@ -12873,11 +12898,16 @@ const resolvedBranchId =
                       </div>
                         )}
                         summary={(
+                          (() => {
+                            const pricing = getEnrollPricingSummary();
+                            return (
                           <EnrollOrderSummary
                             packageName={selectedPackage?.package_name}
-                            packagePrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).packagePrice}
-                            totalPrice={formatEnrollPackagePrice(selectedPackage, selectedPromo).totalPrice}
-                            promoName={selectedPromo?.promo_name}
+                            packagePrice={pricing.packagePrice}
+                            totalPrice={pricing.totalPrice}
+                            promoName={pricing.promoName}
+                            swapAdjustments={pricing.swapAdjustments}
+                            adjustmentTotal={pricing.adjustmentTotal}
                             students={selectedStudents}
                             items={buildEnrollSummaryItems({
                               includedMerchandiseTypes: selectedPackageDetails.includedMerchandiseTypes,
@@ -12892,6 +12922,8 @@ const resolvedBranchId =
                             showInvoiceNote
                             classLabel={classLabel}
                           />
+                            );
+                          })()
                         )}
                       />
                     );

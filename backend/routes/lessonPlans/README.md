@@ -6,7 +6,7 @@
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/meta` | Grade/subject options, prepared_by, branch header fields |
+| GET | `/meta` | Grade levels and classes derived from the teacher's branch roster (`classestbl`), prepared_by, branch header fields |
 | GET | `/` | Own lesson plans |
 | GET | `/:id` | One plan |
 | POST | `/` | Create draft (or `status: submitted`) |
@@ -25,8 +25,8 @@
 | POST | `/:id/approve` | Approve; optional Head Teacher review body: `head_teacher_overall_assessment`, `head_teacher_specific_feedback`, `head_teacher_next_steps` |
 | POST | `/:id/request-revision` | Send back with structured feedback: `items[{ field, highlight, note }]` and/or `reason` (general). Stored as JSON in `revision_reason`. |
 
-Teacher body fields follow the **LCA Lesson Plan PDF** (phase/session, goals, objectives, assessment, materials, lesson overview, class 1–3 adjustments). Reflections: Successes / Amazing Moments / Challenges / Improvements.
+Teacher body fields follow the **LCA Lesson Plan PDF** (phase/session, goals, objectives, assessment, materials, lesson overview, one CMS class via `class_id`, class-specific considerations/adjustments). Reflections: Successes / Amazing Moments / Challenges / Improvements.
 
-Migrations: `141_create_lesson_plan_tables.sql`, `145_align_lesson_plan_fields_to_lca_form.sql`, `146_add_deped_meta_to_branchestbl.sql`
+Migrations: `141_create_lesson_plan_tables.sql`, `145_align_lesson_plan_fields_to_lca_form.sql`, `146_add_deped_meta_to_branchestbl.sql`, `148_add_class_id_to_lessonplanstbl.sql`
 
 `/meta` and plan rows return per-branch DepEd header fields (`region` / `division` / `district` from `branchestbl`); `school_id` is always `411093`.

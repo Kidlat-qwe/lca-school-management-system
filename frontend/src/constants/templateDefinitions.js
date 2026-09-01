@@ -68,6 +68,48 @@ export const TEMPLATE_DEFS = [
       '{branchName}',
     ],
   },
+  {
+    key: 'template_first_enrollment_onboarding',
+    label: 'Welcome (Email 1 of 5)',
+    group: 'First enrollment onboarding',
+    description:
+      'Official welcome when a student is first enrolled (program status new). Optional AR PDF is attached separately by the system.',
+    showSubject: true,
+    variables: ['{academicYear}', '{arAttachmentNote}'],
+  },
+  {
+    key: 'template_first_enrollment_class_schedule',
+    label: 'Class Schedule (Email 2 of 5)',
+    group: 'First enrollment onboarding',
+    description: 'First day of school date and weekly class schedule from CMS.',
+    showSubject: true,
+    variables: ['{classStartDate}', '{classSchedule}', '{branchName}'],
+  },
+  {
+    key: 'template_first_enrollment_things_to_prepare',
+    label: 'Things to Prepare (Email 3 of 5)',
+    group: 'First enrollment onboarding',
+    description: 'Checklist of items the student should bring to class.',
+    showSubject: true,
+    variables: [],
+  },
+  {
+    key: 'template_first_enrollment_important_reminders',
+    label: 'Important Reminders (Email 4 of 5)',
+    group: 'First enrollment onboarding',
+    description: 'Bullet reminders before the first day of school.',
+    showSubject: true,
+    variables: [],
+  },
+  {
+    key: 'template_first_enrollment_stay_connected',
+    label: 'Stay Connected (Email 5 of 5)',
+    group: 'First enrollment onboarding',
+    description: 'Facebook page and branch Messenger group chat links.',
+    showSubject: true,
+    branchScopedVariables: ['{groupChatUrl}', '{groupChatLine}', '{groupChatLabel}'],
+    variables: ['{facebookUrl}', '{groupChatLine}', '{groupChatLabel}', '{groupChatUrl}'],
+  },
 ];
 
 export const TEMPLATE_KEYS = TEMPLATE_DEFS.map((t) => t.key);
@@ -102,3 +144,13 @@ export const buildEmptyTemplatesState = () =>
 
 export const getTemplateDefByKey = (key) =>
   TEMPLATE_DEFS.find((def) => def.key === key) || TEMPLATE_DEFS[0];
+
+/** Unique group labels for Settings template picker (optgroups). */
+export const TEMPLATE_GROUP_LABELS = [
+  ...new Set(TEMPLATE_DEFS.map((def) => def.group).filter(Boolean)),
+];
+
+export const TEMPLATE_DEFS_WITHOUT_GROUP = TEMPLATE_DEFS.filter((def) => !def.group);
+
+export const getTemplateDefsForGroup = (groupLabel) =>
+  TEMPLATE_DEFS.filter((def) => def.group === groupLabel);

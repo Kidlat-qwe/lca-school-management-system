@@ -5,6 +5,8 @@
  * supporting per-branch overrides with global defaults (branch_id NULL).
  */
 
+import { FIRST_ENROLLMENT_TEMPLATE_DEFAULTS } from './firstEnrollmentWelcomeEmail/defaultTemplates.js';
+
 export const SETTINGS_DEFINITIONS = Object.freeze({
   installment_penalty_rate: {
     key: 'installment_penalty_rate',
@@ -178,6 +180,44 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     },
   },
 
+  // --- First enrollment onboarding (5-email sequence for new students) ---
+  template_first_enrollment_onboarding: {
+    key: 'template_first_enrollment_onboarding',
+    type: 'json',
+    category: 'templates',
+    description:
+      'Email 1 of 5 — official welcome sent when a student is first enrolled (program status new).',
+    defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_onboarding,
+  },
+  template_first_enrollment_class_schedule: {
+    key: 'template_first_enrollment_class_schedule',
+    type: 'json',
+    category: 'templates',
+    description: 'Email 2 of 5 — first day of school and weekly class schedule.',
+    defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_class_schedule,
+  },
+  template_first_enrollment_things_to_prepare: {
+    key: 'template_first_enrollment_things_to_prepare',
+    type: 'json',
+    category: 'templates',
+    description: 'Email 3 of 5 — checklist of items to bring to class.',
+    defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_things_to_prepare,
+  },
+  template_first_enrollment_important_reminders: {
+    key: 'template_first_enrollment_important_reminders',
+    type: 'json',
+    category: 'templates',
+    description: 'Email 4 of 5 — important reminders before the first day.',
+    defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_important_reminders,
+  },
+  template_first_enrollment_stay_connected: {
+    key: 'template_first_enrollment_stay_connected',
+    type: 'json',
+    category: 'templates',
+    description: 'Email 5 of 5 — Facebook page and branch group chat links.',
+    defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_stay_connected,
+  },
+
   // --- Operational Alerts ---
   // Threshold (in PHP) above which a Branch Admin is shown an urgent
   // login-time alert reminding them to deposit pending Cash collections.
@@ -192,6 +232,23 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     defaultValue: 100000,
     min: 0,
     max: 100000000,
+  },
+
+  // --- Announcements ---
+  announcement_creator_mode: {
+    key: 'announcement_creator_mode',
+    type: 'string',
+    category: 'announcements',
+    description: 'Who may create board announcements: all, roles, or specific users.',
+    defaultValue: 'roles',
+    allowedValues: ['all', 'roles', 'specific'],
+  },
+  announcement_creator_roles: {
+    key: 'announcement_creator_roles',
+    type: 'json',
+    category: 'announcements',
+    description: 'User types allowed to create announcements when mode is roles.',
+    defaultValue: ['Admin', 'Teacher'],
   },
 });
 
@@ -260,6 +317,15 @@ export function validateAndNormalizeSettingInput(settingKey, inputValue) {
   if ((def.type === 'int' || def.type === 'number') && def.max !== undefined) {
     if (parsed > def.max) {
       return { ok: false, error: `${settingKey} must be <= ${def.max}` };
+    }
+  }
+
+  if (Array.isArray(def.allowedValues) && def.allowedValues.length > 0) {
+    if (!def.allowedValues.includes(parsed)) {
+      return {
+        ok: false,
+        error: `${settingKey} must be one of: ${def.allowedValues.join(', ')}`,
+      };
     }
   }
 

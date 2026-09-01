@@ -25,16 +25,16 @@ Breadcrumb path: `Programs / {Program} / {Teacher}`. Back button returns one lev
 
 ## Review modal (LCA form fields)
 
-Detail modal opens as a larger document-style sheet; body scrolls inside `max-h-[94vh]`; page scroll is locked while open. Header meta still shows lesson date, grade level, subject, and teacher.
+Detail modal opens as a larger document-style sheet; body scrolls inside `max-h-[94vh]`; page scroll is locked while open. Header meta still shows lesson date, grade level, **class**, and teacher.
 
 Body fields follow the LCA Lesson Plan PDF order and are flaggable in revision mode:
 
-- Topic, Phase, Session
+- Topic, Phase, Session, **Class** (CMS class from branch roster)
 - Early Learning Goals; Objective 1–3
 - Assessment Method / Criteria
 - Materials Needed To Prepare
-- Procedure: Preliminaries, Lesson Proper, Conclusion (time + activity each)
-- Differentiation: Class 1–3 (name, age group, considerations, adjustments)
+- Procedure: Preliminaries, Lesson Proper, Conclusion (activity & goal each; time fields removed from UI)
+- Class-Specific Adjustments: considerations and adjustments for the selected class
 - Teacher's Reflection (read-only): Successes, Amazing Moments, Challenges, Improvements
 - **Head Teacher's Review and Feedback** (editable on Approve; read-only after): Overall Assessment, Specific Feedback, Next Steps — also shown read-only to the teacher after approval
 

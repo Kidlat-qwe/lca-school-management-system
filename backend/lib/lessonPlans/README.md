@@ -19,7 +19,7 @@ LCA labels: **Successes**, **Amazing Moments**, **Challenges**, **Improvements**
 
 ### Form fields
 
-Aligned to the LCA Lesson Plan PDF (plus `grade_level` / `subject` for program folder browsing). See migration `145_align_lesson_plan_fields_to_lca_form.sql`.
+Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class** options come from non-archived classes in the teacher's branch (`GET /meta`). Each plan is linked to **one CMS class** via `class_id` (migration `148_add_class_id_to_lessonplanstbl.sql`).
 
 ### Head Teacher review
 

@@ -69,6 +69,10 @@ import {
   applyInstallmentToFullPaymentConversion,
   applyOptionalPromoToPackageChangePreview,
 } from '../lib/packageChangeConversion.js';
+import {
+  buildPackageMerchPriceByType,
+  computePackageMerchSwapInvoiceAdjustments,
+} from '../lib/packageMerchSwapAdjustment/index.js';
 
 const router = express.Router();
 
@@ -5571,6 +5575,27 @@ router.post(
         }
       }
       
+      let packageMerchSwapAdjustmentItems = [];
+      let packageMerchSwapAdjustmentTotal = 0;
+      if (package_id && merchandiseToDeduct.size > 0) {
+        const priceByType = buildPackageMerchPriceByType(packageMerchandiseMap);
+        const swapAdjustmentResult = await computePackageMerchSwapInvoiceAdjustments(
+          merchandiseToDeduct,
+          priceByType,
+          async (merchandiseId) => {
+            const replacementResult = await client.query(
+              `SELECT merchandise_id, merchandise_name, size, type, price
+               FROM merchandisestbl
+               WHERE merchandise_id = $1`,
+              [merchandiseId]
+            );
+            return replacementResult.rows[0] || null;
+          }
+        );
+        packageMerchSwapAdjustmentItems = swapAdjustmentResult.items;
+        packageMerchSwapAdjustmentTotal = swapAdjustmentResult.totalAdjustment;
+      }
+      
       // Validate inventory for all merchandise (resolve in-stock SKU when placeholder id is OOS)
       console.log(`[Inventory Validation] Validating ${merchandiseToDeduct.size} merchandise items for branch ${branch_id}`);
 
@@ -6313,6 +6338,16 @@ router.post(
         }
       }
 
+      if (packageMerchSwapAdjustmentTotal > 0) {
+        totalAmount += packageMerchSwapAdjustmentTotal;
+        for (const adj of packageMerchSwapAdjustmentItems) {
+          invoiceItems.push({
+            description: adj.description,
+            amount: adj.amount,
+          });
+        }
+      }
+
       // Update main invoice amount when promo was applied (invoice was created with full amount)
       if (newInvoice && promoApplied && promoDiscount > 0) {
         await client.query(
@@ -6529,6 +6564,22 @@ router.post(
         }
       }
 
+      if (downpaymentInvoice && packageMerchSwapAdjustmentTotal > 0) {
+        downpaymentAmount += packageMerchSwapAdjustmentTotal;
+        await client.query(
+          `UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2`,
+          [downpaymentAmount, downpaymentInvoice.invoice_id]
+        );
+        for (const adj of packageMerchSwapAdjustmentItems) {
+          await client.query(
+            `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+             VALUES ($1, $2, $3)`,
+            [downpaymentInvoice.invoice_id, adj.description, adj.amount]
+          );
+        }
+        downpaymentInvoice.amount = downpaymentAmount;
+      }
+
       // Handle main invoice operations (promo, items, remarks) - only if main invoice was created
       if (!skipMainInvoice && newInvoice) {
         // Update invoice amount if promo was applied
@@ -6537,6 +6588,12 @@ router.post(
             `UPDATE invoicestbl SET amount = $1, promo_id = $2 WHERE invoice_id = $3`,
             [totalAmount, promo_id, newInvoice.invoice_id]
           );
+        } else if (packageMerchSwapAdjustmentTotal > 0) {
+          await client.query(
+            `UPDATE invoicestbl SET amount = $1 WHERE invoice_id = $2`,
+            [totalAmount, newInvoice.invoice_id]
+          );
+          newInvoice.amount = totalAmount;
         } else if (promo_id) {
           // Link promo to invoice even if discount is 0 (for free merchandise only promos)
           await client.query(

@@ -10,6 +10,7 @@ import {
   isUniformStockCategory,
   formatMerchandiseVariantOptionLabel,
 } from '../merchandiseStock';
+import { getUniformCategory } from '../uniformMerchandise';
 
 export const PACKAGE_MERCH_ACTION = {
   ISSUE: 'issue',
@@ -112,14 +113,15 @@ export function createDefaultPackageMerchEntitlement(typeName) {
 
 /**
  * In-stock replacement options for a swap (same branch catalog, not the original type).
+ * Includes uniform stock rows (School/PE/Shirt SKUs) so e.g. Backpack → uniform piece.
+ * Learning Kit remains excluded.
  * @param {object[]} merchandiseList
- * @param {{ originalTypeName: string, isUniformName?: (name: string) => boolean, isLearningKitName?: (name: string) => boolean }} opts
+ * @param {{ originalTypeName: string, isLearningKitName?: (name: string) => boolean }} opts
  */
 export function getPackageMerchSwapOptions(
   merchandiseList,
   {
     originalTypeName,
-    isUniformName = () => false,
     isLearningKitName = () => false,
   } = {}
 ) {
@@ -134,7 +136,7 @@ export function getPackageMerchSwapOptions(
     const typeName = String(item.merchandise_name || '').trim();
     if (!typeName) continue;
     if (typeName.toLowerCase() === original) continue;
-    if (isUniformName(typeName) || isLearningKitName(typeName)) continue;
+    if (isLearningKitName(typeName)) continue;
     const qty =
       item.quantity == null || item.quantity === ''
         ? null
@@ -199,20 +201,206 @@ export function resolvePackageMerchInclusionDisplay({
 
 export function formatPackageMerchSwapOptionLabel(item) {
   if (!item) return '';
+  const qty =
+    item.quantity == null || item.quantity === ''
+      ? null
+      : parseInt(item.quantity, 10);
+  const stockSuffix =
+    qty !== null && Number.isFinite(qty) ? ` (${qty} in stock)` : '';
+
+  if (isUniformStockCategory(item.merchandise_name)) {
+    const base = formatMerchandiseVariantOptionLabel(item, { includePrice: false });
+    return base ? `${base}${stockSuffix}` : stockSuffix.trim();
+  }
+
   const name = item.merchandise_name || 'Merchandise';
   const sku = item.sku || item.item_name || null;
   const size = item.size ? String(item.size) : null;
   const parts = [name];
   if (sku) parts.push(sku);
   if (size) parts.push(`Size ${size}`);
+  if (stockSuffix) parts.push(stockSuffix.trim());
+  return parts.join(' · ');
+}
+
+/**
+ * Item label inside a category group (omits merchandise type name prefix).
+ */
+export function formatPackageMerchSwapItemDetailLabel(item) {
+  if (!item) return '';
   const qty =
     item.quantity == null || item.quantity === ''
       ? null
       : parseInt(item.quantity, 10);
-  if (qty !== null && Number.isFinite(qty)) {
-    parts.push(`(${qty} in stock)`);
+  const stockSuffix =
+    qty !== null && Number.isFinite(qty) ? ` · ${qty} in stock` : '';
+
+  if (isUniformStockCategory(item.merchandise_name)) {
+    const base = formatMerchandiseVariantOptionLabel(item, { includePrice: false });
+    return base ? `${base}${stockSuffix}` : stockSuffix.replace(/^ · /, '');
   }
-  return parts.join(' · ');
+
+  const sku = item.sku || item.item_name || null;
+  const size = item.size ? String(item.size) : null;
+  const parts = [];
+  if (sku) parts.push(sku);
+  if (size) parts.push(`Size ${size}`);
+  if (!parts.length) parts.push(`Item #${item.merchandise_id}`);
+  return `${parts.join(' · ')}${stockSuffix}`;
+}
+
+/**
+ * Group flat swap options by merchandise type name (category) for accordion UI.
+ * @returns {{ categoryName: string, items: object[], itemCount: number }[]}
+ */
+export function groupPackageMerchSwapOptions(options) {
+  const byCategory = new Map();
+  for (const item of options || []) {
+    const categoryName = String(item.merchandise_name || 'Other').trim() || 'Other';
+    if (!byCategory.has(categoryName)) byCategory.set(categoryName, []);
+    byCategory.get(categoryName).push(item);
+  }
+
+  return Array.from(byCategory.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([categoryName, items]) => ({
+      categoryName,
+      items: [...items].sort((a, b) => {
+        const aLabel = formatPackageMerchSwapItemDetailLabel(a);
+        const bLabel = formatPackageMerchSwapItemDetailLabel(b);
+        const byLabel = aLabel.localeCompare(bLabel);
+        if (byLabel !== 0) return byLabel;
+        return Number(a.merchandise_id) - Number(b.merchandise_id);
+      }),
+      itemCount: items.length,
+    }));
+}
+
+/** Parse CMS merchandise row price (catalog / packagedetail). */
+export function parseMerchandiseCatalogPrice(item) {
+  if (!item) return 0;
+  const raw = item.price ?? item.merchandise_price;
+  const parsed = parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+/**
+ * Reference price for a package-included freebie type (Backpack, Workbooks, …).
+ * Uses packagedetail price, default package selection, then branch catalog.
+ */
+export function resolvePackageIncludedMerchPrice({
+  typeName,
+  packageDetails = [],
+  merchandiseList = [],
+  packageMerchSelections = {},
+}) {
+  const original = String(typeName || '').trim();
+  if (!original) return 0;
+
+  const detailRows = (packageDetails || []).filter(
+    (detail) =>
+      String(detail.merchandise_name || detail.merchandise_type || '').trim() ===
+        original && detail.is_included !== false
+  );
+
+  for (const detail of detailRows) {
+    const fromDetail = parseMerchandiseCatalogPrice({ price: detail.merchandise_price });
+    if (fromDetail > 0) return fromDetail;
+  }
+
+  const defaultSel = (packageMerchSelections[original] || [])[0];
+  if (defaultSel?.merchandise_id) {
+    const row = (merchandiseList || []).find(
+      (item) => Number(item.merchandise_id) === Number(defaultSel.merchandise_id)
+    );
+    const fromSelection = parseMerchandiseCatalogPrice(row);
+    if (fromSelection > 0) return fromSelection;
+  }
+
+  for (const detail of detailRows) {
+    if (!detail.merchandise_id) continue;
+    const row = (merchandiseList || []).find(
+      (item) => Number(item.merchandise_id) === Number(detail.merchandise_id)
+    );
+    const fromDetailRow = parseMerchandiseCatalogPrice(row);
+    if (fromDetailRow > 0) return fromDetailRow;
+  }
+
+  const variants = listPackageItemVariantRows(merchandiseList, original);
+  if (variants.length) {
+    return parseMerchandiseCatalogPrice(variants[0]);
+  }
+
+  return 0;
+}
+
+function formatSwapAdjustmentReplacementLabel(replacement) {
+  if (!replacement) return 'Replacement item';
+  if (isUniformStockCategory(replacement.merchandise_name)) {
+    const label = formatMerchandiseVariantOptionLabel(replacement, { includePrice: false });
+    const typeName = String(replacement.merchandise_name || '').trim();
+    return label ? `${typeName} (${label})` : typeName;
+  }
+  const detail = formatPackageMerchSwapItemDetailLabel(replacement);
+  const typeName = String(replacement.merchandise_name || '').trim();
+  return detail && detail !== typeName ? `${typeName} (${detail.split(' · ')[0]})` : typeName;
+}
+
+/**
+ * Positive swap price differences only (replacement more expensive than included item).
+ * Cheaper replacements do not reduce the package total.
+ */
+export function computePackageMerchSwapAdjustments({
+  students = [],
+  swappableTypeNames = [],
+  entitlementsByStudent = {},
+  packageDetails = [],
+  merchandiseList = [],
+  packageMerchSelections = {},
+}) {
+  const adjustments = [];
+  let totalAdjustment = 0;
+  const types = Array.isArray(swappableTypeNames) ? swappableTypeNames : [];
+  const studentList = Array.isArray(students) ? students : [];
+
+  for (const student of studentList) {
+    const sid = student?.user_id;
+    const byType = entitlementsByStudent?.[sid] || {};
+
+    for (const typeName of types) {
+      const ent = byType[typeName] || createDefaultPackageMerchEntitlement(typeName);
+      if (normalizePackageMerchAction(ent.action) !== PACKAGE_MERCH_ACTION.SWAP) continue;
+
+      const replacement = (merchandiseList || []).find(
+        (item) => Number(item.merchandise_id) === Number(ent.replacement_merchandise_id)
+      );
+      if (!replacement) continue;
+
+      const originalPrice = resolvePackageIncludedMerchPrice({
+        typeName,
+        packageDetails,
+        merchandiseList,
+        packageMerchSelections,
+      });
+      const replacementPrice = parseMerchandiseCatalogPrice(replacement);
+      const adjustmentAmount = replacementPrice - originalPrice;
+      if (!(adjustmentAmount > 0)) continue;
+
+      const replacementLabel = formatSwapAdjustmentReplacementLabel(replacement);
+      adjustments.push({
+        studentName: student.full_name || 'Student',
+        originalTypeName: typeName,
+        replacementLabel,
+        originalPrice,
+        replacementPrice,
+        adjustmentAmount,
+        label: `${typeName} → ${replacementLabel}`,
+      });
+      totalAdjustment += adjustmentAmount;
+    }
+  }
+
+  return { adjustments, totalAdjustment };
 }
 
 /**
@@ -242,11 +430,13 @@ export function buildPackageMerchEntitlementLine({
   }
 
   if (action === PACKAGE_MERCH_ACTION.SWAP && replacementItem?.merchandise_id) {
+    const replacementName = replacementItem.merchandise_name || original;
+    const uniformCategory = getUniformCategory(replacementItem);
     return {
       merchandise_id: Number(replacementItem.merchandise_id),
       size: replacementItem.size || null,
-      merchandise_name: replacementItem.merchandise_name || original,
-      category: null,
+      merchandise_name: replacementName,
+      category: uniformCategory !== 'General' ? uniformCategory : null,
       action: PACKAGE_MERCH_ACTION.SWAP,
       original_type_name: original,
       reason: reason || `Swapped package ${original} for replacement item`,
@@ -293,13 +483,6 @@ export function validatePackageMerchEntitlements({
         );
         if (!found) {
           return `Replacement for ${typeName} is not available for ${student.full_name || 'student'}.`;
-        }
-        const qty =
-          found.quantity == null || found.quantity === ''
-            ? null
-            : parseInt(found.quantity, 10);
-        if (qty !== null && (!Number.isFinite(qty) || qty <= 0)) {
-          return `Replacement for ${typeName} is out of stock for ${student.full_name || 'student'}.`;
         }
       }
     }

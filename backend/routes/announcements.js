@@ -1,8 +1,17 @@
 import express from 'express';
 import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
+import { requireAnnouncementCreator } from '../middleware/requireAnnouncementCreator.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
+import {
+  canUserCreateAnnouncement,
+  loadAnnouncementCreatorSettings,
+  loadAnnouncementCreatorUsers,
+  normalizeCreatorMode,
+  normalizeCreatorRoles,
+  saveAnnouncementCreatorSettings,
+} from '../lib/announcementCreators/index.js';
 import { sendAnnouncementCreatedEmails } from '../lib/announcementRecipientEmails/index.js';
 import {
   normalizeAudienceIdList,
@@ -511,6 +520,104 @@ router.post(
 );
 
 /**
+ * GET /api/sms/announcements/creators/me
+ * Whether the current user may create board announcements.
+ */
+router.get('/creators/me', async (req, res, next) => {
+  try {
+    const canCreate = await canUserCreateAnnouncement(query, req.user);
+    res.json({
+      success: true,
+      data: {
+        can_create: canCreate,
+        user_id: req.user.userId || req.user.user_id,
+        user_type: req.user.userType || req.user.user_type,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/sms/announcements/creators
+ * Superadmin: announcement creator permission config (Settings).
+ */
+router.get('/creators', requireRole('Superadmin'), async (req, res, next) => {
+  try {
+    const client = await getClient();
+    try {
+      const settings = await loadAnnouncementCreatorSettings(client);
+      const creators = await loadAnnouncementCreatorUsers(client);
+      res.json({
+        success: true,
+        data: {
+          mode: settings.mode,
+          roles: settings.roles,
+          user_ids: creators.map((row) => Number(row.user_id)),
+          creators,
+        },
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /api/sms/announcements/creators
+ * Superadmin: save announcement creator permission config.
+ */
+router.put(
+  '/creators',
+  requireRole('Superadmin'),
+  [
+    body('mode').optional().isString(),
+    body('roles').optional().isArray(),
+    body('user_ids').optional().isArray(),
+    body('user_ids.*').optional().isInt({ min: 1 }),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      const saved = await saveAnnouncementCreatorSettings(client, {
+        mode: normalizeCreatorMode(req.body.mode),
+        roles: normalizeCreatorRoles(req.body.roles),
+        userIds: req.body.user_ids || [],
+        updatedBy: req.user.userId || req.user.user_id,
+      });
+      await client.query('COMMIT');
+
+      const creators = await loadAnnouncementCreatorUsers(client);
+      res.json({
+        success: true,
+        message: 'Announcement creator settings saved',
+        data: {
+          ...saved,
+          creators,
+        },
+      });
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* ignore */
+      }
+      if (error.message && !error.status) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
+      next(error);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * GET /api/sms/announcements/:id
  * Get a single announcement by ID
  * Access: All authenticated users
@@ -627,7 +734,7 @@ router.post(
     body('class_ids.*').optional().isInt({ min: 1 }).withMessage('Each class_id must be a positive integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireAnnouncementCreator,
   async (req, res, next) => {
     const client = await getClient();
     try {
@@ -814,7 +921,7 @@ router.put(
     body('class_ids.*').optional().isInt({ min: 1 }).withMessage('Each class_id must be a positive integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireAnnouncementCreator,
   async (req, res, next) => {
     const client = await getClient();
     try {
@@ -1043,7 +1150,7 @@ router.delete(
     param('id').isInt().withMessage('Announcement ID must be an integer'),
     handleValidationErrors,
   ],
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireAnnouncementCreator,
   async (req, res, next) => {
     const client = await getClient();
     try {

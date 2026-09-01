@@ -3,17 +3,14 @@ import {
   normalizePackageMerchAction,
   createDefaultPackageMerchEntitlement,
   getPackageMerchSwapOptions,
-  formatPackageMerchSwapOptionLabel,
 } from '../../utils/packageMerchSwap';
-import {
-  isUniformMerchandiseName,
-  isLearningKitMerchandiseName,
-} from '../../utils/uniformMerchandise';
+import { isLearningKitMerchandiseName } from '../../utils/uniformMerchandise';
 import {
   parseMerchandiseQuantity,
   formatStockCountLabel,
   sumMerchandiseTypeStock,
 } from '../../utils/merchandiseStock';
+import PackageMerchSwapReplacementPicker from './PackageMerchSwapReplacementPicker';
 
 function itemImage(item) {
   return item?.image_url || null;
@@ -63,7 +60,6 @@ export default function PackageMerchEntitlementPanel({
         {typeNames.map((typeName) => {
           const options = getPackageMerchSwapOptions(merchandise, {
             originalTypeName: typeName,
-            isUniformName: isUniformMerchandiseName,
             isLearningKitName: isLearningKitMerchandiseName,
           });
           const keepImage = firstCatalogImage(merchandise, typeName);
@@ -85,8 +81,9 @@ export default function PackageMerchEntitlementPanel({
                 </p>
               ) : null}
               <p className="text-xs text-gray-500 mb-3">
-                Keep the included {typeName.toLowerCase()}, or swap it for another item.
-                Same package price. Zero-stock replacements are issued after restock.
+                Keep the included {typeName.toLowerCase()}, or swap it for another item
+                (including uniform SKUs). Same package price. Zero-stock replacements are
+                issued after restock.
               </p>
               <div
                 className="space-y-3 max-h-80 overflow-y-auto"
@@ -211,30 +208,17 @@ export default function PackageMerchEntitlementPanel({
                           <label className="block text-[11px] font-medium text-gray-600">
                             Replacement item
                           </label>
-                          <select
-                            value={ent.replacement_merchandise_id || ''}
-                            onChange={(e) =>
+                          <PackageMerchSwapReplacementPicker
+                            idPrefix={`${typeName}-${student.user_id}`}
+                            options={options}
+                            value={ent.replacement_merchandise_id}
+                            onChange={(merchandiseId) =>
                               setEntitlement(student.user_id, typeName, {
                                 action: PACKAGE_MERCH_ACTION.SWAP,
-                                replacement_merchandise_id: e.target.value
-                                  ? Number(e.target.value)
-                                  : null,
+                                replacement_merchandise_id: merchandiseId,
                               })
                             }
-                            className="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-[#F7C844] bg-white"
-                          >
-                            <option value="">Select replacement…</option>
-                            {options.map((item) => (
-                              <option key={item.merchandise_id} value={item.merchandise_id}>
-                                {formatPackageMerchSwapOptionLabel(item)}
-                              </option>
-                            ))}
-                          </select>
-                          {options.length === 0 ? (
-                            <p className="text-[11px] text-amber-800">
-                              No other in-stock items available to swap.
-                            </p>
-                          ) : null}
+                          />
                         </div>
                       ) : null}
                     </div>

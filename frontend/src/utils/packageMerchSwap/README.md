@@ -38,7 +38,11 @@ branch merchandise** rows in CMS (`merchandisestbl`), excluding:
 
 - the original type
 - type-shell placeholders
-- uniforms / Learning Kit
+- Learning Kit
+
+**Uniform stock rows are included** (School Uniform, PE Uniform, Shirt SKUs) so a package
+freebie such as Backpack can be swapped for a specific uniform size/piece. Labels use
+`formatMerchandiseVariantOptionLabel` (size · gender · piece).
 
 No RHET live catalog call for the swap dropdown.
 
@@ -51,11 +55,19 @@ Types with multiple RHET `itemName` / `sku` rows use
 
 `components/packageMerch/PackageMerchEntitlementPanel.jsx` — per student Keep / Swap on the
 **Configure Merchandise** enroll step. Keep shows total stock for the included type;
-Swap options use `formatPackageMerchSwapOptionLabel` (`(N in stock)`).
+Swap uses `PackageMerchSwapReplacementPicker` (category accordion → item list).
+
+`PackageMerchSwapReplacementPicker.jsx` — groups swap targets by merchandise type name
+(School Uniform, ID Lace, …); expand a category to pick a specific SKU.
 
 Review & Enroll uses `resolvePackageMerchInclusionDisplay` so a swapped freebie
 (e.g. Backpack → ID Lace) shows the replacement name, image, and
 “Swapped from Backpack”.
+
+When the replacement SKU costs **more** than the included item, the enrollment
+summary shows an **Adjustment** line and adds only the positive difference to
+Total (cheaper replacements do not reduce the package price). The enroll API
+adds matching invoice line items via `backend/lib/packageMerchSwapAdjustment/`.
 
 `PACKAGE_MERCH_SWAPABLE_TYPE_NAMES` is deprecated (empty) and must not be used as an
 allowlist.

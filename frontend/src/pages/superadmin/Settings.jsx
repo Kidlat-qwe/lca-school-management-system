@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import TemplateEditorCard from '../../components/settings/TemplateEditorCard';
+import TemplatePickerSelect from '../../components/settings/TemplatePickerSelect';
 import ArchivedClassesPanel from '../../components/settings/ArchivedClassesPanel';
 import LessonPlanSettingsPanel from '../../components/settings/LessonPlanSettingsPanel';
+import AnnouncementCreatorsPanel from '../../components/settings/AnnouncementCreatorsPanel';
 import { LESSON_PLANS_ENABLED } from '../../utils/lessonPlansFeature';
 import {
   TEMPLATE_DEFS,
@@ -22,6 +24,7 @@ const TABS = [
   { id: 'schedule', label: 'Invoice Schedule' },
   { id: 'alerts', label: 'Alerts' },
   { id: 'templates', label: 'Templates' },
+  { id: 'announcements', label: 'Announcements' },
   { id: 'lesson_plans', label: 'Lesson Plans' },
   { id: 'archived', label: 'Archived Classes' },
 ];
@@ -284,6 +287,12 @@ const Settings = () => {
     for (const [k, v] of Object.entries(templateEffective || {})) meta[k] = v?.scope || 'default';
     return meta;
   }, [templateEffective]);
+
+  const selectedTemplateBranch = useMemo(
+    () =>
+      branches.find((b) => String(b.branch_id) === String(templateSelectedBranchId)) || null,
+    [branches, templateSelectedBranchId]
+  );
 
   const selectedTemplateDef = useMemo(
     () => TEMPLATE_DEFS.find((d) => d.key === selectedTemplateKey) || TEMPLATE_DEFS[0],
@@ -1117,18 +1126,12 @@ const Settings = () => {
                   <label htmlFor="template-select" className="block text-sm font-medium text-gray-700">
                     Template
                   </label>
-                  <select
+                  <TemplatePickerSelect
                     id="template-select"
-                    className="mt-1 w-full max-w-md rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
                     value={selectedTemplateKey}
                     onChange={(e) => setSelectedTemplateKey(e.target.value)}
-                  >
-                    {TEMPLATE_DEFS.map((def) => (
-                      <option key={def.key} value={def.key}>
-                        {def.label}
-                      </option>
-                    ))}
-                  </select>
+                    disabled={!canLoadTemplateBranch || templateLoading || templateSaving}
+                  />
                 </div>
 
                 <TemplateEditorCard
@@ -1136,6 +1139,10 @@ const Settings = () => {
                   templateValue={templates[selectedTemplateDef.key] || emptyTemplate()}
                   disabled={!canLoadTemplateBranch || templateLoading || templateSaving}
                   scopeTag={<ScopeTag scopeVal={templateScopeMeta[selectedTemplateDef.key]} />}
+                  templateScope={templateScope}
+                  selectedBranch={
+                    templateScope === 'branch' ? selectedTemplateBranch : null
+                  }
                   onFieldChange={(field, value) =>
                     updateTemplateField(selectedTemplateDef.key, field, value)
                   }
@@ -1161,6 +1168,7 @@ const Settings = () => {
             )}
 
             {activeTab === 'lesson_plans' && <LessonPlanSettingsPanel />}
+            {activeTab === 'announcements' && <AnnouncementCreatorsPanel />}
             {activeTab === 'archived' && <ArchivedClassesPanel />}
           </div>
         </div>

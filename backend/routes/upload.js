@@ -1,5 +1,6 @@
 import express from 'express';
 import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
+import { requireAnnouncementCreator } from '../middleware/requireAnnouncementCreator.js';
 import { uploadSingle, uploadSingleAnnouncementAttachment, handleUploadError } from '../middleware/fileUpload.js';
 import { uploadToS3, deleteFromS3, validateImageFile, generateUniqueFileName } from '../utils/s3Upload.js';
 
@@ -209,7 +210,7 @@ router.post(
 router.post(
   '/announcement-file',
   verifyFirebaseToken,
-  requireRole('Superadmin', 'Admin', 'Teacher'),
+  requireAnnouncementCreator,
   uploadSingleAnnouncementAttachment,
   handleUploadError,
   async (req, res, next) => {

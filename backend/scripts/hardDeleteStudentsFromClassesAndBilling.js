@@ -424,10 +424,10 @@ async function main() {
       [profileIds, studentIds]
     );
 
-    // Allow welcome email to send again after a full billing wipe + re-enroll test.
+    // Allow onboarding email sequence to send again after a full billing wipe + re-enroll test.
     const welcomeEmailLogDelete = await client.query(
       `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM system_logstbl' : 'DELETE FROM system_logstbl'}
-       WHERE entity_type = 'first_enrollment_welcome_email'
+       WHERE entity_type = ANY(ARRAY['first_enrollment_onboarding_sequence', 'first_enrollment_welcome_email']::text[])
          AND (
            user_id = ANY($1::int[])
            OR (details->>'student_id')::int = ANY($1::int[])
@@ -452,7 +452,7 @@ async function main() {
       console.log(`- reservedstudentstbl would delete: ${getAffected(reservedStudentsDelete)}`);
       console.log(`- invoicestbl would delete: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl would delete: ${getAffected(profileDelete)}`);
-      console.log(`- first_enrollment_welcome_email logs would delete: ${getAffected(welcomeEmailLogDelete)}`);
+      console.log(`- first_enrollment onboarding email logs would delete: ${getAffected(welcomeEmailLogDelete)}`);
       console.log(
         `- daily_summary_salestbl: after payment removal, ${affectedDateRows.length} branch-date pair(s) will be reconciled (update totals or delete row if day is empty)`
       );
@@ -473,7 +473,7 @@ async function main() {
       console.log(`- reservedstudentstbl deleted: ${getAffected(reservedStudentsDelete)}`);
       console.log(`- invoicestbl deleted: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl deleted: ${getAffected(profileDelete)}`);
-      console.log(`- first_enrollment_welcome_email logs deleted: ${getAffected(welcomeEmailLogDelete)}`);
+      console.log(`- first_enrollment onboarding email logs deleted: ${getAffected(welcomeEmailLogDelete)}`);
       console.log(
         `- daily_summary_salestbl: updated snapshots ${dailySync.updated}, removed empty rows ${dailySync.deleted}, skipped (no prior EOD row) ${dailySync.skipped}`
       );

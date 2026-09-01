@@ -1,4 +1,7 @@
-import { resolvePackageMerchInclusionDisplay } from '../../utils/packageMerchSwap';
+import {
+  resolvePackageMerchInclusionDisplay,
+  computePackageMerchSwapAdjustments,
+} from '../../utils/packageMerchSwap';
 import {
   formatStockCountLabel,
   lookupMerchandiseQuantity,
@@ -107,4 +110,39 @@ export function formatEnrollPackagePrice(selectedPackage, selectedPromo) {
   const total =
     selectedPromo?.final_price != null ? parseFloat(selectedPromo.final_price) : base;
   return { packagePrice: base, totalPrice: Number.isFinite(total) ? total : base };
+}
+
+/**
+ * Package + promo + positive swap upgrade adjustments for the enrollment summary rail.
+ */
+export function buildEnrollPricingSummary({
+  selectedPackage,
+  selectedPromo,
+  students = [],
+  swappableTypeNames = [],
+  entitlementsByStudent = {},
+  merchandiseList = [],
+  packageDetails = [],
+  packageMerchSelections = {},
+}) {
+  const { packagePrice, totalPrice: promoTotal } = formatEnrollPackagePrice(
+    selectedPackage,
+    selectedPromo
+  );
+  const { adjustments, totalAdjustment } = computePackageMerchSwapAdjustments({
+    students,
+    swappableTypeNames,
+    entitlementsByStudent,
+    packageDetails,
+    merchandiseList,
+    packageMerchSelections,
+  });
+  const promoTotalSafe = Number.isFinite(promoTotal) ? promoTotal : packagePrice;
+  return {
+    packagePrice,
+    promoName: selectedPromo?.promo_name || null,
+    swapAdjustments: adjustments,
+    adjustmentTotal: totalAdjustment,
+    totalPrice: promoTotalSafe + totalAdjustment,
+  };
 }

@@ -8,6 +8,8 @@ import {
   REFLECTION_EDITABLE_STATUSES,
   buildRevisionFeedbackPayload,
   clearReflectionFields,
+  enrichLessonPlanPayloadWithClass,
+  formatLessonPlanClassLabel,
   isLessonDateToday,
   lessonPlanWriteColumns,
   mapLessonPlanRow,
@@ -41,11 +43,16 @@ const SELECT_PLAN = `
     b.deped_region,
     b.deped_division,
     b.deped_district,
-    v.full_name AS verified_by_name
+    v.full_name AS verified_by_name,
+    lc.class_name AS linked_class_name,
+    lc.level_tag AS linked_level_tag,
+    lcp.program_name AS linked_program_name
   FROM lessonplanstbl lp
   LEFT JOIN userstbl u ON u.user_id = lp.teacher_user_id
   LEFT JOIN branchestbl b ON b.branch_id = lp.branch_id
   LEFT JOIN userstbl v ON v.user_id = lp.verified_by
+  LEFT JOIN classestbl lc ON lc.class_id = lp.class_id
+  LEFT JOIN programstbl lcp ON lcp.program_id = lc.program_id
 `;
 
 async function assertIsConfiguredAdminVerifier(userId) {
@@ -146,14 +153,15 @@ const VERIFIER_LIST_SELECT = `
 
 /**
  * GET /api/sms/lesson-plans/meta
- * Grade/subject option lists + current user prepared-by name.
+ * Grade levels, branch classes, and current user prepared-by name.
  */
 router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next) => {
   try {
-    const { GRADE_LEVEL_OPTIONS, SUBJECT_OPTIONS_BY_GRADE } = await import(
+    const { deriveBranchGradeLevelsFromClasses, formatLessonPlanClassLabel } = await import(
       '../lib/lessonPlans/index.js'
     );
     let branch = null;
+    let classes = [];
     const branchId = req.user.branchId || req.user.branch_id || null;
     if (branchId) {
       const br = await query(
@@ -171,12 +179,37 @@ router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next)
         [branchId]
       );
       branch = br.rows[0] || null;
+
+      const classRows = await query(
+        `
+        SELECT
+          c.class_id,
+          c.class_name,
+          c.level_tag,
+          c.status,
+          p.program_name
+        FROM classestbl c
+        LEFT JOIN programstbl p ON p.program_id = c.program_id
+        WHERE c.branch_id = $1 AND c.archived_at IS NULL
+        ORDER BY p.program_name NULLS LAST, c.class_name NULLS LAST, c.class_id
+        `,
+        [branchId]
+      );
+      classes = (classRows.rows || []).map((row) => ({
+        class_id: row.class_id,
+        class_name: row.class_name || '',
+        program_name: row.program_name || '',
+        level_tag: row.level_tag || '',
+        status: row.status || '',
+        label: formatLessonPlanClassLabel(row),
+      }));
     }
+    const grade_levels = deriveBranchGradeLevelsFromClasses(classes);
     res.json({
       success: true,
       data: {
-        grade_levels: GRADE_LEVEL_OPTIONS,
-        subjects_by_grade: SUBJECT_OPTIONS_BY_GRADE,
+        grade_levels,
+        classes,
         prepared_by: req.user.fullName || req.user.full_name || req.user.email || '',
         branch: {
           branch_id: branch?.branch_id ?? null,
@@ -456,17 +489,22 @@ router.post(
         return res.status(400).json({ success: false, message: errors.join('; ') });
       }
 
+      const branchId = req.user.branchId || null;
+      const enriched = await enrichLessonPlanPayloadWithClass(query, payload, branchId);
+      if (!enriched.ok) {
+        return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
+      }
+
       const status = req.body.status === 'submitted' ? 'submitted' : 'draft';
       // Reflections stay empty until verifier approves and lesson date unlocks them.
-      const cols = lessonPlanWriteColumns(clearReflectionFields(payload));
+      const cols = lessonPlanWriteColumns(clearReflectionFields(enriched.payload));
       const teacherId = req.user.userId || req.user.user_id;
-      const branchId = req.user.branchId || null;
 
       const result = await query(
         `
         INSERT INTO lessonplanstbl (
           branch_id, teacher_user_id,
-          lesson_date, grade_level, subject, phase, session_label, topic,
+          lesson_date, grade_level, class_id, subject, phase, session_label, topic,
           early_learning_goals, objective_1, objective_2, objective_3,
           assessment_method, assessment_criteria, materials_needed,
           preliminaries_time, preliminaries_activity,
@@ -479,17 +517,17 @@ router.post(
           status, submitted_at
         ) VALUES (
           $1, $2,
-          $3, $4, $5, $6, $7, $8,
-          $9, $10, $11, $12,
-          $13, $14, $15,
-          $16, $17,
-          $18, $19,
-          $20, $21,
-          $22, $23, $24, $25,
-          $26, $27, $28, $29,
-          $30, $31, $32, $33,
-          $34, $35, $36, $37,
-          $38, $39
+          $3, $4, $5, $6, $7, $8, $9,
+          $10, $11, $12, $13,
+          $14, $15, $16,
+          $17, $18,
+          $19, $20,
+          $21, $22,
+          $23, $24, $25, $26,
+          $27, $28, $29, $30,
+          $31, $32, $33, $34,
+          $35, $36, $37, $38,
+          $39, $40
         )
         RETURNING lesson_plan_id
         `,
@@ -498,6 +536,7 @@ router.post(
           teacherId,
           cols.lesson_date,
           cols.grade_level,
+          cols.class_id,
           cols.subject,
           cols.phase,
           cols.session_label,
@@ -645,52 +684,60 @@ router.put(
       if (errors.length) {
         return res.status(400).json({ success: false, message: errors.join('; ') });
       }
-      const cols = lessonPlanWriteColumns(payload);
+
+      const branchId = req.user.branchId || null;
+      const enriched = await enrichLessonPlanPayloadWithClass(query, payload, branchId);
+      if (!enriched.ok) {
+        return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
+      }
+      const cols = lessonPlanWriteColumns(enriched.payload);
 
       await query(
         `
         UPDATE lessonplanstbl SET
           lesson_date = $1,
           grade_level = $2,
-          subject = $3,
-          phase = $4,
-          session_label = $5,
-          topic = $6,
-          early_learning_goals = $7,
-          objective_1 = $8,
-          objective_2 = $9,
-          objective_3 = $10,
-          assessment_method = $11,
-          assessment_criteria = $12,
-          materials_needed = $13,
-          preliminaries_time = $14,
-          preliminaries_activity = $15,
-          lesson_proper_time = $16,
-          lesson_proper_activity = $17,
-          conclusion_time = $18,
-          conclusion_activity = $19,
-          class1_name = $20,
-          class1_age_group = $21,
-          class1_considerations = $22,
-          class1_adjustments = $23,
-          class2_name = $24,
-          class2_age_group = $25,
-          class2_considerations = $26,
-          class2_adjustments = $27,
-          class3_name = $28,
-          class3_age_group = $29,
-          class3_considerations = $30,
-          class3_adjustments = $31,
-          reflection_went_well = $32,
-          reflection_amazing_moments = $33,
-          reflection_challenges = $34,
-          reflection_improvements = $35,
+          class_id = $3,
+          subject = $4,
+          phase = $5,
+          session_label = $6,
+          topic = $7,
+          early_learning_goals = $8,
+          objective_1 = $9,
+          objective_2 = $10,
+          objective_3 = $11,
+          assessment_method = $12,
+          assessment_criteria = $13,
+          materials_needed = $14,
+          preliminaries_time = $15,
+          preliminaries_activity = $16,
+          lesson_proper_time = $17,
+          lesson_proper_activity = $18,
+          conclusion_time = $19,
+          conclusion_activity = $20,
+          class1_name = $21,
+          class1_age_group = $22,
+          class1_considerations = $23,
+          class1_adjustments = $24,
+          class2_name = $25,
+          class2_age_group = $26,
+          class2_considerations = $27,
+          class2_adjustments = $28,
+          class3_name = $29,
+          class3_age_group = $30,
+          class3_considerations = $31,
+          class3_adjustments = $32,
+          reflection_went_well = $33,
+          reflection_amazing_moments = $34,
+          reflection_challenges = $35,
+          reflection_improvements = $36,
           updated_at = NOW()
-        WHERE lesson_plan_id = $36
+        WHERE lesson_plan_id = $37
         `,
         [
           cols.lesson_date,
           cols.grade_level,
+          cols.class_id,
           cols.subject,
           cols.phase,
           cols.session_label,
@@ -759,6 +806,12 @@ router.post(
           success: false,
           message: 'Only draft or revision-requested plans can be submitted',
         });
+      }
+
+      const submitPayload = normalizeLessonPlanBody(mapLessonPlanRow(existing.rows[0]));
+      const submitErrors = validateLessonPlanPayload(submitPayload, { requireAll: true });
+      if (submitErrors.length) {
+        return res.status(400).json({ success: false, message: submitErrors.join('; ') });
       }
 
       // Clear any reflection content at submit time (locked until lesson date after approval).

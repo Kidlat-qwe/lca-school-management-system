@@ -13,7 +13,7 @@ function Money({ value }) {
 }
 
 /**
- * Right-rail order summary for Select students / Configure items / Review.
+ * Right-rail enrollment summary for Select students / Configure items / Review.
  */
 export default function EnrollOrderSummary({
   packageName,
@@ -26,6 +26,8 @@ export default function EnrollOrderSummary({
   configuredCount = null,
   showInvoiceNote = false,
   classLabel = '',
+  swapAdjustments = [],
+  adjustmentTotal = 0,
 }) {
   return (
     <aside
@@ -34,7 +36,7 @@ export default function EnrollOrderSummary({
     >
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
-          Order summary
+          Enrollment summary
         </p>
         <p className="text-sm font-semibold text-gray-900 mt-0.5">
           {packageName || 'No package selected'}
@@ -133,6 +135,30 @@ export default function EnrollOrderSummary({
             {promoName || 'None'}
           </span>
         </div>
+        {adjustmentTotal > 0 ? (
+          <div className="space-y-1 pt-0.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-gray-600">Adjustment</span>
+              <span className="font-medium text-amber-800">
+                +<Money value={adjustmentTotal} />
+              </span>
+            </div>
+            <ul className="space-y-1 pl-0.5">
+              {swapAdjustments.map((line, idx) => (
+                <li key={`${line.label}-${idx}`} className="text-[10px] text-gray-600 leading-snug">
+                  {students.length > 1 ? (
+                    <span className="font-medium text-gray-700">{line.studentName}: </span>
+                  ) : null}
+                  {line.label}
+                  <span className="text-amber-800 font-medium">
+                    {' '}
+                    (+<Money value={line.adjustmentAmount} />)
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between pt-1">
           <span className="text-sm font-semibold text-gray-900">Total</span>
           <span className="text-base font-bold text-gray-900">

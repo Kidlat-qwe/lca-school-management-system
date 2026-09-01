@@ -4,11 +4,20 @@ Reusable UI for the Settings tabs.
 
 ## Files
 
-- `TemplateEditorCard.jsx` — Template form (title, subject, body, enabled) with variable palette.
+- `TemplateEditorCard.jsx` — Template form (title, subject, body, enabled) with variable palette; branch labels on Stay Connected group-chat variables when editing a branch override.
+- `TemplatePickerSelect.jsx` — Grouped template dropdown (includes **First enrollment onboarding** optgroup).
 - `TemplateVariableField.jsx` — Input/textarea that locks `{variable}` tokens after insertion.
 - `TemplateVariablePalette.jsx` — Read-only, auto-detected variable chips (drag or click to insert).
 - `ArchivedClassesPanel.jsx` — Settings → **Archived Classes**: list, restore, or permanently delete soft-archived classes (30-day retention).
 - `LessonPlanSettingsPanel.jsx` — Settings → **Lesson Plans**: select Admin verifiers (branch-scoped). All Superadmins can always verify every branch. Review UI: `/superadmin/lesson-plans` or `/admin/lesson-plans`.
+- `AnnouncementCreatorsPanel.jsx` — Settings → **Announcements**: configure who may create board announcements (all users, by role, or specific users). Superadmins always have access.
+
+## Announcement creators
+
+- Modes: **Allow all users**, or pick **specific users** grouped by end-user type (Admin, Teacher, Student, Finance, Superfinance).
+- Each group expands to show users with **Select all [Type]** and individual checkboxes.
+- API: `GET/PUT /announcements/creators` (Superadmin), `GET /announcements/creators/me` (current user).
+- Enforced on create/update/delete announcements and announcement file uploads.
 
 ## Archived Classes
 

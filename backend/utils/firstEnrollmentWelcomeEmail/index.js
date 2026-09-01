@@ -1,8 +1,14 @@
 /**
- * First-enrollment welcome email for Little Champions Academy.
- * Sends once when a student receives program_enrollment_status = 'new'.
- * Recipients: student email + primary guardian email (deduped case-insensitively).
- * Attaches downloadable AR PDF when an invoice/AR can be resolved (same as Payment Received).
+ * First-enrollment onboarding email sequence for Little Champions Academy.
+ *
+ * Sends once when a student receives program_enrollment_status = 'new':
+ *   1. Onboarding (official welcome + optional AR PDF)
+ *   2. Class Schedule (CMS start date + weekly schedule)
+ *   3. Things to Prepare
+ *   4. Important Reminders
+ *   5. Stay Connected (Facebook page)
+ *
+ * Recipients: student email + primary guardian email (deduped).
  */
 
 import { getClient, query as poolQuery } from '../../config/database.js';
@@ -12,21 +18,39 @@ import {
   sendSystemNotificationEmailToEach,
 } from '../emailService.js';
 import { buildArPdfAttachmentForPaymentConfirmation } from '../paymentArPdfAttachment.js';
-import { plainTextToEmailHtml } from '../templateRenderService.js';
+import {
+  academicYearLabel,
+  buildSequenceEmail,
+  facebookPageUrl,
+  ONBOARDING_EMAIL,
+  SEQUENCE_EMAIL_IDS,
+} from './emailBodies.js';
+import { resolveBranchGroupChat } from './branchGroupChat.js';
+import { resolveSequenceEmailContent } from './templateConfig.js';
+import {
+  loadEnrollmentClassContext,
+  loadEnrollmentClassContextForStudent,
+} from './classContext.js';
 
 const NEW_ENROLLMENT_STATUS = 'new';
-const LOG_ENTITY_TYPE = 'first_enrollment_welcome_email';
-const DEFAULT_ACADEMIC_YEAR = '2026–2027';
-const DEFAULT_QUEUE_DELAY_MS = 3000;
+const LOG_ENTITY_SEQUENCE = 'first_enrollment_onboarding_sequence';
+const LOG_ENTITY_LEGACY = ONBOARDING_EMAIL.legacyLogType;
 
-function academicYearLabel() {
-  const fromEnv = String(process.env.FIRST_ENROLLMENT_WELCOME_ACADEMIC_YEAR || '').trim();
-  return fromEnv || DEFAULT_ACADEMIC_YEAR;
-}
+const DEFAULT_QUEUE_DELAY_MS = 3000;
+const DEFAULT_STEP_DELAY_MS = 45000;
 
 function queueDelayMs() {
   const raw = Number(process.env.FIRST_ENROLLMENT_WELCOME_EMAIL_DELAY_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_QUEUE_DELAY_MS;
+}
+
+function stepDelayMs() {
+  const raw = Number(process.env.FIRST_ENROLLMENT_SEQUENCE_STEP_DELAY_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_STEP_DELAY_MS;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function toEmailAttachments(pdfResult) {
@@ -38,49 +62,6 @@ function toEmailAttachments(pdfResult) {
       contentType: 'application/pdf',
     },
   ];
-}
-
-/**
- * Exact client welcome copy (Academic Year from env / default 2026–2027).
- * Same layout as payment confirmation emails (yellow header + gray footer).
- */
-export function buildFirstEnrollmentWelcomePlainText({ includeArAttachmentNote = false } = {}) {
-  const year = academicYearLabel();
-  const lines = [
-    'Congratulations!',
-    '',
-    `We are pleased to inform you that you are now officially enrolled at Little Champions Academy Inc. for Academic Year ${year}.`,
-    '',
-    'We are delighted to welcome you to the Little Champions family! We look forward to partnering with you in creating a meaningful and exciting learning journey filled with opportunities to play, learn, and succeed.',
-    '',
-    'Thank you for choosing Little Champions Academy. We are excited to have you with us!',
-    '',
-    'Welcome to Little Champions Academy!',
-  ];
-
-  if (includeArAttachmentNote) {
-    lines.push(
-      '',
-      'Your acknowledgement receipt is attached to this email as a PDF for your records.'
-    );
-  }
-
-  lines.push(
-    '',
-    'Best Regards,',
-    'Little Champions Academy Inc.',
-    'Play . Learn . Succeed'
-  );
-
-  return lines.join('\n');
-}
-
-/**
- * HTML matches Settings messaging emails (e.g. Payment Received):
- * yellow LCA banner, white body, gray automated footer.
- */
-export function buildFirstEnrollmentWelcomeHtml(options = {}) {
-  return plainTextToEmailHtml(buildFirstEnrollmentWelcomePlainText(options));
 }
 
 async function loadStudentAndGuardianEmails(studentId) {
@@ -105,19 +86,43 @@ async function loadStudentAndGuardianEmails(studentId) {
   return result.rows[0] || null;
 }
 
-async function alreadySentWelcomeEmail(studentId) {
+async function alreadySentOnboardingSequence(studentId) {
+  const sid = Number(studentId);
   const result = await poolQuery(
     `SELECT 1
      FROM system_logstbl
-     WHERE entity_type = $1
-       AND details->>'student_id' = $2
+     WHERE entity_type = ANY($1::text[])
+       AND (
+         user_id = $2
+         OR details->>'student_id' = $3
+       )
      LIMIT 1`,
-    [LOG_ENTITY_TYPE, String(studentId)]
+    [[LOG_ENTITY_SEQUENCE, LOG_ENTITY_LEGACY], sid, String(sid)]
   );
   return result.rows.length > 0;
 }
 
-async function markWelcomeEmailSent(studentId, recipients, summary, meta = {}) {
+/**
+ * Remove onboarding idempotency logs so the 5-email sequence can send again.
+ * Used by hard-delete wipe scripts and manual test resets.
+ */
+export async function clearOnboardingEmailLogsForStudents(studentIds = []) {
+  const ids = [...new Set(studentIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0))];
+  if (!ids.length) return 0;
+
+  const result = await poolQuery(
+    `DELETE FROM system_logstbl
+     WHERE entity_type = ANY($1::text[])
+       AND (
+         user_id = ANY($2::int[])
+         OR (details->>'student_id')::int = ANY($2::int[])
+       )`,
+    [[LOG_ENTITY_SEQUENCE, LOG_ENTITY_LEGACY], ids]
+  );
+  return result.rowCount ?? 0;
+}
+
+async function markOnboardingSequenceSent(studentId, recipients, results, meta = {}) {
   try {
     await poolQuery(
       `INSERT INTO system_logstbl (
@@ -126,35 +131,37 @@ async function markWelcomeEmailSent(studentId, recipients, summary, meta = {}) {
          entity_type, summary, details, ip_address
        ) VALUES (
          $1, NULL, 'System', NULL,
-         'SYSTEM', 200, '/internal/first-enrollment-welcome-email', 'create',
+         'SYSTEM', 200, '/internal/first-enrollment-onboarding-sequence', 'create',
          $2, $3, $4::jsonb, NULL
        )`,
       [
         studentId,
-        LOG_ENTITY_TYPE,
-        `First enrollment welcome email sent to ${recipients.join(', ')}`,
+        LOG_ENTITY_SEQUENCE,
+        `First enrollment onboarding sequence (${results.length} emails) sent to ${recipients.join(', ')}`,
         JSON.stringify({
           student_id: Number(studentId),
           recipients,
-          sent: summary?.sent ?? 0,
-          failed: summary?.failed ?? 0,
+          emails: results.map((r) => ({
+            id: r.id,
+            subject: r.subject,
+            sent: r.summary?.sent ?? 0,
+            failed: r.summary?.failed ?? 0,
+          })),
           ar_pdf_attached: Boolean(meta.arPdfAttached),
           invoice_id: meta.invoiceId ?? null,
           ack_receipt_id: meta.ackReceiptId ?? null,
+          class_id: meta.classId ?? null,
         }),
       ]
     );
   } catch (err) {
     console.error(
-      '[firstEnrollmentWelcomeEmail] Failed to write idempotency log (email may have been sent):',
+      '[firstEnrollmentWelcomeEmail] Failed to write sequence idempotency log:',
       err?.message || err
     );
   }
 }
 
-/**
- * True when this enrollment is the student's earliest `new` row (first official enroll).
- */
 async function isEarliestNewEnrollment(studentId, classstudentId = null) {
   const earliest = await poolQuery(
     `SELECT classstudent_id
@@ -170,9 +177,6 @@ async function isEarliestNewEnrollment(studentId, classstudentId = null) {
   return Number(earliest.rows[0].classstudent_id) === Number(classstudentId);
 }
 
-/**
- * Resolve invoice / AR for the enrollment welcome PDF when callers do not pass ids.
- */
 async function resolveEnrollmentArContext(client, studentId, { invoiceId = null, ackReceiptId = null } = {}) {
   let invId = Number(invoiceId);
   let ackId = Number(ackReceiptId);
@@ -270,17 +274,45 @@ async function buildWelcomeArAttachments(studentId, { invoiceId = null, ackRecei
   }
 }
 
+async function sendSequenceEmail({
+  emailId,
+  recipients,
+  context,
+  attachments = [],
+  branchId = null,
+}) {
+  const content = await resolveSequenceEmailContent({
+    emailId,
+    context,
+    branchId,
+  });
+
+  if (content.skipped || !content.enabled) {
+    return {
+      id: emailId,
+      subject: content.subject || '',
+      summary: { sent: 0, failed: 0, attempted: 0, skipped: true },
+      skipped: true,
+      source: content.source,
+    };
+  }
+
+  const summary = await sendSystemNotificationEmailToEach({
+    recipients,
+    subject: content.subject,
+    html: content.html,
+    attachments,
+  });
+  return {
+    id: emailId,
+    subject: content.subject,
+    summary,
+    source: content.source,
+  };
+}
+
 /**
- * Send welcome email if this is the student's first `new` enrollment and not already sent.
- * Uses the shared DB pool (call after COMMIT, or via queueFirstEnrollmentWelcomeEmail).
- *
- * @param {{
- *   studentId: number,
- *   enrollmentStatus?: string,
- *   classstudentId?: number|null,
- *   invoiceId?: number|null,
- *   ackReceiptId?: number|null,
- * }} args
+ * Send the full first-enrollment onboarding sequence.
  */
 export async function maybeSendFirstEnrollmentWelcomeEmail({
   studentId,
@@ -299,25 +331,17 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
   }
 
   if (!isEmailConfigured()) {
-    console.warn(
-      `[firstEnrollmentWelcomeEmail] Email not configured; skip student ${sid}`
-    );
+    console.warn(`[firstEnrollmentWelcomeEmail] Email not configured; skip student ${sid}`);
     return { skipped: true, reason: 'email_not_configured' };
   }
 
-  if (await alreadySentWelcomeEmail(sid)) {
-    console.warn(
-      `[firstEnrollmentWelcomeEmail] Skip student ${sid}: already_sent ` +
-        `(hard-delete billing does not clear this unless the wipe script removes the welcome log)`
-    );
+  if (await alreadySentOnboardingSequence(sid)) {
+    console.warn(`[firstEnrollmentWelcomeEmail] Skip student ${sid}: already_sent`);
     return { skipped: true, reason: 'already_sent' };
   }
 
   if (!(await isEarliestNewEnrollment(sid, classstudentId))) {
-    console.warn(
-      `[firstEnrollmentWelcomeEmail] Skip student ${sid}: not_earliest_new_enrollment ` +
-        `(classstudentId=${classstudentId ?? 'null'})`
-    );
+    console.warn(`[firstEnrollmentWelcomeEmail] Skip student ${sid}: not_earliest_new_enrollment`);
     return { skipped: true, reason: 'not_earliest_new_enrollment' };
   }
 
@@ -326,59 +350,122 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
     return { skipped: true, reason: 'student_not_found' };
   }
 
-  const recipients = normalizeNotificationRecipients([
-    row.student_email,
-    row.guardian_email,
-  ]);
+  const recipients = normalizeNotificationRecipients([row.student_email, row.guardian_email]);
   if (recipients.length === 0) {
-    console.warn(
-      `[firstEnrollmentWelcomeEmail] No valid student/guardian email for student ${sid}`
-    );
+    console.warn(`[firstEnrollmentWelcomeEmail] No valid student/guardian email for student ${sid}`);
     return { skipped: true, reason: 'no_recipients' };
   }
 
+  const classContext =
+    (classstudentId != null ? await loadEnrollmentClassContext(classstudentId) : null) ||
+    (await loadEnrollmentClassContextForStudent(sid));
+
   const arBundle = await buildWelcomeArAttachments(sid, { invoiceId, ackReceiptId });
-  const subject = 'Welcome to Little Champions Academy!';
-  const html = buildFirstEnrollmentWelcomeHtml({
-    includeArAttachmentNote: arBundle.arPdfAttached,
+  const year = academicYearLabel();
+  const groupChat = resolveBranchGroupChat({
+    branchId: classContext?.branchId ?? null,
+    branchName: classContext?.branchName,
+    branchNickname: classContext?.branchNickname,
   });
+  const sharedContext = {
+    academicYear: year,
+    classStartDateDisplay: classContext?.classStartDateDisplay || 'To be announced',
+    classScheduleText: classContext?.classScheduleText || 'Please contact your branch for your class schedule.',
+    branchName: classContext?.branchName || '',
+    branchId: classContext?.branchId ?? null,
+    facebookUrl: facebookPageUrl(),
+    groupChatUrl: groupChat.url,
+    groupChatLabel: groupChat.displayLabel,
+  };
 
-  const summary = await sendSystemNotificationEmailToEach({
-    recipients,
-    subject,
-    html,
-    attachments: arBundle.attachments,
-  });
+  const results = [];
+  const stepDelay = stepDelayMs();
 
-  if (summary.sent > 0) {
-    await markWelcomeEmailSent(sid, recipients, summary, {
-      arPdfAttached: arBundle.arPdfAttached,
-      invoiceId: arBundle.resolved?.invoiceId ?? null,
-      ackReceiptId: arBundle.resolved?.ackReceiptId ?? null,
+  for (let i = 0; i < SEQUENCE_EMAIL_IDS.length; i += 1) {
+    const emailId = SEQUENCE_EMAIL_IDS[i];
+    if (i > 0 && stepDelay > 0) {
+      await sleep(stepDelay);
+    }
+
+    const emailContext =
+      emailId === 'onboarding'
+        ? { ...sharedContext, includeArAttachmentNote: arBundle.arPdfAttached }
+        : sharedContext;
+
+    const attachments = emailId === 'onboarding' ? arBundle.attachments : [];
+
+    const sent = await sendSequenceEmail({
+      emailId,
+      recipients,
+      context: emailContext,
+      attachments,
+      branchId: classContext?.branchId ?? null,
     });
+    results.push(sent);
+
+    if (sent.skipped) {
+      console.log(
+        `[firstEnrollmentWelcomeEmail] student ${sid} email "${emailId}": skipped (${sent.source || 'disabled'})`
+      );
+      continue;
+    }
+
+    console.log(
+      `[firstEnrollmentWelcomeEmail] student ${sid} email "${emailId}": ` +
+        `${sent.summary.sent}/${sent.summary.attempted} sent (${sent.source || 'unknown'})`
+    );
+
+    if (sent.summary.sent === 0) {
+      console.warn(
+        `[firstEnrollmentWelcomeEmail] Abort sequence for student ${sid} — "${emailId}" failed`
+      );
+      return {
+        skipped: false,
+        studentId: sid,
+        recipients,
+        partial: true,
+        results,
+        arPdfAttached: arBundle.arPdfAttached,
+      };
+    }
   }
+
+  const sentCount = results.filter((r) => !r.skipped && (r.summary?.sent ?? 0) > 0).length;
+  if (sentCount === 0) {
+    return {
+      skipped: true,
+      reason: 'all_steps_skipped_or_failed',
+      studentId: sid,
+      recipients,
+      results,
+    };
+  }
+
+  await markOnboardingSequenceSent(sid, recipients, results, {
+    arPdfAttached: arBundle.arPdfAttached,
+    invoiceId: arBundle.resolved?.invoiceId ?? null,
+    ackReceiptId: arBundle.resolved?.ackReceiptId ?? null,
+    classId: classContext?.classId ?? null,
+  });
 
   console.log(
     `[firstEnrollmentWelcomeEmail] student ${sid} (${row.full_name}): ` +
-      `${summary.sent}/${summary.attempted} sent to ${recipients.join(', ')}` +
-      `; arPdfAttached=${arBundle.arPdfAttached}`
+      `sequence complete (${results.length} emails) to ${recipients.join(', ')}`
   );
 
   return {
     skipped: false,
     studentId: sid,
     recipients,
-    summary,
+    results,
     arPdfAttached: arBundle.arPdfAttached,
     invoiceId: arBundle.resolved?.invoiceId ?? null,
     ackReceiptId: arBundle.resolved?.ackReceiptId ?? null,
+    classId: classContext?.classId ?? null,
   };
 }
 
-/**
- * Fire-and-forget after enrollment writes. Short delay lets the surrounding
- * DB transaction COMMIT before we read enrollment rows / build AR PDF.
- */
+/** Fire-and-forget after enrollment writes. */
 export function queueFirstEnrollmentWelcomeEmail({
   studentId,
   enrollmentStatus,
@@ -402,17 +489,48 @@ export function queueFirstEnrollmentWelcomeEmail({
       invoiceId,
       ackReceiptId,
     }).catch((err) => {
-      console.error(
-        `[firstEnrollmentWelcomeEmail] Failed for student ${sid}:`,
-        err?.message || err
-      );
+      console.error(`[firstEnrollmentWelcomeEmail] Failed for student ${sid}:`, err?.message || err);
     });
   }, delay);
 }
 
-export default {
-  buildFirstEnrollmentWelcomePlainText,
+export {
+  academicYearLabel,
+  buildClassSchedulePlainText,
   buildFirstEnrollmentWelcomeHtml,
+  buildFirstEnrollmentWelcomePlainText,
+  buildImportantRemindersPlainText,
+  buildOnboardingHtml,
+  buildOnboardingPlainText,
+  buildSequenceEmail,
+  buildStayConnectedHtml,
+  buildStayConnectedPlainText,
+  buildThingsToPreparePlainText,
+  facebookPageUrl,
+  SEQUENCE_EMAIL_IDS,
+} from './emailBodies.js';
+
+export {
+  formatClassScheduleText,
+  loadEnrollmentClassContext,
+  loadEnrollmentClassContextForStudent,
+} from './classContext.js';
+
+export {
+  DEFAULT_BRANCH_GROUP_CHAT_LINKS,
+  groupChatFallbackText,
+  resolveBranchGroupChat,
+} from './branchGroupChat.js';
+
+export {
+  resolveSequenceEmailContent,
+  EMAIL_ID_TO_TEMPLATE_KEY,
+  buildFirstEnrollmentTemplateVariables,
+  FIRST_ENROLLMENT_TEMPLATE_KEYS,
+} from './templateConfig.js';
+
+export default {
   maybeSendFirstEnrollmentWelcomeEmail,
   queueFirstEnrollmentWelcomeEmail,
+  clearOnboardingEmailLogsForStudents,
 };

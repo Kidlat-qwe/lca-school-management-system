@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useSearchParams } from 'react-router-dom';
 import API_BASE_URL, { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
+import useAnnouncementCreatorAccess from '../../hooks/useAnnouncementCreatorAccess';
 import { formatDateManila } from '../../utils/dateUtils';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { appAlert, appConfirm } from '../../utils/appAlert';
@@ -45,6 +46,7 @@ const formatInPHTime = (isoOrDateString, options = {}) => {
 
 const AdminAnnouncements = () => {
   const { userInfo } = useAuth();
+  const { canCreate: canCreateAnnouncements } = useAnnouncementCreatorAccess();
   const [searchParams, setSearchParams] = useSearchParams();
   const [announcements, setAnnouncements] = useState([]);
   const [tableLoading, setTableLoading] = useState(true);
@@ -255,6 +257,7 @@ const AdminAnnouncements = () => {
 
   const currentUserId = Number(userInfo?.userId ?? userInfo?.user_id);
   const canManageAnnouncement = (announcement) => {
+    if (!canCreateAnnouncements) return false;
     const createdBy = Number(announcement?.created_by);
     return Number.isFinite(createdBy) && Number.isFinite(currentUserId) && createdBy === currentUserId;
   };
@@ -679,13 +682,15 @@ const AdminAnnouncements = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">ANNOUNCEMENTS</h1>
-        <button
-          type="button"
-          onClick={openCreateModal}
-          className="btn-primary w-full sm:w-auto flex items-center justify-center space-x-2"
-        >
-          <span>Create Announcement</span>
-        </button>
+        {canCreateAnnouncements ? (
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="btn-primary w-full sm:w-auto flex items-center justify-center space-x-2"
+          >
+            <span>Create Announcement</span>
+          </button>
+        ) : null}
       </div>
 
       {/* Error Message */}

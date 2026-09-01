@@ -42,6 +42,47 @@ export const GRADE_LEVEL_OPTIONS = [
   'Grade 6',
 ];
 
+/** Normalize grade/level labels for matching (handles hyphen vs space). */
+export function normalizeGradeLevelKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, ' ');
+}
+
+/**
+ * Unique grade levels from branch classes' level_tag, sorted by GRADE_LEVEL_OPTIONS order.
+ * @param {{ level_tag?: string }[]} classes
+ */
+export function deriveBranchGradeLevelsFromClasses(classes = []) {
+  const seen = new Map();
+  for (const cls of classes) {
+    const tag = String(cls?.level_tag || '').trim();
+    if (!tag) continue;
+    const key = normalizeGradeLevelKey(tag);
+    if (!seen.has(key)) seen.set(key, tag);
+  }
+  const tags = [...seen.values()];
+  tags.sort((a, b) => {
+    const ai = GRADE_LEVEL_OPTIONS.findIndex(
+      (g) => normalizeGradeLevelKey(g) === normalizeGradeLevelKey(a)
+    );
+    const bi = GRADE_LEVEL_OPTIONS.findIndex(
+      (g) => normalizeGradeLevelKey(g) === normalizeGradeLevelKey(b)
+    );
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.localeCompare(b);
+  });
+  return tags;
+}
+
+export function classMatchesGradeLevel(classRow, gradeLevel) {
+  if (!gradeLevel) return false;
+  return normalizeGradeLevelKey(classRow?.level_tag) === normalizeGradeLevelKey(gradeLevel);
+}
+
 export const SUBJECT_OPTIONS_BY_GRADE = {
   Nursery: ['Literacy (Jolly Phonics)', 'Numeracy', 'Understanding the World'],
   'Pre Kindergarten': [
@@ -104,39 +145,101 @@ const TEXT_FIELDS = [
   'assessment_method',
   'assessment_criteria',
   'materials_needed',
-  'preliminaries_time',
   'preliminaries_activity',
-  'lesson_proper_time',
   'lesson_proper_activity',
-  'conclusion_time',
   'conclusion_activity',
-  'class1_name',
-  'class1_age_group',
   'class1_considerations',
   'class1_adjustments',
-  'class2_name',
-  'class2_age_group',
-  'class2_considerations',
-  'class2_adjustments',
-  'class3_name',
-  'class3_age_group',
-  'class3_considerations',
-  'class3_adjustments',
   'reflection_went_well',
   'reflection_amazing_moments',
   'reflection_challenges',
   'reflection_improvements',
 ];
 
+/** Display label for a CMS class row (Settings / meta / legacy subject column). */
+export function formatLessonPlanClassLabel(classRow = null) {
+  if (!classRow) return '';
+  const name = String(classRow.class_name || '').trim();
+  const program = String(classRow.program_name || '').trim();
+  const level = String(classRow.level_tag || '').trim();
+  const parts = [name, program, level].filter(Boolean);
+  if (parts.length) return parts.join(' · ');
+  const id = classRow.class_id;
+  return id != null ? `Class #${id}` : '';
+}
+
 export function normalizeLessonPlanBody(body = {}) {
   const out = {};
   if (body.lesson_date != null) out.lesson_date = String(body.lesson_date).slice(0, 10);
   if (body.grade_level != null) out.grade_level = String(body.grade_level).trim();
+  if (body.class_id != null && body.class_id !== '') {
+    const classId = Number(body.class_id);
+    if (Number.isFinite(classId) && classId > 0) out.class_id = classId;
+  }
   if (body.subject != null) out.subject = String(body.subject).trim();
   for (const key of TEXT_FIELDS) {
     if (body[key] != null) out[key] = String(body[key]);
   }
   return out;
+}
+
+/**
+ * Resolve class_id → denormalized subject/class1 fields; clears legacy class2/3 slots.
+ * @returns {Promise<{ ok: true, payload: object } | { ok: false, errors: string[] }>}
+ */
+export async function enrichLessonPlanPayloadWithClass(runQuery, payload = {}, branchId = null) {
+  const classId = Number(payload.class_id);
+  if (!Number.isFinite(classId) || classId <= 0) {
+    return { ok: false, errors: ['class_id is required'] };
+  }
+
+  const result = await runQuery(
+    `
+    SELECT
+      c.class_id,
+      c.class_name,
+      c.level_tag,
+      c.branch_id,
+      p.program_name
+    FROM classestbl c
+    LEFT JOIN programstbl p ON p.program_id = c.program_id
+    WHERE c.class_id = $1 AND c.archived_at IS NULL
+    `,
+    [classId]
+  );
+  const row = result.rows?.[0];
+  if (!row) {
+    return { ok: false, errors: ['Selected class was not found or is archived'] };
+  }
+  if (branchId != null && Number(row.branch_id) !== Number(branchId)) {
+    return { ok: false, errors: ['Selected class does not belong to your branch'] };
+  }
+
+  const label = formatLessonPlanClassLabel(row);
+  const levelTag = String(row.level_tag || '').trim();
+  const gradeLevel = payload.grade_level || levelTag || '';
+
+  return {
+    ok: true,
+    payload: {
+      ...payload,
+      class_id: classId,
+      grade_level: gradeLevel,
+      subject: label,
+      class1_name: String(row.class_name || '').trim() || label,
+      class1_age_group: levelTag,
+      class1_considerations: payload.class1_considerations ?? '',
+      class1_adjustments: payload.class1_adjustments ?? '',
+      class2_name: '',
+      class2_age_group: '',
+      class2_considerations: '',
+      class2_adjustments: '',
+      class3_name: '',
+      class3_age_group: '',
+      class3_considerations: '',
+      class3_adjustments: '',
+    },
+  };
 }
 
 export function normalizeHeadTeacherReviewBody(body = {}) {
@@ -146,6 +249,37 @@ export function normalizeHeadTeacherReviewBody(body = {}) {
   }
   return out;
 }
+
+/** Sections 1–6 — all fields required before submit for verification. */
+export const LESSON_PLAN_SECTION_REQUIRED_FIELDS = Object.freeze([
+  'early_learning_goals',
+  'objective_1',
+  'objective_2',
+  'objective_3',
+  'assessment_method',
+  'assessment_criteria',
+  'materials_needed',
+  'preliminaries_activity',
+  'lesson_proper_activity',
+  'conclusion_activity',
+  'class1_considerations',
+  'class1_adjustments',
+]);
+
+const LESSON_PLAN_SECTION_FIELD_LABELS = Object.freeze({
+  early_learning_goals: 'Early Learning Goals',
+  objective_1: 'Objective 1',
+  objective_2: 'Objective 2',
+  objective_3: 'Objective 3',
+  assessment_method: 'Assessment Method',
+  assessment_criteria: 'Assessment Criteria',
+  materials_needed: 'Materials Needed To Prepare',
+  preliminaries_activity: 'Preliminaries — Activity & Goal',
+  lesson_proper_activity: 'Lesson Proper — Activity & Goal',
+  conclusion_activity: 'Conclusion — Activity & Goal',
+  class1_considerations: 'Class — Considerations',
+  class1_adjustments: 'Class — Adjustments',
+});
 
 export function validateLessonPlanPayload(payload, { requireAll = false } = {}) {
   const errors = [];
@@ -157,8 +291,8 @@ export function validateLessonPlanPayload(payload, { requireAll = false } = {}) 
   if (requireAll || payload.grade_level !== undefined) {
     if (!payload.grade_level) errors.push('grade_level is required');
   }
-  if (requireAll || payload.subject !== undefined) {
-    if (!payload.subject) errors.push('subject is required');
+  if (requireAll || payload.class_id !== undefined) {
+    if (!payload.class_id) errors.push('class_id is required');
   }
   if (requireAll || payload.topic !== undefined) {
     if (!payload.topic?.trim()) errors.push('topic is required');
@@ -169,7 +303,20 @@ export function validateLessonPlanPayload(payload, { requireAll = false } = {}) 
   if (requireAll || payload.session !== undefined) {
     if (!String(payload.session || '').trim()) errors.push('session is required');
   }
+  if (requireAll) {
+    for (const key of LESSON_PLAN_SECTION_REQUIRED_FIELDS) {
+      if (!String(payload[key] || '').trim()) {
+        errors.push(`${LESSON_PLAN_SECTION_FIELD_LABELS[key] || key} is required`);
+      }
+    }
+  }
   return errors;
+}
+
+/** True when header + sections 1–6 are filled (submit for verification). */
+export function isLessonPlanReadyForSubmit(payload = {}) {
+  const normalized = normalizeLessonPlanBody(payload);
+  return validateLessonPlanPayload(normalized, { requireAll: true }).length === 0;
 }
 
 /** Calendar date in Asia/Manila as YYYY-MM-DD. */
@@ -241,24 +388,12 @@ export const REVISION_FIELD_LABELS = {
   assessment_method: 'Assessment Method',
   assessment_criteria: 'Assessment Criteria',
   materials_needed: 'Materials Needed To Prepare',
-  preliminaries_time: 'Preliminaries — Time',
   preliminaries_activity: 'Preliminaries — Activity & Goal',
-  lesson_proper_time: 'Lesson Proper — Time',
   lesson_proper_activity: 'Lesson Proper — Activity & Goal',
-  conclusion_time: 'Conclusion — Time',
   conclusion_activity: 'Conclusion — Activity & Goal',
-  class1_name: 'Class 1 — Name',
-  class1_age_group: 'Class 1 — Age Group',
-  class1_considerations: 'Class 1 — Considerations',
-  class1_adjustments: 'Class 1 — Adjustments',
-  class2_name: 'Class 2 — Name',
-  class2_age_group: 'Class 2 — Age Group',
-  class2_considerations: 'Class 2 — Considerations',
-  class2_adjustments: 'Class 2 — Adjustments',
-  class3_name: 'Class 3 — Name',
-  class3_age_group: 'Class 3 — Age Group',
-  class3_considerations: 'Class 3 — Considerations',
-  class3_adjustments: 'Class 3 — Adjustments',
+  class_id: 'Class',
+  class1_considerations: 'Class — Considerations',
+  class1_adjustments: 'Class — Adjustments',
 };
 
 /**
@@ -366,6 +501,18 @@ export function mapLessonPlanRow(row) {
     teacher_name: row.teacher_name || null,
     lesson_date: row.lesson_date,
     grade_level: row.grade_level,
+    class_id: row.class_id ?? null,
+    class_name: row.linked_class_name || row.class1_name || null,
+    program_name: row.linked_program_name || null,
+    class_label:
+      formatLessonPlanClassLabel({
+        class_id: row.class_id,
+        class_name: row.linked_class_name || row.class1_name,
+        program_name: row.linked_program_name,
+        level_tag: row.linked_level_tag || row.class1_age_group,
+      }) ||
+      row.subject ||
+      '',
     subject: row.subject,
     phase: row.phase || '',
     session: row.session_label || '',
@@ -419,7 +566,8 @@ export function lessonPlanWriteColumns(payload) {
   return {
     lesson_date: payload.lesson_date,
     grade_level: payload.grade_level,
-    subject: payload.subject,
+    class_id: payload.class_id ?? null,
+    subject: payload.subject ?? '',
     phase: payload.phase ?? '',
     session_label: payload.session ?? '',
     topic: payload.topic ?? '',
@@ -430,11 +578,11 @@ export function lessonPlanWriteColumns(payload) {
     assessment_method: payload.assessment_method ?? '',
     assessment_criteria: payload.assessment_criteria ?? '',
     materials_needed: payload.materials_needed ?? '',
-    preliminaries_time: payload.preliminaries_time ?? '',
+    preliminaries_time: '',
     preliminaries_activity: payload.preliminaries_activity ?? '',
-    lesson_proper_time: payload.lesson_proper_time ?? '',
+    lesson_proper_time: '',
     lesson_proper_activity: payload.lesson_proper_activity ?? '',
-    conclusion_time: payload.conclusion_time ?? '',
+    conclusion_time: '',
     conclusion_activity: payload.conclusion_activity ?? '',
     class1_name: payload.class1_name ?? '',
     class1_age_group: payload.class1_age_group ?? '',

@@ -25,6 +25,7 @@ const META_SECTIONS = [
   ['Lesson Topic', 'topic'],
   ['Phase', 'phase'],
   ['Session', 'session'],
+  ['Class', 'class_id'],
 ];
 
 const GOALS_SECTIONS = [
@@ -42,27 +43,14 @@ const ASSESSMENT_SECTIONS = [
 const MATERIALS_SECTIONS = [['Materials Needed To Prepare', 'materials_needed']];
 
 const PROCEDURE_SECTIONS = [
-  ['Preliminaries — Time', 'preliminaries_time'],
   ['Preliminaries — Activity & Goal', 'preliminaries_activity'],
-  ['Lesson Proper — Time', 'lesson_proper_time'],
   ['Lesson Proper — Activity & Goal', 'lesson_proper_activity'],
-  ['Conclusion — Time', 'conclusion_time'],
   ['Conclusion — Activity & Goal', 'conclusion_activity'],
 ];
 
 const CLASS_SECTIONS = [
-  ['Class 1 — Name', 'class1_name'],
-  ['Class 1 — Age Group', 'class1_age_group'],
-  ['Class 1 — Considerations', 'class1_considerations'],
-  ['Class 1 — Adjustments', 'class1_adjustments'],
-  ['Class 2 — Name', 'class2_name'],
-  ['Class 2 — Age Group', 'class2_age_group'],
-  ['Class 2 — Considerations', 'class2_considerations'],
-  ['Class 2 — Adjustments', 'class2_adjustments'],
-  ['Class 3 — Name', 'class3_name'],
-  ['Class 3 — Age Group', 'class3_age_group'],
-  ['Class 3 — Considerations', 'class3_considerations'],
-  ['Class 3 — Adjustments', 'class3_adjustments'],
+  ['Class — Considerations', 'class1_considerations'],
+  ['Class — Adjustments', 'class1_adjustments'],
 ];
 
 const REFLECTION_SECTIONS = [
@@ -210,7 +198,7 @@ function PlanFileCard({ plan, onClick }) {
           </span>
         </div>
         <p className="mt-1 truncate text-xs text-gray-500 sm:text-sm">
-          {plan.subject || 'No subject'}
+          {plan.class_label || plan.subject || 'No class'}
           {plan.lesson_date ? ` · ${plan.lesson_date}` : ''}
         </p>
       </div>
@@ -842,8 +830,10 @@ export default function SuperadminLessonPlans() {
                       <span className="font-normal">{selectedPlan.grade_level || '—'}</span>
                     </p>
                     <p className="col-span-full text-[16px] text-[#111111]">
-                      <span className="font-medium">Subject</span>{' '}
-                      <span className="font-normal">{selectedPlan.subject || '—'}</span>
+                      <span className="font-medium">Class</span>{' '}
+                      <span className="font-normal">
+                        {selectedPlan.class_label || selectedPlan.subject || '—'}
+                      </span>
                     </p>
                   </div>
 
@@ -867,7 +857,7 @@ export default function SuperadminLessonPlans() {
                     { heading: null, sections: MATERIALS_SECTIONS },
                     { heading: 'Procedure', sections: PROCEDURE_SECTIONS },
                     {
-                      heading: 'Differentiation / Class Considerations',
+                      heading: 'Class-Specific Adjustments',
                       sections: CLASS_SECTIONS,
                     },
                   ].map((group) => (
@@ -882,7 +872,11 @@ export default function SuperadminLessonPlans() {
                           key={key}
                           title={title}
                           fieldKey={key}
-                          content={selectedPlan[key]}
+                          content={
+                            key === 'class_id'
+                              ? selectedPlan.class_label || selectedPlan.subject
+                              : selectedPlan[key]
+                          }
                           canFlag={canReview && revisionMode}
                           fieldChecked={isFieldChecked(key)}
                           onToggleField={handleToggleField}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../../config/api';
 import TemplateEditorCard from '../../components/settings/TemplateEditorCard';
+import TemplatePickerSelect from '../../components/settings/TemplatePickerSelect';
 import ArchivedClassesPanel from '../../components/settings/ArchivedClassesPanel';
 import {
   TEMPLATE_DEFS,
@@ -46,6 +47,7 @@ const dueDateDefault = () => {
 const AdminSettings = () => {
   const [activeTab, setActiveTab] = useState('billing');
   const [branchId, setBranchId] = useState(null);
+  const [branchProfile, setBranchProfile] = useState(null);
 
   // ── Billing & Penalties tab ───────────────────────────────────────────────
   const [billingLoading, setBillingLoading] = useState(true);
@@ -80,7 +82,24 @@ const AdminSettings = () => {
   const [templatesBaseline, setTemplatesBaseline] = useState(buildEmptyTemplatesState);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState(TEMPLATE_DEFS[0].key);
 
-  // ── Fetch billing settings ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!branchId) {
+      setBranchProfile(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest(`/branches/${branchId}`, { method: 'GET' });
+        if (!cancelled) setBranchProfile(res?.data || null);
+      } catch {
+        if (!cancelled) setBranchProfile({ branch_id: branchId });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId]);
   const fetchBillingSettings = async () => {
     setBillingLoading(true);
     setBillingError('');
@@ -691,18 +710,12 @@ const AdminSettings = () => {
                   <label htmlFor="template-select" className="block text-sm font-medium text-gray-700">
                     Template
                   </label>
-                  <select
+                  <TemplatePickerSelect
                     id="template-select"
-                    className="mt-1 w-full max-w-md rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#F7C844] focus:outline-none focus:ring-2 focus:ring-[#F7C844]/30"
                     value={selectedTemplateKey}
                     onChange={(e) => setSelectedTemplateKey(e.target.value)}
-                  >
-                    {TEMPLATE_DEFS.map((def) => (
-                      <option key={def.key} value={def.key}>
-                        {def.label}
-                      </option>
-                    ))}
-                  </select>
+                    disabled={templateLoading || templateSaving}
+                  />
                 </div>
 
                 <TemplateEditorCard
@@ -710,6 +723,8 @@ const AdminSettings = () => {
                   templateValue={templates[selectedTemplateDef.key] || emptyTemplate()}
                   disabled={templateLoading || templateSaving}
                   scopeTag={<ScopeTag scopeVal={templateScopeMeta[selectedTemplateDef.key]} />}
+                  templateScope="branch"
+                  selectedBranch={branchProfile}
                   onFieldChange={(field, value) =>
                     updateTemplateField(selectedTemplateDef.key, field, value)
                   }

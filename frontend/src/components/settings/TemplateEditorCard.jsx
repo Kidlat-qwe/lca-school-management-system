@@ -2,12 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import TemplateVariableField from './TemplateVariableField';
 import TemplateVariablePalette from './TemplateVariablePalette';
 import { mergeTemplateVariables } from '../../utils/templateVariables';
+import {
+  STAY_CONNECTED_TEMPLATE_KEY,
+  STAY_CONNECTED_BRANCH_PALETTE,
+  branchDisplayLabel,
+  buildTemplateVariablePaletteItems,
+  resolveBranchGroupChatPreview,
+} from '../../utils/firstEnrollmentTemplateVariables';
 
 const TemplateEditorCard = ({
   templateDef,
   templateValue,
   disabled = false,
   scopeTag = null,
+  templateScope = 'global',
+  selectedBranch = null,
   onFieldChange,
 }) => {
   const fieldRefs = useRef({});
@@ -43,6 +52,47 @@ const TemplateEditorCard = ({
       templateValue?.sms_body,
     ]
   );
+
+  const paletteSourceVariables = useMemo(() => {
+    if (
+      templateDef?.key === STAY_CONNECTED_TEMPLATE_KEY &&
+      templateScope === 'branch' &&
+      selectedBranch
+    ) {
+      return STAY_CONNECTED_BRANCH_PALETTE;
+    }
+    return detectedVariables;
+  }, [templateDef?.key, templateScope, selectedBranch, detectedVariables]);
+
+  const variablePaletteItems = useMemo(
+    () =>
+      buildTemplateVariablePaletteItems({
+        variables: paletteSourceVariables,
+        templateKey: templateDef?.key,
+        templateScope,
+        branch: selectedBranch,
+      }),
+    [paletteSourceVariables, templateDef?.key, templateScope, selectedBranch]
+  );
+
+  const stayConnectedBranchHint = useMemo(() => {
+    if (
+      templateDef?.key !== STAY_CONNECTED_TEMPLATE_KEY ||
+      templateScope !== 'branch' ||
+      !selectedBranch
+    ) {
+      return null;
+    }
+    const label = branchDisplayLabel(selectedBranch);
+    const chat = resolveBranchGroupChatPreview(selectedBranch);
+    if (!label) return null;
+    return {
+      branchLabel: label,
+      groupChatUrl: chat.url,
+      groupChatLabel: chat.displayLabel,
+      groupChatLine: chat.groupChatLine,
+    };
+  }, [templateDef?.key, templateScope, selectedBranch]);
 
   const resolveFieldId = (fieldId) => {
     if (fieldId === 'subject' && !templateDef.showSubject) return 'title';
@@ -181,11 +231,45 @@ const TemplateEditorCard = ({
           </div>
         ) : null}
 
+        {stayConnectedBranchHint ? (
+          <div className="rounded-lg border border-blue-200 bg-blue-50/80 px-3 py-2.5 text-[11px] text-blue-900">
+            <p className="text-xs font-semibold text-blue-950">
+              Designated group chat link — {stayConnectedBranchHint.branchLabel}
+            </p>
+            {stayConnectedBranchHint.groupChatUrl ? (
+              <>
+                <a
+                  href={stayConnectedBranchHint.groupChatUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1.5 block break-all font-mono text-[10px] text-blue-700 underline hover:text-blue-900"
+                >
+                  {stayConnectedBranchHint.groupChatUrl}
+                </a>
+                <p className="mt-2 text-blue-800/90">
+                  Insert <span className="font-mono font-semibold">{'{groupChatLine}'}</span> in
+                  the body — it expands to:
+                </p>
+                <p className="mt-1 rounded-md border border-blue-100 bg-white/80 px-2 py-1.5 text-[10px] leading-snug text-gray-800">
+                  {stayConnectedBranchHint.groupChatLine}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1.5 text-amber-800">
+                No Messenger group chat link is configured for this branch name. Contact dev ops
+                or set <span className="font-mono">FIRST_ENROLLMENT_BRANCH_GROUP_CHAT_URLS</span>{' '}
+                in the server environment.
+              </p>
+            )}
+          </div>
+        ) : null}
+
         <TemplateVariablePalette
-          variables={detectedVariables}
+          variableItems={variablePaletteItems}
           activeFieldLabel={activeFieldLabel}
           onInsert={(token) => requestInsert(token)}
         />
+
       </div>
     </div>
   );
