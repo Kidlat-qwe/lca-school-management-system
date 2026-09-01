@@ -115,3 +115,10 @@ export function getFiuuSubMerchantId() {
 export function isFiuuAutopayMitEnabled() {
   return trim(process.env.FIUU_AUTOPAY_MIT_ENABLED) === 'true';
 }
+
+/**
+ * SMS/email OTP before AutoPay enrollment on /go. Default ON; set false to skip.
+ */
+export function isFiuuAutopayOtpEnabled() {
+  return trim(process.env.FIUU_AUTOPAY_OTP_ENABLED) !== 'false';
+}

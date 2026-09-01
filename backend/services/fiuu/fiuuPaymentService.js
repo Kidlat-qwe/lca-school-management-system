@@ -8,6 +8,7 @@ import {
   getFiuuPayBaseUrl,
   getFiuuReturnUrl,
   isFiuuConfigured,
+  isFiuuAutopayOtpEnabled,
   resolveFiuuChannelPath,
 } from './config.js';
 import {
@@ -340,8 +341,11 @@ export async function getPublicFiuuGoHtmlByToken(token) {
   const payload = await buildPublicPayPayloadForRow(row);
   // Relative URL so consent POSTs to the same host that served /go (local or Coolify).
   const consentActionUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/consent`;
+  const autopayOtpStartUrl = `/api/sms/payments/fiuu/go/${encodeURIComponent(token)}/autopay-otp`;
   return buildFiuuAutoPostHtml(payload, {
     consentActionUrl,
+    autopayOtpStartUrl,
+    autopayOtpEnabled: isFiuuAutopayOtpEnabled(),
     terms: getAutodebitTermsPayload(),
   });
 }
@@ -349,7 +353,10 @@ export async function getPublicFiuuGoHtmlByToken(token) {
 /**
  * Parent decision on emailed /go link (accept or decline auto-debit), then continue to FIUU.
  */
-export async function applyParentAutodebitDecisionOnPayToken(token, { decision, terms_accepted }) {
+export async function applyParentAutodebitDecisionOnPayToken(
+  token,
+  { decision, terms_accepted, skipOtpCheck = false }
+) {
   const row = await findGatewayPaymentByPayToken(token);
   if (!row) {
     throw Object.assign(new Error('Payment link not found'), { statusCode: 404 });
@@ -376,6 +383,17 @@ export async function applyParentAutodebitDecisionOnPayToken(token, { decision, 
   }
 
   const accepted = String(decision) === 'accept';
+  if (
+    accepted &&
+    isFiuuAutopayOtpEnabled() &&
+    !skipOtpCheck &&
+    !meta.autopay_otp_verified_at
+  ) {
+    throw Object.assign(
+      new Error('AutoPay verification is required before enabling recurring payments'),
+      { statusCode: 400 }
+    );
+  }
   meta.parent_autodebit_decision = accepted ? 'accepted' : 'declined';
   meta.parent_autodebit_opt_in = accepted;
   meta.parent_autodebit_accepted_at = new Date().toISOString();

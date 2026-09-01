@@ -283,7 +283,10 @@ function buildBrandedPayPageHtml({ title, heading, message, bodyHtml = '', statu
  * Always includes a visible Continue button — Helmet CSP may block inline scripts.
  * When staff offered auto-debit, parent must accept/decline T&Cs before FIUU.
  */
-export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms = null } = {}) {
+export function buildFiuuAutoPostHtml(
+  payload,
+  { consentActionUrl = null, autopayOtpStartUrl = null, autopayOtpEnabled = false, terms = null } = {}
+) {
   if (!payload?.payUrl || !payload?.formFields) {
     const isPaid = payload?.status === 'paid';
     const isExpired = payload?.status === 'expired';
@@ -322,6 +325,8 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
       .map((item) => `<li>${escapeHtmlAttr(item)}</li>`)
       .join('');
     const action = escapeHtmlAttr(consentActionUrl);
+    const otpStartAction = escapeHtmlAttr(autopayOtpStartUrl || '');
+    const otpEnabled = autopayOtpEnabled ? 'true' : 'false';
 
     const bodyHtml = `
               <div style="margin-top:16px;text-align:left;">
@@ -361,6 +366,9 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                 </form>
                 <form id="acceptForm" method="POST" action="${action}" style="display:none;">
                   <input type="hidden" name="decision" value="accept" />
+                  <input type="hidden" name="terms_accepted" value="1" />
+                </form>
+                <form id="autopayOtpStartForm" method="POST" action="${otpStartAction}" style="display:none;">
                   <input type="hidden" name="terms_accepted" value="1" />
                 </form>
               </div>
@@ -413,6 +421,8 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
                   var cancelBtn = document.getElementById('termsCancelBtn');
                   var acceptForm = document.getElementById('acceptForm');
                   var declineForm = document.getElementById('declineForm');
+                  var otpStartForm = document.getElementById('autopayOtpStartForm');
+                  var otpEnabled = ${otpEnabled};
 
                   function paintToggle() {
                     toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
@@ -471,7 +481,11 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
 
                   continueBtn.addEventListener('click', function () {
                     if (enabled && termsAccepted) {
-                      acceptForm.submit();
+                      if (otpEnabled && otpStartForm) {
+                        otpStartForm.submit();
+                      } else {
+                        acceptForm.submit();
+                      }
                     } else {
                       declineForm.submit();
                     }
@@ -523,6 +537,150 @@ export function buildFiuuAutoPostHtml(payload, { consentActionUrl = null, terms 
     title: 'Redirecting to FIUU…',
     heading: 'Opening secure payment',
     message: 'Please wait while we connect you to FIUU.',
+    bodyHtml,
+    statusTone: 'neutral',
+  });
+}
+
+/**
+ * AutoPay verification page — enter mobile + SMS OTP, or email click-to-verify.
+ */
+export function buildAutopayOtpVerificationHtml(ctx, { error = null, sent = false } = {}) {
+  const token = escapeHtmlAttr(ctx.token);
+  const base = `/api/sms/payments/fiuu/go/${token}/autopay-otp`;
+  const classLabel = escapeHtmlAttr(ctx.classLabel || 'this installment plan');
+  const studentName = escapeHtmlAttr(ctx.studentName || 'Student');
+  const mode = ctx.mode === 'email' ? 'email' : 'sms';
+  const errMsg = error ? escapeHtmlAttr(error) : '';
+
+  const errorNote = errMsg
+    ? `<p style="margin:0 0 12px;font-size:12px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;
+                 border-radius:8px;padding:10px 12px;">${errMsg}</p>`
+    : '';
+
+  const intro = `
+    <p style="margin:0 0 12px;font-size:13px;color:#334155;line-height:1.55;">
+      To enable <strong>LCA AutoPay</strong> for <strong>${studentName}</strong>'s recurring
+      installment invoices under <strong>${classLabel}</strong>, verify that you authorize
+      automatic charges for future invoices on this plan (as described in the LCA AutoPay Terms).
+    </p>`;
+
+  let modeBody = '';
+
+  if (mode === 'sms') {
+    const mobileValue = escapeHtmlAttr(ctx.enteredMobile || ctx.suggestedMobile || '');
+    const sentNote =
+      ctx.smsCodeSent || sent
+        ? `<p style="margin:0 0 12px;font-size:12px;color:#166534;background:#ecfdf5;border:1px solid #a7f3d0;
+                     border-radius:8px;padding:10px 12px;">
+             A verification code was sent to <strong>${escapeHtmlAttr(ctx.contactMasked || 'your mobile')}</strong>.
+             Valid for 10 minutes.
+           </p>`
+        : '';
+
+    modeBody = `
+      ${sentNote}
+      <form method="POST" action="${base}/send" style="margin:0 0 14px;">
+        <input type="hidden" name="channel" value="sms" />
+        <label for="mobile" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:6px;">
+          Mobile number
+        </label>
+        <input id="mobile" name="mobile" type="tel" inputmode="tel" autocomplete="tel"
+          placeholder="09XXXXXXXXX" required value="${mobileValue}"
+          style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;
+                 padding:10px 12px;font-size:15px;margin-bottom:10px;" />
+        <button type="submit"
+          style="width:100%;background:#fff;color:#1e3a8a;border:1px solid #93c5fd;border-radius:8px;
+                 font-weight:600;font-size:13px;padding:10px 12px;cursor:pointer;">
+          ${ctx.smsCodeSent || sent ? 'Resend verification code' : 'Send verification code'}
+        </button>
+      </form>
+      ${
+        ctx.smsCodeSent || sent
+          ? `<form method="POST" action="${base}/verify" style="margin:0;">
+        <label for="otpCode" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:6px;">
+          Enter 6-digit code from your phone
+        </label>
+        <input id="otpCode" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+          autocomplete="one-time-code" required
+          style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;
+                 padding:10px 12px;font-size:16px;letter-spacing:2px;margin-bottom:10px;" />
+        <button type="submit"
+          style="width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
+                 font-weight:600;font-size:14px;padding:12px 16px;cursor:pointer;">
+          Verify and continue to payment
+        </button>
+      </form>`
+          : ''
+      }
+      <p style="margin:14px 0 0;text-align:center;">
+        <a href="${base}?mode=email" style="font-size:12px;color:#1e3a8a;text-decoration:underline;">
+          Use email verification instead
+        </a>
+      </p>`;
+  } else {
+    const emailValue = escapeHtmlAttr(ctx.enteredEmail || ctx.suggestedEmail || '');
+    const sentNote =
+      ctx.emailLinkSent || sent
+        ? `<p style="margin:0 0 12px;font-size:12px;color:#166534;background:#ecfdf5;border:1px solid #a7f3d0;
+                     border-radius:8px;padding:10px 12px;">
+             We sent a verification email to <strong>${escapeHtmlAttr(ctx.contactMasked || 'your email')}</strong>.
+             Open the message and click <strong>Verify AutoPay authorization</strong>, then return here to continue.
+           </p>
+           <p style="margin:0 0 12px;text-align:center;">
+             <a href="${base}?mode=email&amp;sent=1"
+               style="display:inline-block;background:#1e3a8a;color:#fff;text-decoration:none;border-radius:8px;
+                      font-weight:600;font-size:13px;padding:10px 16px;">
+               I verified my email — continue
+             </a>
+           </p>`
+        : '';
+
+    modeBody = `
+      ${sentNote}
+      <form method="POST" action="${base}/send" style="margin:0 0 14px;">
+        <input type="hidden" name="channel" value="email" />
+        <label for="email" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:6px;">
+          Email address
+        </label>
+        <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
+          placeholder="you@example.com" required value="${emailValue}"
+          style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;
+                 padding:10px 12px;font-size:15px;margin-bottom:10px;" />
+        <button type="submit"
+          style="width:100%;background:#fff;color:#1e3a8a;border:1px solid #93c5fd;border-radius:8px;
+                 font-weight:600;font-size:13px;padding:10px 12px;cursor:pointer;">
+          ${ctx.emailLinkSent || sent ? 'Resend verification email' : 'Send verification email'}
+        </button>
+      </form>
+      <p style="margin:14px 0 0;text-align:center;">
+        <a href="${base}?mode=sms" style="font-size:12px;color:#1e3a8a;text-decoration:underline;">
+          Use SMS verification instead
+        </a>
+      </p>`;
+  }
+
+  const bodyHtml = `
+              <div style="margin-top:16px;text-align:left;">
+                ${intro}
+                ${errorNote}
+                ${modeBody}
+                <form method="POST" action="${base}/cancel" style="margin:16px 0 0;">
+                  <button type="submit"
+                    style="width:100%;background:#fff;color:#64748b;border:0;font-size:12px;
+                           text-decoration:underline;cursor:pointer;padding:8px;">
+                    Cancel AutoPay — pay this invoice only
+                  </button>
+                </form>
+              </div>`;
+
+  return buildBrandedPayPageHtml({
+    title: 'Verify LCA AutoPay',
+    heading: mode === 'email' ? 'Verify via email' : 'Verify via mobile',
+    message:
+      mode === 'email'
+        ? 'Enter your email to receive a verification link for AutoPay setup.'
+        : 'Enter your mobile number to receive a verification code for AutoPay setup.',
     bodyHtml,
     statusTone: 'neutral',
   });

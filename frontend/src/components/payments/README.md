@@ -19,6 +19,7 @@ Staff does **not** configure auto-debit in CMS. For installment invoices / insta
 2. On `/go`, **LCA AutoPay** toggle defaults **OFF**.
 3. Turning the toggle **ON** opens a **Terms modal** (LCA AutoPay Recurring Payment T&C summary) explaining authorization, 5th-of-month billing, failed payments, cancellation, and privacy; Agree enables it, Cancel keeps it off.
 4. Continue to payment → FIUU. If enabled, Card (CREDIT) is used so FIUU can tokenize.
+5. **AutoPay ON:** after Terms, parent verifies via **SMS** (enter mobile → OTP) or **email** (enter email → click link in message), then continues to FIUU.
 
 ## Public pay page
 

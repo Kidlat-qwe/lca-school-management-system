@@ -15,7 +15,7 @@ import {
   normalizeFiuuPostBody,
   formatIpnAckBody,
 } from '../services/fiuu/fiuuPaymentService.js';
-import { getFiuuFrontendReturnUrl } from '../services/fiuu/config.js';
+import { getFiuuFrontendReturnUrl, isFiuuAutopayOtpEnabled } from '../services/fiuu/config.js';
 import {
   listFiuuPaymentTokensForStudent,
   revokeFiuuPaymentToken,
@@ -26,8 +26,45 @@ import {
   listAutodebitConsentsForStudent,
   disableAutodebitConsent,
 } from '../services/fiuu/fiuuAutodebitConsent.js';
+import {
+  startAutopayOtpVerification,
+  sendAutopaySmsOtp,
+  sendAutopayEmailVerification,
+  verifyAutopayOtpCode,
+  confirmAutopayEmailVerification,
+  cancelAutopayOtpVerification,
+  getAutopayOtpPageContext,
+} from '../services/fiuu/fiuuAutopayOtpService.js';
+import { buildAutopayOtpVerificationHtml } from '../services/fiuu/payLink.js';
 
 const router = express.Router();
+
+function applyFiuuGoPageCsp(res) {
+  res.removeHeader('Content-Security-Policy');
+  res.removeHeader('Content-Security-Policy-Report-Only');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https: http: data:; base-uri 'none'"
+  );
+}
+
+function sendFiuuGoHtml(res, html, status = 200) {
+  applyFiuuGoPageCsp(res);
+  return res.status(status).type('html').send(html);
+}
+
+function sendFiuuGoErrorHtml(res, err, fallback = 'Request error') {
+  applyFiuuGoPageCsp(res);
+  const status = err?.statusCode || 500;
+  return res
+    .status(status)
+    .type('html')
+    .send(
+      `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
+        err?.message || fallback
+      ).replace(/</g, '')}</p></body></html>`
+    );
+}
 
 /**
  * GET /api/sms/payments/fiuu/config
@@ -79,28 +116,172 @@ router.get(
   async (req, res, next) => {
     try {
       const html = await getPublicFiuuGoHtmlByToken(req.params.token);
-      // Helmet already set CSP (script-src 'self'). Browsers enforce ALL CSP headers,
-      // so a second header cannot relax it — remove Helmet's, then allow auto-submit.
-      res.removeHeader('Content-Security-Policy');
-      res.removeHeader('Content-Security-Policy-Report-Only');
-      res.setHeader(
-        'Content-Security-Policy',
-        "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https: http: data:; base-uri 'none'"
-      );
-      res.status(200).type('html').send(html);
+      return sendFiuuGoHtml(res, html);
     } catch (err) {
       if (err.statusCode) {
-        res.removeHeader('Content-Security-Policy');
-        res.removeHeader('Content-Security-Policy-Report-Only');
-        return res
-          .status(err.statusCode)
-          .type('html')
-          .send(
-            `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
-              err.message || 'Payment link error'
-            ).replace(/</g, '')}</p></body></html>`
-          );
+        return sendFiuuGoErrorHtml(res, err, 'Payment link error');
       }
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/payments/fiuu/go/:token/autopay-otp
+ * Start AutoPay SMS/email verification after parent accepts Terms on /go.
+ */
+router.post(
+  '/go/:token/autopay-otp',
+  express.urlencoded({ extended: true }),
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      if (!isFiuuAutopayOtpEnabled()) {
+        await applyParentAutodebitDecisionOnPayToken(token, {
+          decision: 'accept',
+          terms_accepted: true,
+          skipOtpCheck: true,
+        });
+        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+      }
+      const ctx = await startAutopayOtpVerification(token);
+      return sendFiuuGoHtml(res, buildAutopayOtpVerificationHtml(ctx));
+    } catch (err) {
+      if (err.statusCode) return sendFiuuGoErrorHtml(res, err);
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/fiuu/go/:token/autopay-otp/confirm-email
+ * Parent clicks Verify in email → finalize AutoPay → redirect to /go.
+ */
+router.get(
+  '/go/:token/autopay-otp/confirm-email',
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      await confirmAutopayEmailVerification(token, {
+        exp: req.query?.exp,
+        sig: req.query?.sig,
+      });
+      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+    } catch (err) {
+      if (err.statusCode) return sendFiuuGoErrorHtml(res, err);
+      next(err);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/payments/fiuu/go/:token/autopay-otp
+ * Show AutoPay verification page (mobile OTP or email link).
+ */
+router.get(
+  '/go/:token/autopay-otp',
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      const mode = String(req.query?.mode || '').toLowerCase() === 'email' ? 'email' : 'sms';
+      const ctx = await getAutopayOtpPageContext(token, { mode });
+      if (ctx.verified) {
+        return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+      }
+      const sent = String(req.query?.sent || '') === '1';
+      return sendFiuuGoHtml(res, buildAutopayOtpVerificationHtml(ctx, { sent }));
+    } catch (err) {
+      if (err.statusCode) return sendFiuuGoErrorHtml(res, err);
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/go/:token/autopay-otp/send',
+  express.urlencoded({ extended: true }),
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      const channel = String(req.body?.channel || 'sms').toLowerCase();
+      if (channel === 'email') {
+        await sendAutopayEmailVerification(token, req.body?.email);
+        return res.redirect(
+          303,
+          `${req.baseUrl}/go/${encodeURIComponent(token)}/autopay-otp?mode=email&sent=1`
+        );
+      }
+      await sendAutopaySmsOtp(token, req.body?.mobile);
+      return res.redirect(
+        303,
+        `${req.baseUrl}/go/${encodeURIComponent(token)}/autopay-otp?mode=sms&sent=1`
+      );
+    } catch (err) {
+      if (err.statusCode) {
+        try {
+          const channel = String(req.body?.channel || 'sms').toLowerCase();
+          const ctx = await getAutopayOtpPageContext(req.params.token, {
+            mode: channel === 'email' ? 'email' : 'sms',
+          });
+          return sendFiuuGoHtml(
+            res,
+            buildAutopayOtpVerificationHtml(ctx, { error: err.message })
+          );
+        } catch {
+          return sendFiuuGoErrorHtml(res, err);
+        }
+      }
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/go/:token/autopay-otp/verify',
+  express.urlencoded({ extended: true }),
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      await verifyAutopayOtpCode(token, req.body?.code);
+      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+    } catch (err) {
+      if (err.statusCode) {
+        try {
+          const ctx = await getAutopayOtpPageContext(req.params.token, { mode: 'sms' });
+          return sendFiuuGoHtml(
+            res,
+            buildAutopayOtpVerificationHtml(ctx, { error: err.message, sent: true })
+          );
+        } catch {
+          return sendFiuuGoErrorHtml(res, err);
+        }
+      }
+      next(err);
+    }
+  }
+);
+
+router.post(
+  '/go/:token/autopay-otp/cancel',
+  express.urlencoded({ extended: true }),
+  [param('token').isString().isLength({ min: 16, max: 128 }), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const token = req.params.token;
+      await cancelAutopayOtpVerification(token);
+      await applyParentAutodebitDecisionOnPayToken(token, {
+        decision: 'decline',
+        terms_accepted: true,
+        skipOtpCheck: true,
+      });
+      return res.redirect(303, `${req.baseUrl}/go/${encodeURIComponent(token)}`);
+    } catch (err) {
+      if (err.statusCode) return sendFiuuGoErrorHtml(res, err);
       next(err);
     }
   }
@@ -128,17 +309,7 @@ router.post(
       const redirectTo = `${req.baseUrl}/go/${encodeURIComponent(req.params.token)}`;
       return res.redirect(303, redirectTo);
     } catch (err) {
-      if (err.statusCode) {
-        res.removeHeader('Content-Security-Policy');
-        return res
-          .status(err.statusCode)
-          .type('html')
-          .send(
-            `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:2rem;text-align:center;"><p>${String(
-              err.message || 'Consent error'
-            ).replace(/</g, '')}</p></body></html>`
-          );
-      }
+      if (err.statusCode) return sendFiuuGoErrorHtml(res, err, 'Consent error');
       next(err);
     }
   }
