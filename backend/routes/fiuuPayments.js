@@ -44,7 +44,7 @@ function applyFiuuGoPageCsp(res) {
   res.removeHeader('Content-Security-Policy-Report-Only');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src https: http: data:; base-uri 'none'"
+    "default-src 'none'; form-action https: http:; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://static.cloudflareinsights.com; img-src https: http: data:; base-uri 'none'"
   );
 }
 

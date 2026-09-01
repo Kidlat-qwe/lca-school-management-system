@@ -24,6 +24,8 @@ SMS_NOTIFICATIONS_ENABLED=true
 
 - Register sender name at [Semaphore](https://semaphore.co/).
 - Messages starting with `TEST` are rejected by Semaphore.
+- If `SEMAPHORE_SENDER_NAME` is wrong or unapproved, Semaphore may return HTTP 500 — leave it unset to use your account default, or set an **approved** sender from the Semaphore dashboard.
+- Test from backend: `node scripts/testSemaphoreSms.js 09171234567`
 
 ## Phone numbers
 

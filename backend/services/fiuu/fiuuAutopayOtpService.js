@@ -240,9 +240,6 @@ export async function startAutopayOtpVerification(token) {
 }
 
 function mapSmsSendFailure(smsResult) {
-  if (smsResult.reason === 'missing_sender_name') {
-    return 'SMS is not fully configured (missing sender name). Use email verification or contact the school.';
-  }
   if (smsResult.reason === 'semaphore_not_configured') {
     return 'SMS is not configured on the server. Use email verification instead.';
   }
@@ -252,7 +249,18 @@ function mapSmsSendFailure(smsResult) {
   if (smsResult.reason === 'network_error') {
     return 'Could not reach the SMS provider. Try again or use email verification.';
   }
+  const httpStatus = smsResult.httpStatus;
   const detail = String(smsResult.error || '').trim();
+  if (/sendername supplied is not valid/i.test(detail)) {
+    return (
+      'SMS sender name is not approved in Semaphore. Use email verification for now, or ask the school to set an approved SEMAPHORE_SENDER_NAME in Coolify (or remove it to use the account default).'
+    );
+  }
+  if (httpStatus === 500) {
+    return (
+      'SMS provider returned a server error. Use email verification for now, or ask the school to verify Semaphore API key, sender name, and account credits in Coolify.'
+    );
+  }
   if (detail) {
     return `SMS could not be sent (${detail}). Try email verification or contact the school.`;
   }

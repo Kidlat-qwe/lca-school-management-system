@@ -63,6 +63,21 @@ export function isSemaphoreConfigured() {
   return SMS_NOTIFICATIONS_ENABLED && Boolean(SEMAPHORE_API_KEY);
 }
 
+function extractSemaphoreErrorMessage(data, httpStatus) {
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (item && typeof item === 'object') {
+        const fieldMsg = Object.values(item).find((v) => typeof v === 'string' && v.trim());
+        if (fieldMsg) return fieldMsg.trim();
+      }
+    }
+    if (data[0]?.message) return String(data[0].message);
+  }
+  if (data?.message) return String(data.message);
+  if (data?.error) return String(data.error);
+  return `Semaphore HTTP ${httpStatus}`;
+}
+
 /**
  * @param {{ numbers: string|string[], message: string, sendername?: string }} params
  */
@@ -89,20 +104,15 @@ export async function sendSemaphoreSms({ numbers, message, sendername }) {
   }
 
   const sender = (sendername || SEMAPHORE_SENDER_NAME || '').trim();
-  if (!sender) {
-    return {
-      success: false,
-      skipped: true,
-      reason: 'missing_sender_name',
-      message: 'Set SEMAPHORE_SENDER_NAME in backend/.env to your approved Semaphore sender name.',
-    };
-  }
 
   const body = new URLSearchParams();
   body.set('apikey', SEMAPHORE_API_KEY);
   body.set('number', normalized.join(','));
   body.set('message', text);
-  body.set('sendername', sender);
+  // Omit sendername when unset — Semaphore uses the account default (avoids 500 from invalid custom sender).
+  if (sender) {
+    body.set('sendername', sender);
+  }
 
   let response;
   let rawText = '';
@@ -130,16 +140,13 @@ export async function sendSemaphoreSms({ numbers, message, sendername }) {
   }
 
   if (!response.ok) {
-    const errMsg =
-      (Array.isArray(data) && data[0]?.message) ||
-      data?.message ||
-      data?.error ||
-      `Semaphore HTTP ${response.status}`;
+    const errMsg = extractSemaphoreErrorMessage(data, response.status);
     console.error('[semaphoreSms] API error:', {
       status: response.status,
       errMsg,
+      raw: typeof data === 'string' ? data.slice(0, 500) : data,
       recipients: normalized,
-      sender,
+      sender: sender || '(account default)',
     });
     return {
       success: false,
@@ -151,7 +158,7 @@ export async function sendSemaphoreSms({ numbers, message, sendername }) {
 
   console.log('[semaphoreSms] Sent:', {
     recipients: normalized.length,
-    sender,
+    sender: sender || '(account default)',
     preview: text.slice(0, 80),
   });
 
