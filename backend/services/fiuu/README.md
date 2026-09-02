@@ -11,7 +11,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
   - Client opts in on `/go` (Terms modal; toggle defaults OFF).
   - **SMS or email OTP** verifies authorization before AutoPay is enabled (`FIUU_AUTOPAY_OTP_ENABLED`, default on).
     - SMS: parent **enters mobile** → OTP → enter code on `/go`.
-    - Email: parent **enters email** → **click Verify** in email (no code on page).
+    - Email: parent **enters email** → OTP in email → enter code on `/go` (same UX as SMS).
   - Consent + token bound to **one** installment profile / class.
   - When `FIUU_AUTOPAY_MIT_ENABLED=true`, the installment invoice scheduler charges the saved token via FIUU Recurring API (MIT) after generating each due invoice for that profile.
   - MIT failure → CMS emails a normal Pay now link as fallback.
@@ -78,9 +78,9 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | POST | `/payments/fiuu/go/:token/consent` | Parent accept/decline → redirect to `/go` |
 | POST | `/payments/fiuu/go/:token/autopay-otp` | Start AutoPay SMS/email verification |
 | GET | `/payments/fiuu/go/:token/autopay-otp` | Verification page |
-| POST | `/payments/fiuu/go/:token/autopay-otp/send` | Send SMS OTP (`mobile`) or email link (`email`) |
-| POST | `/payments/fiuu/go/:token/autopay-otp/verify` | Verify SMS code → enable AutoPay → `/go` |
-| GET | `/payments/fiuu/go/:token/autopay-otp/confirm-email` | Email link click → enable AutoPay → `/go` |
+| POST | `/payments/fiuu/go/:token/autopay-otp/send` | Send SMS or email OTP (`mobile` / `email`) |
+| POST | `/payments/fiuu/go/:token/autopay-otp/verify` | Verify OTP code (SMS or email) → enable AutoPay → `/go` |
+| GET | `/payments/fiuu/go/:token/autopay-otp/confirm-email` | Legacy email link (deprecated; use code entry) |
 | POST | `/payments/fiuu/go/:token/autopay-otp/cancel` | Cancel AutoPay → pay invoice only |
 | GET | `/payments/fiuu/public/:token` | JSON diagnostics |
 

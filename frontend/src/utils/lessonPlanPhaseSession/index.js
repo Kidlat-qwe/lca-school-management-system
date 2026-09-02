@@ -3,6 +3,22 @@
  * Options come from GET /classes/:id/sessions (classsessionstbl).
  */
 
+import { parseDateForDisplay } from '../dateUtils.js';
+
+/** Display YYYY-MM-DD the same way as `<input type="date">` in the browser (locale-aware). */
+export function formatLessonPlanDateDisplay(ymd) {
+  const raw = String(ymd || '').trim().slice(0, 10);
+  if (!raw) return '';
+  const d = parseDateForDisplay(raw);
+  if (!d) return raw;
+  return d.toLocaleDateString(undefined, {
+    timeZone: 'Asia/Manila',
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+  });
+}
+
 export function parsePhaseNumber(value) {
   const m = String(value || '').trim().match(/(\d+)/);
   return m ? m[1] : '';
@@ -58,6 +74,9 @@ export function buildLessonPlanSessionOptions(classSessions = [], phaseNumber) {
         phase_session_number: sessionNum,
         scheduled_date: row.scheduled_date
           ? String(row.scheduled_date).slice(0, 10)
+          : '',
+        scheduled_date_label: row.scheduled_date
+          ? formatLessonPlanDateDisplay(row.scheduled_date)
           : '',
         topic,
         label,

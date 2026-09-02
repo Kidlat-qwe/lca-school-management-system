@@ -373,27 +373,64 @@ export default function SuperadminLessonPlans() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const res = await apiRequest('/lesson-plans/verifiers/me');
+      if (userType === 'Superadmin') {
         if (cancelled) return;
-        const allowed = Boolean(res.data?.is_verifier);
-        setIsVerifier(allowed);
+        setIsVerifier(true);
         setAccessChecked(true);
-        if (allowed) await fetchQueue();
-        else setLoading(false);
-      } catch (err) {
-        if (!cancelled) {
-          setIsVerifier(false);
-          setAccessChecked(true);
-          setLoading(false);
-          setError(err.message || 'Failed to check verifier access');
+        try {
+          await fetchQueue();
+        } catch (err) {
+          if (!cancelled) {
+            setLoading(false);
+            setError(err.message || 'Failed to load lesson plans');
+          }
         }
+        return;
+      }
+
+      if (userType === 'Admin') {
+        const profileVerifier = Boolean(
+          userInfo?.is_lesson_plan_verifier || userInfo?.isLessonPlanVerifier
+        );
+        try {
+          const res = await apiRequest('/lesson-plans/verifiers/me');
+          if (cancelled) return;
+          const allowed = Boolean(res.data?.is_verifier) || profileVerifier;
+          setIsVerifier(allowed);
+          setAccessChecked(true);
+          if (allowed) await fetchQueue();
+          else setLoading(false);
+        } catch (err) {
+          if (!cancelled) {
+            const allowed = profileVerifier;
+            setIsVerifier(allowed);
+            setAccessChecked(true);
+            if (allowed) {
+              try {
+                await fetchQueue();
+              } catch (queueErr) {
+                setLoading(false);
+                setError(queueErr.message || 'Failed to load lesson plans');
+              }
+            } else {
+              setLoading(false);
+              setError(err.message || 'Failed to check verifier access');
+            }
+          }
+        }
+        return;
+      }
+
+      if (!cancelled) {
+        setIsVerifier(false);
+        setAccessChecked(true);
+        setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [fetchQueue]);
+  }, [userType, userInfo?.is_lesson_plan_verifier, userInfo?.isLessonPlanVerifier, fetchQueue]);
 
   useEffect(() => {
     if (!selectedPlan) return undefined;

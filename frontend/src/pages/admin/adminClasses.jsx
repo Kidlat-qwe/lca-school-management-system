@@ -188,6 +188,7 @@ const AdminClasses = () => {
     classMeta: {},
   });
   const [selectedEnrollmentOption, setSelectedEnrollmentOption] = useState(null); // 'package', 'per-phase', 'reservation', 'ack-receipt'
+  const [isContinuePerPhaseFlow, setIsContinuePerPhaseFlow] = useState(false);
   const [ackReceipts, setAckReceipts] = useState([]);
   const [ackReceiptsLoading, setAckReceiptsLoading] = useState(false);
   const [ackReceiptsError, setAckReceiptsError] = useState('');
@@ -3371,6 +3372,7 @@ const initializePackageMerchSelections = useCallback(
     setGeneratedInvoices([]);
     setShowPackageDetails(false); // Reset package details visibility
     setSelectedEnrollmentOption(null);
+    setIsContinuePerPhaseFlow(false);
     setIsEnrollModalOpen(true);
     loadEnrollmentPhaseContext(classItem);
     
@@ -3412,6 +3414,7 @@ const initializePackageMerchSelections = useCallback(
     setGeneratedInvoices([]);
     setShowPackageDetails(false);
     setSelectedEnrollmentOption('per-phase');
+    setIsContinuePerPhaseFlow(true);
     setSelectedPhaseNumber(null);
     setPerPhaseAmount('');
     setStudentSearchTerm('');
@@ -3446,6 +3449,7 @@ const initializePackageMerchSelections = useCallback(
     setGeneratedInvoices([]);
     setShowPackageDetails(false);
     setSelectedEnrollmentOption(null);
+    setIsContinuePerPhaseFlow(false);
     setIsEnrollModalOpen(true);
     loadEnrollmentPhaseContext(classItem);
 
@@ -3472,6 +3476,7 @@ const initializePackageMerchSelections = useCallback(
     setSelectedStudents([]);
     setPackageMerchSelections({});
     setSelectedEnrollmentOption(null);
+    setIsContinuePerPhaseFlow(false);
   };
 
   const handleEnrollmentOptionContinue = () => {
@@ -3531,6 +3536,7 @@ const initializePackageMerchSelections = useCallback(
     setShowPackageDetails(false); // Reset package details visibility
     setSelectedPhaseNumber(null); // Reset phase selection
     setSelectedEnrollmentOption(null);
+    setIsContinuePerPhaseFlow(false);
     setPerPhaseAmount(''); // Reset per-phase amount
     setAckReceipts([]);
     setAckReceiptsLoading(false);
@@ -4191,6 +4197,7 @@ const initializePackageMerchSelections = useCallback(
     (typeName) => requiresItemVariantForMerchandise(typeName)
   );
   const needsEnrollMerchandiseConfig =
+    !isContinuePerPhaseFlow &&
     Boolean(selectedPackage) &&
     (selectedPackageMerchTypes.length > 0 ||
       selectedPackageItemVariantTypes.length > 0 ||
@@ -4615,82 +4622,84 @@ const initializePackageMerchSelections = useCallback(
       }
     }
 
-    if (selectedPackage && !validatePackageMerchSelections()) {
-      return;
-    }
-
-    if (selectedPackage && selectedPackageSwappableTypes.length > 0) {
-      const entitlementError = validatePackageMerchEntitlements({
-        students: selectedStudents,
-        swappableTypeNames: selectedPackageSwappableTypes,
-        entitlementsByStudent: studentPackageMerchEntitlements,
-        merchandiseList: merchandise,
-      });
-      if (entitlementError) {
-        appAlert(entitlementError);
+    if (!isContinuePerPhaseFlow) {
+      if (selectedPackage && !validatePackageMerchSelections()) {
         return;
       }
-    }
 
-    // Validate per-student merchandise size selections
-    if (selectedStudents.length > 0) {
-      for (const student of selectedStudents) {
-        const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
-        const availableMerchandise = selectedPackage
-          ? Object.values(packageMerchSelections || {}).flat().filter(m => m && m.merchandise_id)
-          : selectedMerchandise;
-        
-        for (const merchItem of availableMerchandise) {
-          const merchName = typeof merchItem === 'object' 
-            ? (merchandise.find(m => m.merchandise_id === merchItem.merchandise_id)?.merchandise_name || merchItem.merchandise_name)
-            : merchandise.find(m => m.merchandise_id === merchItem)?.merchandise_name;
+      if (selectedPackage && selectedPackageSwappableTypes.length > 0) {
+        const entitlementError = validatePackageMerchEntitlements({
+          students: selectedStudents,
+          swappableTypeNames: selectedPackageSwappableTypes,
+          entitlementsByStudent: studentPackageMerchEntitlements,
+          merchandiseList: merchandise,
+        });
+        if (entitlementError) {
+          appAlert(entitlementError);
+          return;
+        }
+      }
+
+      // Validate per-student merchandise size selections
+      if (selectedStudents.length > 0) {
+        for (const student of selectedStudents) {
+          const studentMerchSelections = studentMerchandiseSelections[student.user_id] || [];
+          const availableMerchandise = selectedPackage
+            ? Object.values(packageMerchSelections || {}).flat().filter(m => m && m.merchandise_id)
+            : selectedMerchandise;
           
-          // Check if this merchandise type has sizes available
-          const itemsForType = getMerchandiseItemsByType(merchName);
-          const hasSizes = itemsForType.some(m => m.size);
-          
-          if (hasSizes && isUniformTopBottomType(merchName)) {
-            const itemsForType = getMerchandiseItemsByType(merchName);
-            if (
-              !isStudentUniformSelectionComplete(
-                studentMerchSelections,
-                merchName,
-                itemsForType,
-                getUniformCategory
-              )
-            ) {
-              const categories = listUniformStockCategories(itemsForType, getUniformCategory);
-              const missing =
-                categories.includes('Set') &&
-                !studentMerchSelections.some(
-                  (m) => m.merchandise_name === merchName && m.category === 'Set'
-                )
-                  ? categories.filter((c) => c !== 'Set').length === 0
-                    ? 'Set'
-                    : 'Set (or Top & Bottom)'
-                  : categories.filter((c) => c !== 'Set').find((category) => {
-                      return !studentMerchSelections.some(
-                        (m) =>
-                          m.merchandise_name === merchName &&
-                          m.category === category &&
-                          m.size
-                      );
-                    }) || 'size';
-              appAlert(
-                `Please select a size for ${merchName}${missing && missing !== 'size' ? ` - ${missing}` : ''} for student: ${student.full_name}`
-              );
-              return;
-            }
-          } else if (hasSizes) {
-            // For other merchandise with sizes, check for size selection
-            const studentSelection = studentMerchSelections.find(m => 
-              m.merchandise_id === (typeof merchItem === 'object' ? merchItem.merchandise_id : merchItem) ||
-              m.merchandise_name === merchName
-            );
+          for (const merchItem of availableMerchandise) {
+            const merchName = typeof merchItem === 'object' 
+              ? (merchandise.find(m => m.merchandise_id === merchItem.merchandise_id)?.merchandise_name || merchItem.merchandise_name)
+              : merchandise.find(m => m.merchandise_id === merchItem)?.merchandise_name;
             
-            if (!studentSelection || !studentSelection.size || studentSelection.size.trim() === '') {
-              appAlert(`Please select a size for ${merchName} for student: ${student.full_name}`);
-              return;
+            // Check if this merchandise type has sizes available
+            const itemsForType = getMerchandiseItemsByType(merchName);
+            const hasSizes = itemsForType.some(m => m.size);
+            
+            if (hasSizes && isUniformTopBottomType(merchName)) {
+              const itemsForType = getMerchandiseItemsByType(merchName);
+              if (
+                !isStudentUniformSelectionComplete(
+                  studentMerchSelections,
+                  merchName,
+                  itemsForType,
+                  getUniformCategory
+                )
+              ) {
+                const categories = listUniformStockCategories(itemsForType, getUniformCategory);
+                const missing =
+                  categories.includes('Set') &&
+                  !studentMerchSelections.some(
+                    (m) => m.merchandise_name === merchName && m.category === 'Set'
+                  )
+                    ? categories.filter((c) => c !== 'Set').length === 0
+                      ? 'Set'
+                      : 'Set (or Top & Bottom)'
+                    : categories.filter((c) => c !== 'Set').find((category) => {
+                        return !studentMerchSelections.some(
+                          (m) =>
+                            m.merchandise_name === merchName &&
+                            m.category === category &&
+                            m.size
+                        );
+                      }) || 'size';
+                appAlert(
+                  `Please select a size for ${merchName}${missing && missing !== 'size' ? ` - ${missing}` : ''} for student: ${student.full_name}`
+                );
+                return;
+              }
+            } else if (hasSizes) {
+              // For other merchandise with sizes, check for size selection
+              const studentSelection = studentMerchSelections.find(m => 
+                m.merchandise_id === (typeof merchItem === 'object' ? merchItem.merchandise_id : merchItem) ||
+                m.merchandise_name === merchName
+              );
+              
+              if (!studentSelection || !studentSelection.size || studentSelection.size.trim() === '') {
+                appAlert(`Please select a size for ${merchName} for student: ${student.full_name}`);
+                return;
+              }
             }
           }
         }
@@ -5014,7 +5023,11 @@ const initializePackageMerchSelections = useCallback(
           });
           }
 
-          const merchandisePayload = selectedPackage ? packageMerchPayload : manualMerchPayload;
+          const merchandisePayload = isContinuePerPhaseFlow
+            ? []
+            : selectedPackage
+              ? packageMerchPayload
+              : manualMerchPayload;
 
           // Final validation: Ensure all merchandise IDs exist in current branch's merchandise list
           const validatedMerchandisePayload = merchandisePayload.filter(item => {

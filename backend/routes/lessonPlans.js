@@ -8,20 +8,22 @@ import {
   REFLECTION_EDITABLE_STATUSES,
   buildRevisionFeedbackPayload,
   clearReflectionFields,
+  deriveBranchGradeLevelsFromClasses,
   enrichLessonPlanPayloadWithClass,
-  formatLessonPlanClassLabel,
+  fetchLessonPlanMetaClasses,
   isLessonDateToday,
   lessonPlanWriteColumns,
   mapLessonPlanRow,
   normalizeHeadTeacherReviewBody,
   normalizeLessonPlanBody,
   notifyTeacherOfLessonPlanReview,
-  notifyVerifiersOfLessonPlanSubmission,
+  countPendingLessonPlanSubmissions,
   serializeRevisionFeedback,
   summarizeRevisionFeedbackForNotification,
   validateLessonPlanPayload,
   validateReflectionPayload,
   validateRevisionFeedbackPayload,
+  isConfiguredLessonPlanAdminVerifier,
 } from '../lib/lessonPlans/index.js';
 
 const router = express.Router();
@@ -56,16 +58,7 @@ const SELECT_PLAN = `
 `;
 
 async function assertIsConfiguredAdminVerifier(userId) {
-  const result = await query(
-    `
-    SELECT 1
-    FROM lesson_plan_verifierstbl v
-    INNER JOIN userstbl u ON u.user_id = v.user_id
-    WHERE v.user_id = $1 AND u.user_type = 'Admin'
-    `,
-    [userId]
-  );
-  return result.rows.length > 0;
+  return isConfiguredLessonPlanAdminVerifier(query, userId);
 }
 
 /**
@@ -82,7 +75,7 @@ function getActorBranchId(req) {
 
 async function getVerifierContext(req) {
   const userId = req.user.userId || req.user.user_id;
-  const userType = req.user.userType || req.user.user_type;
+  const userType = String(req.user.userType || req.user.user_type || '').trim();
 
   if (userType === 'Superadmin') {
     return { userId, userType, isVerifier: true, branchId: null };
@@ -157,12 +150,13 @@ const VERIFIER_LIST_SELECT = `
  */
 router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next) => {
   try {
-    const { deriveBranchGradeLevelsFromClasses, formatLessonPlanClassLabel } = await import(
-      '../lib/lessonPlans/index.js'
-    );
     let branch = null;
     let classes = [];
     const branchId = req.user.branchId || req.user.branch_id || null;
+    const userType = req.user.userType || req.user.user_type;
+    const teacherUserId =
+      userType === 'Teacher' ? req.user.userId || req.user.user_id : null;
+
     if (branchId) {
       const br = await query(
         `
@@ -180,29 +174,7 @@ router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next)
       );
       branch = br.rows[0] || null;
 
-      const classRows = await query(
-        `
-        SELECT
-          c.class_id,
-          c.class_name,
-          c.level_tag,
-          c.status,
-          p.program_name
-        FROM classestbl c
-        LEFT JOIN programstbl p ON p.program_id = c.program_id
-        WHERE c.branch_id = $1 AND c.archived_at IS NULL
-        ORDER BY p.program_name NULLS LAST, c.class_name NULLS LAST, c.class_id
-        `,
-        [branchId]
-      );
-      classes = (classRows.rows || []).map((row) => ({
-        class_id: row.class_id,
-        class_name: row.class_name || '',
-        program_name: row.program_name || '',
-        level_tag: row.level_tag || '',
-        status: row.status || '',
-        label: formatLessonPlanClassLabel(row),
-      }));
+      classes = await fetchLessonPlanMetaClasses(query, { branchId, teacherUserId });
     }
     const grade_levels = deriveBranchGradeLevelsFromClasses(classes);
     res.json({
@@ -238,6 +210,13 @@ router.get('/meta', requireRole('Teacher', 'Superadmin'), async (req, res, next)
 router.get('/verifiers/me', requireRole('Superadmin', 'Admin'), async (req, res, next) => {
   try {
     const ctx = await getVerifierContext(req);
+    const pending_submission_count = ctx.isVerifier
+      ? await countPendingLessonPlanSubmissions(query, {
+          userType: ctx.userType,
+          branchId: ctx.branchId,
+        })
+      : 0;
+
     res.json({
       success: true,
       data: {
@@ -245,6 +224,7 @@ router.get('/verifiers/me', requireRole('Superadmin', 'Admin'), async (req, res,
         user_id: ctx.userId,
         user_type: ctx.userType,
         branch_id: ctx.branchId,
+        pending_submission_count,
       },
     });
   } catch (error) {
@@ -490,7 +470,13 @@ router.post(
       }
 
       const branchId = req.user.branchId || null;
-      const enriched = await enrichLessonPlanPayloadWithClass(query, payload, branchId);
+      const teacherId = req.user.userId || req.user.user_id;
+      const enriched = await enrichLessonPlanPayloadWithClass(
+        query,
+        payload,
+        branchId,
+        teacherId
+      );
       if (!enriched.ok) {
         return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
       }
@@ -498,7 +484,6 @@ router.post(
       const status = req.body.status === 'submitted' ? 'submitted' : 'draft';
       // Reflections stay empty until verifier approves and lesson date unlocks them.
       const cols = lessonPlanWriteColumns(clearReflectionFields(enriched.payload));
-      const teacherId = req.user.userId || req.user.user_id;
 
       const result = await query(
         `
@@ -579,18 +564,6 @@ router.post(
         result.rows[0].lesson_plan_id,
       ]);
       const plan = mapLessonPlanRow(created.rows[0]);
-
-      if (status === 'submitted') {
-        try {
-          await notifyVerifiersOfLessonPlanSubmission({
-            lessonPlan: { ...plan, branch_id: branchId, teacher_user_id: teacherId },
-            createdBy: teacherId,
-            teacherName: req.user.fullName || req.user.full_name || req.user.email || 'Teacher',
-          });
-        } catch (notifyErr) {
-          console.error('[lesson-plans] submit notification failed:', notifyErr.message);
-        }
-      }
 
       res.status(201).json({ success: true, data: plan });
     } catch (error) {
@@ -686,7 +659,12 @@ router.put(
       }
 
       const branchId = req.user.branchId || null;
-      const enriched = await enrichLessonPlanPayloadWithClass(query, payload, branchId);
+      const enriched = await enrichLessonPlanPayloadWithClass(
+        query,
+        payload,
+        branchId,
+        teacherId
+      );
       if (!enriched.ok) {
         return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
       }
@@ -832,20 +810,6 @@ router.post(
       );
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
       const plan = mapLessonPlanRow(updated.rows[0]);
-
-      try {
-        await notifyVerifiersOfLessonPlanSubmission({
-          lessonPlan: {
-            ...plan,
-            branch_id: existing.rows[0].branch_id,
-            teacher_user_id: teacherId,
-          },
-          createdBy: teacherId,
-          teacherName: req.user.fullName || req.user.full_name || req.user.email || 'Teacher',
-        });
-      } catch (notifyErr) {
-        console.error('[lesson-plans] submit notification failed:', notifyErr.message);
-      }
 
       res.json({ success: true, data: plan });
     } catch (error) {

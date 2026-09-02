@@ -168,6 +168,89 @@ export function formatLessonPlanClassLabel(classRow = null) {
   return id != null ? `Class #${id}` : '';
 }
 
+/**
+ * True when teacher is primary or junction-assigned on the class.
+ */
+export async function isTeacherAssignedToClass(runQuery, classId, teacherUserId) {
+  const cid = Number(classId);
+  const tid = Number(teacherUserId);
+  if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(tid) || tid <= 0) {
+    return false;
+  }
+  const result = await runQuery(
+    `
+    SELECT 1
+    FROM classestbl c
+    WHERE c.class_id = $1
+      AND c.archived_at IS NULL
+      AND (
+        c.teacher_id = $2
+        OR EXISTS (
+          SELECT 1
+          FROM classteacherstbl ct
+          WHERE ct.class_id = c.class_id
+            AND ct.teacher_id = $2
+        )
+      )
+    LIMIT 1
+    `,
+    [cid, tid]
+  );
+  return result.rows.length > 0;
+}
+
+/**
+ * Branch classes for lesson plan meta. Teachers only see designated classes.
+ */
+export async function fetchLessonPlanMetaClasses(
+  runQuery,
+  { branchId, teacherUserId = null } = {}
+) {
+  if (branchId == null) return [];
+  const params = [branchId];
+  let teacherFilterSql = '';
+  if (teacherUserId != null) {
+    params.push(teacherUserId);
+    teacherFilterSql = `
+      AND (
+        c.teacher_id = $2
+        OR EXISTS (
+          SELECT 1
+          FROM classteacherstbl ct
+          WHERE ct.class_id = c.class_id
+            AND ct.teacher_id = $2
+        )
+      )`;
+  }
+
+  const result = await runQuery(
+    `
+    SELECT
+      c.class_id,
+      c.class_name,
+      c.level_tag,
+      c.status,
+      p.program_name
+    FROM classestbl c
+    LEFT JOIN programstbl p ON p.program_id = c.program_id
+    WHERE c.branch_id = $1
+      AND c.archived_at IS NULL
+      ${teacherFilterSql}
+    ORDER BY p.program_name NULLS LAST, c.class_name NULLS LAST, c.class_id
+    `,
+    params
+  );
+
+  return (result.rows || []).map((row) => ({
+    class_id: row.class_id,
+    class_name: row.class_name || '',
+    program_name: row.program_name || '',
+    level_tag: row.level_tag || '',
+    status: row.status || '',
+    label: formatLessonPlanClassLabel(row),
+  }));
+}
+
 export function normalizeLessonPlanBody(body = {}) {
   const out = {};
   if (body.lesson_date != null) out.lesson_date = String(body.lesson_date).slice(0, 10);
@@ -187,7 +270,12 @@ export function normalizeLessonPlanBody(body = {}) {
  * Resolve class_id → denormalized subject/class1 fields; clears legacy class2/3 slots.
  * @returns {Promise<{ ok: true, payload: object } | { ok: false, errors: string[] }>}
  */
-export async function enrichLessonPlanPayloadWithClass(runQuery, payload = {}, branchId = null) {
+export async function enrichLessonPlanPayloadWithClass(
+  runQuery,
+  payload = {},
+  branchId = null,
+  teacherUserId = null
+) {
   const classId = Number(payload.class_id);
   if (!Number.isFinite(classId) || classId <= 0) {
     return { ok: false, errors: ['class_id is required'] };
@@ -213,6 +301,12 @@ export async function enrichLessonPlanPayloadWithClass(runQuery, payload = {}, b
   }
   if (branchId != null && Number(row.branch_id) !== Number(branchId)) {
     return { ok: false, errors: ['Selected class does not belong to your branch'] };
+  }
+  if (teacherUserId != null) {
+    const assigned = await isTeacherAssignedToClass(runQuery, classId, teacherUserId);
+    if (!assigned) {
+      return { ok: false, errors: ['You are not assigned to the selected class'] };
+    }
   }
 
   const label = formatLessonPlanClassLabel(row);
@@ -603,7 +697,27 @@ export function lessonPlanWriteColumns(payload) {
   };
 }
 
+/**
+ * Whether an Admin user is selected in Settings → Lesson Plans as a verifier.
+ */
+export async function isConfiguredLessonPlanAdminVerifier(runQuery, userId) {
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+
+  const result = await runQuery(
+    `
+    SELECT 1
+    FROM lesson_plan_verifierstbl v
+    INNER JOIN userstbl u ON u.user_id = v.user_id
+    WHERE v.user_id = $1 AND TRIM(u.user_type) = 'Admin'
+  `,
+    [id]
+  );
+  return result.rows.length > 0;
+}
+
 export {
+  countPendingLessonPlanSubmissions,
   notifyTeacherOfLessonPlanReview,
   notifyVerifiersOfLessonPlanSubmission,
 } from './notifications.js';

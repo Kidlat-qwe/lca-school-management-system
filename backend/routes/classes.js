@@ -18,6 +18,10 @@ import {
 } from '../utils/classStartDateAdjustment/classStartDateAdjustmentService.js';
 import { resolveInstallmentEnrollmentMinPhase } from '../utils/classActivePhase.js';
 import {
+  resolveIsContinuePerPhaseEnrollment,
+  stampContinuePerPhaseOnRemarks,
+} from '../utils/continuePerPhaseEnrollment.js';
+import {
   alignInstallmentProfileForRejoinInvoice,
   determineEnrollmentStatus,
   findInstallmentProfileForRejoin,
@@ -5432,6 +5436,35 @@ router.post(
       
       console.log(`📝 Invoice created. Student will be enrolled after payment is made.`);
 
+      const requestedContinueStartPhase =
+        installmentPhaseStart != null
+          ? installmentPhaseStart
+          : installment_scope?.phase_start != null
+            ? parseInt(installment_scope.phase_start, 10)
+            : phase_number != null
+              ? parseInt(phase_number, 10)
+              : enrollmentPhase;
+
+      const isContinuePerPhaseEnrollment = resolveIsContinuePerPhaseEnrollment({
+        hasActiveEnrollment: hasActiveEnrollmentInClass,
+        highestActivePhase: highestActivePhaseInClass,
+        requestedStartPhase: requestedContinueStartPhase,
+      });
+
+      if (isContinuePerPhaseEnrollment && selected_merchandise?.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Merchandise cannot be included on continue per phase enrollment.',
+        });
+      }
+
+      if (isContinuePerPhaseEnrollment) {
+        console.log(
+          `[Merchandise] Continue per phase (student ${student_id} class ${class_id}, start phase ${requestedContinueStartPhase}) — skip all merchandise`
+        );
+      }
+
       // Validate inventory availability BEFORE processing enrollment
       // This is important for multiple student enrollments with per-student merchandise selections
       const inventoryValidationErrors = [];
@@ -5442,7 +5475,7 @@ router.post(
       
       // Collect all merchandise that needs to be deducted
       // Handle per-student merchandise selections if provided, otherwise use group selections
-      if (selected_merchandise && selected_merchandise.length > 0) {
+      if (!isContinuePerPhaseEnrollment && selected_merchandise && selected_merchandise.length > 0) {
         for (const selectedMerch of selected_merchandise) {
           const merchId = typeof selectedMerch === 'object' ? selectedMerch.merchandise_id : selectedMerch;
           const merchSize = typeof selectedMerch === 'object' ? (selectedMerch.size || null) : null;
@@ -5524,7 +5557,12 @@ router.post(
 
       // Package-defined included merchandise (e.g. enroll per phase / Phase + Installment): ensure
       // stock validation and deduction run even when the client omits lines in selected_merchandise.
-      if (package_id && packageMerchandiseMap && packageMerchandiseMap.size > 0) {
+      if (
+        !isContinuePerPhaseEnrollment &&
+        package_id &&
+        packageMerchandiseMap &&
+        packageMerchandiseMap.size > 0
+      ) {
         for (const [pkgMerchId, meta] of packageMerchandiseMap.entries()) {
           if (meta && meta.is_included === false) continue;
           const mid = parseInt(String(pkgMerchId), 10);
@@ -5551,7 +5589,7 @@ router.post(
       }
 
       // Package merchandise: issue once on first payment (downpayment or Phase 1), not on re-enroll.
-      if (package_id) {
+      if (!isContinuePerPhaseEnrollment && package_id) {
         const issuedRows = await loadIssuedPackageMerchRows(client, {
           studentId: student_id,
           packageId: package_id,
@@ -5577,7 +5615,7 @@ router.post(
       
       let packageMerchSwapAdjustmentItems = [];
       let packageMerchSwapAdjustmentTotal = 0;
-      if (package_id && merchandiseToDeduct.size > 0) {
+      if (!isContinuePerPhaseEnrollment && package_id && merchandiseToDeduct.size > 0) {
         const priceByType = buildPackageMerchPriceByType(packageMerchandiseMap);
         const swapAdjustmentResult = await computePackageMerchSwapInvoiceAdjustments(
           merchandiseToDeduct,
@@ -5685,7 +5723,12 @@ router.post(
 
       // Process selected merchandise (supports both package and custom selection).
       // Package lines are deferred to first payment unless already issued (re-enroll).
-      if (!deferPackageMerchToFirstPayment && selected_merchandise && selected_merchandise.length > 0) {
+      if (
+        !isContinuePerPhaseEnrollment &&
+        !deferPackageMerchToFirstPayment &&
+        selected_merchandise &&
+        selected_merchandise.length > 0
+      ) {
         for (const selectedMerch of selected_merchandise) {
           const merchId = typeof selectedMerch === 'object' ? selectedMerch.merchandise_id : selectedMerch;
           const selectedSize = typeof selectedMerch === 'object' ? selectedMerch.size : null;
@@ -5797,7 +5840,7 @@ router.post(
       }
 
       // Stock deduction for package-included lines not represented in selected_merchandise (enroll per phase, etc.)
-      if (!deferPackageMerchToFirstPayment) {
+      if (!isContinuePerPhaseEnrollment && !deferPackageMerchToFirstPayment) {
       for (const [deductKey, merchInfo] of merchandiseToDeduct.entries()) {
         if (!deductKey.endsWith('_package_included')) continue;
         const merchLookup = await client.query(
@@ -6684,6 +6727,9 @@ router.post(
         if (packageMerchPendingLines?.length) {
           invoiceRemarks = appendMerchPendingToRemarks(invoiceRemarks, packageMerchPendingLines);
         }
+        if (isContinuePerPhaseEnrollment) {
+          invoiceRemarks = stampContinuePerPhaseOnRemarks(invoiceRemarks);
+        }
         await client.query(
           `UPDATE invoicestbl SET remarks = $1 WHERE invoice_id = $2`,
           [invoiceRemarks, newInvoice.invoice_id]
@@ -6703,6 +6749,9 @@ router.post(
         }
         if (packageMerchPendingLines?.length) {
           invoiceRemarks = appendMerchPendingToRemarks(invoiceRemarks, packageMerchPendingLines);
+        }
+        if (isContinuePerPhaseEnrollment) {
+          invoiceRemarks = stampContinuePerPhaseOnRemarks(invoiceRemarks);
         }
         await client.query(
           `UPDATE invoicestbl SET remarks = $1 WHERE invoice_id = $2`,
@@ -7049,16 +7098,23 @@ router.post(
           }
         );
 
-        if (generatedPhaseInvoice?.invoice_id && packageMerchPendingLines?.length) {
+        if (generatedPhaseInvoice?.invoice_id) {
           let genRemarks = `CLASS_ID:${class_id}`;
           if (phaseStartForRemarks !== null && phaseEndForRemarks !== null) {
             genRemarks += `;PHASE_START:${phaseStartForRemarks};PHASE_END:${phaseEndForRemarks}`;
           }
-          genRemarks = appendMerchPendingToRemarks(genRemarks, packageMerchPendingLines);
-          await query(
-            `UPDATE invoicestbl SET remarks = $1, package_id = COALESCE(package_id, $2) WHERE invoice_id = $3`,
-            [genRemarks, package_id || null, generatedPhaseInvoice.invoice_id]
-          );
+          if (packageMerchPendingLines?.length) {
+            genRemarks = appendMerchPendingToRemarks(genRemarks, packageMerchPendingLines);
+          }
+          if (isContinuePerPhaseEnrollment) {
+            genRemarks = stampContinuePerPhaseOnRemarks(genRemarks);
+          }
+          if (packageMerchPendingLines?.length || isContinuePerPhaseEnrollment) {
+            await query(
+              `UPDATE invoicestbl SET remarks = $1, package_id = COALESCE(package_id, $2) WHERE invoice_id = $3`,
+              [genRemarks, package_id || null, generatedPhaseInvoice.invoice_id]
+            );
+          }
         }
       }
 

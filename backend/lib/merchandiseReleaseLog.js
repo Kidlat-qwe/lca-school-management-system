@@ -3,7 +3,12 @@
  *
  * Package enrollment: stock + log happen on first qualifying payment (downpayment or Phase 1),
  * once per (student_id, package_id, class_id). Re-enrollment does not issue again.
+ * Continue per phase enrollments never issue package merchandise.
  */
+
+import {
+  isContinuePerPhaseInvoiceRemarks,
+} from '../utils/continuePerPhaseEnrollment.js';
 
 export const MERCH_RELEASE_SOURCE = {
   MERCHANDISE_AR: 'merchandise_ar',
@@ -834,6 +839,10 @@ export async function resolvePackageMerchIssueContext(client, invoice) {
 
   let lines = parseMerchPendingFromRemarks(remarks);
 
+  if (isContinuePerPhaseInvoiceRemarks(remarks)) {
+    return { packageId, classId, branchId, lines: [] };
+  }
+
   // Phase 1+ auto-generated invoices may not carry MERCH_PENDING; read from linked downpayment invoice.
   if (!lines.length && invoice?.installmentinvoiceprofiles_id) {
     const dpRes = await client.query(
@@ -845,6 +854,9 @@ export async function resolvePackageMerchIssueContext(client, invoice) {
       [invoice.installmentinvoiceprofiles_id]
     );
     if (dpRes.rows[0]?.remarks) {
+      if (isContinuePerPhaseInvoiceRemarks(dpRes.rows[0].remarks)) {
+        return { packageId, classId, branchId, lines: [] };
+      }
       lines = parseMerchPendingFromRemarks(dpRes.rows[0].remarks);
     }
   }
@@ -859,6 +871,10 @@ export async function resolvePackageMerchIssueContext(client, invoice) {
 export async function tryIssuePackageMerchandiseOnFirstPayment(client, ctx) {
   const { invoice, studentId, paymentId, paymentIssueDate, createdBy } = ctx;
   if (!studentId || !invoice) return { issued: false, reason: 'missing_invoice' };
+
+  if (isContinuePerPhaseInvoiceRemarks(invoice?.remarks)) {
+    return { issued: false, reason: 'continue_per_phase' };
+  }
 
   const { packageId, classId, branchId, lines } = await resolvePackageMerchIssueContext(client, invoice);
   if (!packageId) return { issued: false, reason: 'no_package' };

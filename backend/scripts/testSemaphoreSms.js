@@ -5,11 +5,6 @@
 import dotenv from 'dotenv';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import {
-  isSemaphoreConfigured,
-  sendSemaphoreSms,
-  normalizePhilippineMobile,
-} from '../utils/sms/semaphoreSmsService.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: resolve(__dirname, '../.env') });
@@ -19,6 +14,10 @@ if (!number) {
   console.error('Usage: node scripts/testSemaphoreSms.js <mobile e.g. 09171234567>');
   process.exit(1);
 }
+
+const { isSemaphoreConfigured, sendSemaphoreSms, normalizePhilippineMobile } = await import(
+  '../utils/sms/semaphoreSmsService.js'
+);
 
 const normalized = normalizePhilippineMobile(number);
 if (!normalized) {

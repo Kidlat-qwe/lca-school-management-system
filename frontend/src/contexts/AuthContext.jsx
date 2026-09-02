@@ -18,6 +18,26 @@ const applyUserSessionCache = (user) => {
   warmupReferenceCache(user);
 };
 
+const normalizeAuthUser = (user) => {
+  if (!user) return null;
+  const isLessonPlanVerifier = Boolean(
+    user.is_lesson_plan_verifier ?? user.isLessonPlanVerifier
+  );
+  return {
+    ...user,
+    user_id: user.userId || user.user_id,
+    userId: user.userId || user.user_id,
+    full_name: user.fullName || user.full_name,
+    fullName: user.fullName || user.full_name,
+    user_type: user.userType || user.user_type,
+    userType: user.userType || user.user_type,
+    branch_id: user.branchId ?? user.branch_id,
+    branchId: user.branchId ?? user.branch_id,
+    is_lesson_plan_verifier: isLessonPlanVerifier,
+    isLessonPlanVerifier,
+  };
+};
+
 const AuthContext = createContext({});
 
 export const useAuth = () => {
@@ -182,17 +202,7 @@ export const AuthProvider = ({ children }) => {
 
       const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
       if (response?.user) {
-        const normalizedUser = {
-          ...response.user,
-          user_id: response.user.userId || response.user.user_id,
-          userId: response.user.userId || response.user.user_id,
-          full_name: response.user.fullName || response.user.full_name,
-          fullName: response.user.fullName || response.user.full_name,
-          user_type: response.user.userType || response.user.user_type,
-          userType: response.user.userType || response.user.user_type,
-          branch_id: response.user.branchId ?? response.user.branch_id,
-          branchId: response.user.branchId ?? response.user.branch_id,
-        };
+        const normalizedUser = normalizeAuthUser(response.user);
         setUserInfoAndRef(normalizedUser);
         applyUserSessionCache(normalizedUser);
         return { success: true, user: normalizedUser };
@@ -306,15 +316,7 @@ export const AuthProvider = ({ children }) => {
         method: 'POST',
       });
       if (response && response.user) {
-        // Normalize user data to include both camelCase and snake_case for compatibility
-        const normalizedUser = {
-          ...response.user,
-          user_id: response.user.userId || response.user.user_id,
-          full_name: response.user.fullName || response.user.full_name,
-          user_type: response.user.userType || response.user.user_type,
-          branch_id: response.user.branchId || response.user.branch_id,
-          profile_picture_url: response.user.profile_picture_url || null,
-        };
+        const normalizedUser = normalizeAuthUser(response.user);
         console.log('Refreshing user info:', normalizedUser);
         setUserInfoAndRef(normalizedUser);
         applyUserSessionCache(normalizedUser);
@@ -377,15 +379,7 @@ export const AuthProvider = ({ children }) => {
             try {
               const response = await apiRequest('/auth/verify', { method: 'POST' }, token);
               if (response?.user && isMounted) {
-                const normalizedUser = {
-                  ...response.user,
-                  user_id: response.user.userId || response.user.user_id,
-                  userId: response.user.userId || response.user.user_id,
-                  user_type: response.user.userType || response.user.user_type,
-                  userType: response.user.userType || response.user.user_type,
-                  branch_id: response.user.branchId ?? response.user.branch_id,
-                  branchId: response.user.branchId ?? response.user.branch_id,
-                };
+                const normalizedUser = normalizeAuthUser(response.user);
                 setUserInfoAndRef(normalizedUser);
                 applyUserSessionCache(normalizedUser);
               }

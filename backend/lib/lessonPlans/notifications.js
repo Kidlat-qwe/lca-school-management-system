@@ -70,7 +70,29 @@ async function insertTargetedNotification({
 }
 
 /**
- * Teacher submitted a plan → notify all Superadmins + matching Admin verifiers.
+ * Count lesson plans awaiting verifier review (status = submitted).
+ * Superadmin: all branches. Admin verifier: own branch only.
+ */
+export async function countPendingLessonPlanSubmissions(runQuery, { userType, branchId } = {}) {
+  const params = [];
+  let where = `WHERE lp.status = 'submitted'`;
+
+  if (userType === 'Admin') {
+    if (branchId == null) return 0;
+    params.push(branchId);
+    where += ` AND lp.branch_id = $${params.length}`;
+  }
+
+  const result = await runQuery(
+    `SELECT COUNT(*)::int AS total FROM lessonplanstbl lp ${where}`,
+    params
+  );
+  return Number(result.rows[0]?.total || 0);
+}
+
+/**
+ * Teacher submitted a plan — verifiers see the sidebar pending count instead of urgent alerts.
+ * @deprecated No longer called on submit; kept for reference/tests.
  */
 export async function notifyVerifiersOfLessonPlanSubmission({
   lessonPlan,

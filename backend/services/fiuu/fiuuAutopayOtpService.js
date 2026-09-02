@@ -1,7 +1,7 @@
 /**
  * LCA AutoPay enrollment verification before consent is finalized.
  * - SMS: parent enters mobile → OTP sent → enter code on /go
- * - Email: parent enters email → click Verify in email (no code on page)
+ * - Email: parent enters email → OTP sent → enter code on /go (same as SMS)
  */
 import crypto from 'crypto';
 import { query } from '../../config/database.js';
@@ -22,7 +22,6 @@ import {
 } from './payLink.js';
 
 const OTP_TTL_MS = 10 * 60 * 1000;
-const EMAIL_LINK_TTL_MS = 30 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
 
@@ -161,6 +160,15 @@ function buildOtpMessage({ code, studentName, classLabel }) {
   );
 }
 
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** @deprecated Legacy click-to-verify links only — new flow sends a code in email. */
 function buildEmailVerifyUrl(token, gatewayPaymentId, expiresAt) {
   const apiBase = String(getFiuuPublicApiBaseUrl() || '').replace(/\/$/, '');
   const exp = String(expiresAt);
@@ -168,28 +176,28 @@ function buildEmailVerifyUrl(token, gatewayPaymentId, expiresAt) {
   return `${apiBase}/payments/fiuu/go/${encodeURIComponent(token)}/autopay-otp/confirm-email?exp=${encodeURIComponent(exp)}&sig=${encodeURIComponent(sig)}`;
 }
 
-function buildEmailVerifyHtml({ verifyUrl, studentName, classLabel }) {
-  const school = DEFAULT_SCHOOL_NAME;
+function buildEmailOtpHtml({ code, studentName, classLabel }) {
+  const school = escapeHtml(DEFAULT_SCHOOL_NAME);
+  const name = escapeHtml(studentName);
   const classLine = classLabel
-    ? `<p style="margin:0 0 12px;font-size:14px;line-height:1.55;color:#475569;">Plan / class: <strong>${classLabel}</strong></p>`
+    ? `<p style="margin:0 0 12px;font-size:14px;line-height:1.55;color:#475569;">Plan / class: <strong>${escapeHtml(classLabel)}</strong></p>`
     : '';
   return `<!DOCTYPE html>
 <html><body style="font-family:Segoe UI,Arial,sans-serif;background:#f8fafc;padding:24px;">
   <div style="max-width:480px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
     <h1 style="margin:0 0 12px;font-size:18px;color:#0f172a;">Verify LCA AutoPay authorization</h1>
     <p style="margin:0 0 12px;font-size:14px;line-height:1.55;color:#475569;">
-      You are authorizing <strong>LCA AutoPay</strong> for <strong>${studentName}</strong>'s recurring installment invoices.
+      You are authorizing <strong>LCA AutoPay</strong> for <strong>${name}</strong>'s recurring installment invoices.
       This confirms you agree to automatic card charges per the LCA AutoPay Terms until you cancel or the plan ends.
     </p>
     ${classLine}
-    <p style="margin:0 0 16px;font-size:14px;line-height:1.55;color:#475569;">
-      Click the button below to verify your email and continue to payment.
+    <p style="margin:0 0 8px;font-size:14px;line-height:1.55;color:#475569;">
+      Enter this verification code on the payment page to continue:
     </p>
-    <p style="margin:0 0 20px;text-align:center;">
-      <a href="${verifyUrl}" style="display:inline-block;background:#1e3a8a;color:#fff;text-decoration:none;
-         font-weight:600;font-size:14px;padding:12px 24px;border-radius:8px;">Verify AutoPay authorization</a>
+    <p style="margin:0 0 16px;text-align:center;font-size:28px;font-weight:700;letter-spacing:6px;color:#1e3a8a;">
+      ${escapeHtml(code)}
     </p>
-    <p style="margin:0;font-size:12px;color:#64748b;">This link expires in 30 minutes. If you did not request this, contact ${school}.</p>
+    <p style="margin:0;font-size:12px;color:#64748b;">Valid for 10 minutes. Do not share this code. If you did not request this, contact ${school}.</p>
   </div>
 </body></html>`;
 }
@@ -337,14 +345,13 @@ export async function sendAutopayEmailVerification(token, emailRaw) {
 
   const contacts = await resolveAutopayVerificationContacts(row.student_id);
   const classLabel = meta.autodebit_class_name || null;
-  const expiresAt = Date.now() + EMAIL_LINK_TTL_MS;
-  const verifyUrl = buildEmailVerifyUrl(token, row.gateway_payment_id, expiresAt);
+  const code = generateOtpCode();
 
   await sendMail({
     to: email,
-    subject: `Verify LCA AutoPay authorization — ${contacts.studentName}`,
-    html: buildEmailVerifyHtml({
-      verifyUrl,
+    subject: `LCA AutoPay verification code — ${contacts.studentName}`,
+    html: buildEmailOtpHtml({
+      code,
       studentName: contacts.studentName,
       classLabel,
     }),
@@ -353,12 +360,12 @@ export async function sendAutopayEmailVerification(token, emailRaw) {
   meta.autopay_otp_ui_mode = 'email';
   meta.autopay_otp_channel = 'email';
   meta.autopay_otp_contact = email;
-  meta.autopay_email_verify_expires_at = new Date(expiresAt).toISOString();
-  meta.autopay_email_verify_sig = hmacSign(`${token}:${row.gateway_payment_id}:${expiresAt}`);
+  meta.autopay_otp_code_hash = hashValue(code);
+  meta.autopay_otp_expires_at = new Date(Date.now() + OTP_TTL_MS).toISOString();
   meta.autopay_otp_last_sent_at = new Date().toISOString();
-  delete meta.autopay_otp_code_hash;
-  delete meta.autopay_otp_expires_at;
   meta.autopay_otp_attempts = 0;
+  delete meta.autopay_email_verify_sig;
+  delete meta.autopay_email_verify_expires_at;
   await persistMeta(row.gateway_payment_id, meta);
 
   return { sent: true, channel: 'email', emailMasked: maskEmailAddress(email) };
@@ -386,11 +393,9 @@ export async function verifyAutopayOtpCode(token, code) {
   if (meta.autopay_otp_verified_at) {
     return { verified: true, alreadyVerified: true };
   }
-  if (meta.autopay_otp_channel !== 'sms') {
-    throw Object.assign(
-      new Error('Use the verification link in your email, or switch to SMS verification.'),
-      { statusCode: 400 }
-    );
+  const channel = String(meta.autopay_otp_channel || '').toLowerCase();
+  if (channel !== 'sms' && channel !== 'email') {
+    throw Object.assign(new Error('Request a verification code first.'), { statusCode: 400 });
   }
 
   const attempts = parseInt(meta.autopay_otp_attempts, 10) || 0;
@@ -494,7 +499,7 @@ function buildPageContext(row, meta, contacts, mode, payToken) {
     suggestedMobile: contacts.suggestedMobile,
     suggestedEmail: contacts.suggestedEmail,
     smsCodeSent: meta.autopay_otp_channel === 'sms' && Boolean(meta.autopay_otp_code_hash),
-    emailLinkSent: meta.autopay_otp_channel === 'email' && Boolean(meta.autopay_email_verify_sig),
+    emailCodeSent: meta.autopay_otp_channel === 'email' && Boolean(meta.autopay_otp_code_hash),
     contactMasked:
       meta.autopay_otp_channel === 'sms'
         ? maskPhilippineMobile(contact)

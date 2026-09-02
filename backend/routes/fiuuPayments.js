@@ -179,7 +179,7 @@ router.get(
 
 /**
  * GET /api/sms/payments/fiuu/go/:token/autopay-otp
- * Show AutoPay verification page (mobile OTP or email link).
+ * Show AutoPay verification page (mobile or email OTP — enter code on page).
  */
 router.get(
   '/go/:token/autopay-otp',
@@ -265,7 +265,7 @@ router.post(
     } catch (err) {
       if (err.statusCode) {
         try {
-          const ctx = await getAutopayOtpPageContext(req.params.token, { mode: 'sms' });
+          const ctx = await getAutopayOtpPageContext(req.params.token);
           return sendFiuuGoHtml(
             res,
             buildAutopayOtpVerificationHtml(ctx, { error: err.message, sent: true })

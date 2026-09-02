@@ -8,6 +8,7 @@ import {
   buildLessonPlanPhaseSessionPayload,
   buildLessonPlanSessionOptions,
   findLessonPlanSession,
+  formatLessonPlanDateDisplay,
   parseLessonPlanPhaseSessionForm,
 } from '../../utils/lessonPlanPhaseSession';
 
@@ -249,6 +250,14 @@ export default function TeacherLessonPlans() {
   const [sheetFlash, setSheetFlash] = useState(false);
   const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
   const flashTimerRef = useRef(null);
+  const lessonPlanTopRef = useRef(null);
+
+  const scrollLessonPlanToTop = useCallback(() => {
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
+      lessonPlanTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, []);
 
   const preparedBy =
     userInfo?.full_name || userInfo?.fullName || userInfo?.email || 'Current Teacher';
@@ -292,10 +301,15 @@ export default function TeacherLessonPlans() {
     [classSessions, formData.phase]
   );
 
-  const selectedSessionDate = useMemo(() => {
+  const selectedSessionDateYmd = useMemo(() => {
     const row = findLessonPlanSession(classSessions, formData.session);
     return row?.scheduled_date ? String(row.scheduled_date).slice(0, 10) : '';
   }, [classSessions, formData.session]);
+
+  const selectedSessionDateLabel = useMemo(
+    () => (selectedSessionDateYmd ? formatLessonPlanDateDisplay(selectedSessionDateYmd) : ''),
+    [selectedSessionDateYmd]
+  );
 
   const selectedClassLabel = useMemo(() => {
     if (!formData.class_id) {
@@ -383,12 +397,12 @@ export default function TeacherLessonPlans() {
   }, [formData.class_id]);
 
   useEffect(() => {
-    if (!formData.session || !selectedSessionDate) return;
+    if (!formData.session || !selectedSessionDateYmd) return;
     setFormData((prev) => {
-      if (prev.lesson_date === selectedSessionDate) return prev;
-      return { ...prev, lesson_date: selectedSessionDate };
+      if (prev.lesson_date === selectedSessionDateYmd) return prev;
+      return { ...prev, lesson_date: selectedSessionDateYmd };
     });
-  }, [formData.session, selectedSessionDate]);
+  }, [formData.session, selectedSessionDateYmd]);
 
   useEffect(() => {
     return () => {
@@ -414,6 +428,7 @@ export default function TeacherLessonPlans() {
     setFormData(createEmptyForm());
     setError('');
     flashLessonPlanSheet();
+    scrollLessonPlanToTop();
   };
 
   const handleSelectPlan = (plan) => {
@@ -439,6 +454,7 @@ export default function TeacherLessonPlans() {
         setError(
           'Complete lesson date, grade level, class, phase, session, topic, and all fields in sections 1–6 before submitting.'
         );
+        scrollLessonPlanToTop();
         return;
       }
 
@@ -489,6 +505,7 @@ export default function TeacherLessonPlans() {
       await fetchPlans();
     } catch (err) {
       setError(err.message || 'Failed to save lesson plan');
+      if (submit) scrollLessonPlanToTop();
     } finally {
       setSaving(false);
     }
@@ -531,6 +548,7 @@ export default function TeacherLessonPlans() {
     const lessonYmd = String(
       (selectedPlan?.lesson_date || formData.lesson_date || '').slice(0, 10)
     );
+    const lessonDateLabel = lessonYmd ? formatLessonPlanDateDisplay(lessonYmd) : '—';
     if (selectedPlan?.status === 'completed') {
       return 'Teacher reflection is complete. This lesson plan is Completed.';
     }
@@ -538,13 +556,13 @@ export default function TeacherLessonPlans() {
       if (canEditReflections) {
         return `Unlocked today (${manilaToday}). Fill in all reflection fields and save to mark this plan Completed. No further verifier approval is required.`;
       }
-      return `Locked. Teacher reflection opens only on the lesson date (${lessonYmd || '—'}) and locks again after that day. Today is ${manilaToday}.`;
+      return `Locked. Teacher reflection opens only on the lesson date (${lessonDateLabel}) and locks again after that day. Today is ${manilaToday}.`;
     }
-    return `Locked until the lesson date after a verifier approves this plan. You can only edit reflections on ${lessonYmd || 'the selected lesson date'} (not before or after).`;
+    return `Locked until the lesson date after a verifier approves this plan. You can only edit reflections on ${lessonDateLabel} (not before or after).`;
   })();
 
   return (
-    <div className="space-y-5">
+    <div ref={lessonPlanTopRef} className="space-y-5">
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
@@ -726,15 +744,15 @@ export default function TeacherLessonPlans() {
                 {sessionOptions.map((opt) => (
                   <option key={opt.key} value={opt.key}>
                     {opt.label}
-                    {opt.scheduled_date ? ` (${opt.scheduled_date})` : ''}
+                    {opt.scheduled_date_label ? ` (${opt.scheduled_date_label})` : ''}
                   </option>
                 ))}
               </select>
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="session" />
-            {selectedSessionDate ? (
+            {selectedSessionDateLabel ? (
               <p className="col-span-full -mt-1 mb-1 text-[12px] text-[#444444]">
-                Lesson date auto-filled from session schedule ({selectedSessionDate}).
+                Lesson date auto-filled from session schedule ({selectedSessionDateLabel}).
               </p>
             ) : null}
 
@@ -1082,9 +1100,7 @@ export default function TeacherLessonPlans() {
                     </h4>
                     <p className="mb-2.5 text-[13px] text-[#666666]">
                       {plan.grade_level || 'No grade'} | {plan.class_label || plan.subject || 'No class'} |{' '}
-                      {plan.lesson_date
-                        ? new Date(plan.lesson_date).toLocaleDateString()
-                        : 'No date'}
+                      {plan.lesson_date ? formatLessonPlanDateDisplay(plan.lesson_date) : 'No date'}
                     </p>
                     <span
                       className="inline-block rounded-full px-2.5 py-1.5 text-xs font-bold capitalize"

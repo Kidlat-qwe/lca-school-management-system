@@ -602,7 +602,7 @@ export function buildFiuuAutoPostHtml(
 }
 
 /**
- * AutoPay verification page — enter mobile + SMS OTP, or email click-to-verify.
+ * AutoPay verification page — enter mobile or email, receive OTP, enter code on page.
  */
 export function buildAutopayOtpVerificationHtml(ctx, { error = null, sent = false } = {}) {
   const token = escapeHtmlAttr(ctx.token);
@@ -680,18 +680,11 @@ export function buildAutopayOtpVerificationHtml(ctx, { error = null, sent = fals
   } else {
     const emailValue = escapeHtmlAttr(ctx.enteredEmail || ctx.suggestedEmail || '');
     const sentNote =
-      ctx.emailLinkSent || sent
+      ctx.emailCodeSent || sent
         ? `<p style="margin:0 0 12px;font-size:12px;color:#166534;background:#ecfdf5;border:1px solid #a7f3d0;
                      border-radius:8px;padding:10px 12px;">
-             We sent a verification email to <strong>${escapeHtmlAttr(ctx.contactMasked || 'your email')}</strong>.
-             Open the message and click <strong>Verify AutoPay authorization</strong>, then return here to continue.
-           </p>
-           <p style="margin:0 0 12px;text-align:center;">
-             <a href="${base}?mode=email&amp;sent=1"
-               style="display:inline-block;background:#1e3a8a;color:#fff;text-decoration:none;border-radius:8px;
-                      font-weight:600;font-size:13px;padding:10px 16px;">
-               I verified my email — continue
-             </a>
+             A verification code was sent to <strong>${escapeHtmlAttr(ctx.contactMasked || 'your email')}</strong>.
+             Valid for 10 minutes.
            </p>`
         : '';
 
@@ -709,9 +702,27 @@ export function buildAutopayOtpVerificationHtml(ctx, { error = null, sent = fals
         <button type="submit"
           style="width:100%;background:#fff;color:#1e3a8a;border:1px solid #93c5fd;border-radius:8px;
                  font-weight:600;font-size:13px;padding:10px 12px;cursor:pointer;">
-          ${ctx.emailLinkSent || sent ? 'Resend verification email' : 'Send verification email'}
+          ${ctx.emailCodeSent || sent ? 'Resend verification code' : 'Send verification code'}
         </button>
       </form>
+      ${
+        ctx.emailCodeSent || sent
+          ? `<form method="POST" action="${base}/verify" style="margin:0;">
+        <label for="otpCodeEmail" style="display:block;font-size:12px;font-weight:600;color:#334155;margin-bottom:6px;">
+          Enter 6-digit code from your email
+        </label>
+        <input id="otpCodeEmail" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+          autocomplete="one-time-code" required
+          style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;
+                 padding:10px 12px;font-size:16px;letter-spacing:2px;margin-bottom:10px;" />
+        <button type="submit"
+          style="width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
+                 font-weight:600;font-size:14px;padding:12px 16px;cursor:pointer;">
+          Verify and continue to payment
+        </button>
+      </form>`
+          : ''
+      }
       <p style="margin:14px 0 0;text-align:center;">
         <a href="${base}?mode=sms" style="font-size:12px;color:#1e3a8a;text-decoration:underline;">
           Use SMS verification instead
@@ -738,7 +749,7 @@ export function buildAutopayOtpVerificationHtml(ctx, { error = null, sent = fals
     heading: mode === 'email' ? 'Verify via email' : 'Verify via mobile',
     message:
       mode === 'email'
-        ? 'Enter your email to receive a verification link for AutoPay setup.'
+        ? 'Enter your email to receive a verification code for AutoPay setup.'
         : 'Enter your mobile number to receive a verification code for AutoPay setup.',
     bodyHtml,
     statusTone: 'neutral',

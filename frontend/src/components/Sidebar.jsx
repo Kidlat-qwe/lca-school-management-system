@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiRequest } from '../config/api';
@@ -6,7 +6,7 @@ import { LESSON_PLANS_ENABLED } from '../utils/lessonPlansFeature';
 
 const Sidebar = ({ isOpen, onClose }) => {
   const location = useLocation();
-  const { userInfo } = useAuth();
+  const { userInfo, refreshUserInfo } = useAuth();
   
   // Get user type (handle both user_type and userType for compatibility)
   const userType = userInfo?.user_type || userInfo?.userType;
@@ -40,29 +40,100 @@ const Sidebar = ({ isOpen, onClose }) => {
   // Track only the currently expanded menu (accordion behavior - only one open at a time)
   const [expandedMenu, setExpandedMenu] = useState(null);
   /** When a sidebar child has its own submenu, e.g. `Dashboard:Operational Dashboard` */
-  const [isLessonPlanVerifier, setIsLessonPlanVerifier] = useState(false);
+  const [adminLessonPlanVerifier, setAdminLessonPlanVerifier] = useState(false);
+  const [lessonPlanPendingCount, setLessonPlanPendingCount] = useState(0);
   const [expandedNestedMenu, setExpandedNestedMenu] = useState(null);
 
-  useEffect(() => {
-    if (!LESSON_PLANS_ENABLED || (userType !== 'Superadmin' && userType !== 'Admin')) {
-      setIsLessonPlanVerifier(false);
-      return undefined;
+  const fetchLessonPlanVerifierStatus = useCallback(async () => {
+    if (!LESSON_PLANS_ENABLED) {
+      setAdminLessonPlanVerifier(false);
+      setLessonPlanPendingCount(0);
+      return;
     }
-    let cancelled = false;
-    (async () => {
+
+    if (userType === 'Superadmin') {
       try {
         const res = await apiRequest('/lesson-plans/verifiers/me');
-        if (!cancelled) {
-          setIsLessonPlanVerifier(Boolean(res.data?.is_verifier));
-        }
+        setLessonPlanPendingCount(Number(res.data?.pending_submission_count || 0));
       } catch {
-        if (!cancelled) setIsLessonPlanVerifier(false);
+        setLessonPlanPendingCount(0);
       }
+      return;
+    }
+
+    if (userType === 'Admin') {
+      try {
+        const res = await apiRequest('/lesson-plans/verifiers/me');
+        setAdminLessonPlanVerifier(Boolean(res.data?.is_verifier));
+        setLessonPlanPendingCount(Number(res.data?.pending_submission_count || 0));
+      } catch {
+        setAdminLessonPlanVerifier(false);
+        setLessonPlanPendingCount(0);
+      }
+      return;
+    }
+
+    setAdminLessonPlanVerifier(false);
+    setLessonPlanPendingCount(0);
+  }, [userType]);
+
+  const isAdminLessonPlanVerifier = useMemo(() => {
+    if (userType !== 'Admin') return false;
+    return Boolean(
+      adminLessonPlanVerifier ||
+        userInfo?.is_lesson_plan_verifier ||
+        userInfo?.isLessonPlanVerifier
+    );
+  }, [
+    userType,
+    adminLessonPlanVerifier,
+    userInfo?.is_lesson_plan_verifier,
+    userInfo?.isLessonPlanVerifier,
+  ]);
+
+  useEffect(() => {
+    if (
+      userType === 'Admin' &&
+      (userInfo?.is_lesson_plan_verifier || userInfo?.isLessonPlanVerifier)
+    ) {
+      setAdminLessonPlanVerifier(true);
+    }
+  }, [userType, userInfo?.is_lesson_plan_verifier, userInfo?.isLessonPlanVerifier]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (cancelled) return;
+      await fetchLessonPlanVerifierStatus();
     })();
     return () => {
       cancelled = true;
     };
-  }, [userType, userInfo?.user_id, userInfo?.userId, location.pathname]);
+  }, [fetchLessonPlanVerifierStatus, userInfo?.user_id, userInfo?.userId]);
+
+  useEffect(() => {
+    const handleVerifiersUpdated = () => {
+      fetchLessonPlanVerifierStatus();
+      if (userType === 'Admin') {
+        refreshUserInfo?.().catch(() => {});
+      }
+    };
+    window.addEventListener('lesson-plan-verifiers-updated', handleVerifiersUpdated);
+    return () => {
+      window.removeEventListener('lesson-plan-verifiers-updated', handleVerifiersUpdated);
+    };
+  }, [fetchLessonPlanVerifierStatus, refreshUserInfo, userType]);
+
+  useEffect(() => {
+    const shouldPoll =
+      LESSON_PLANS_ENABLED &&
+      (userType === 'Superadmin' || (userType === 'Admin' && isAdminLessonPlanVerifier));
+    if (!shouldPoll) return undefined;
+    const intervalId = window.setInterval(() => {
+      fetchLessonPlanVerifierStatus();
+    }, 60000);
+    return () => window.clearInterval(intervalId);
+  }, [isAdminLessonPlanVerifier, userType, fetchLessonPlanVerifierStatus]);
 
   const allMenuItems = [
     {
@@ -212,6 +283,22 @@ const Sidebar = ({ isOpen, onClose }) => {
     },
     {
       name: 'Lesson Plans',
+      path: '/superadmin/lesson-plans',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+          />
+        </svg>
+      ),
+      roles: ['Superadmin'],
+      lessonPlanVerifierMenu: true,
+    },
+    {
+      name: 'Lesson Plans',
       path: '/superadmin/lesson-plans', // Overridden for Admin → /admin/lesson-plans
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -223,8 +310,9 @@ const Sidebar = ({ isOpen, onClose }) => {
           />
         </svg>
       ),
-      roles: ['Superadmin', 'Admin'],
+      roles: ['Admin'],
       requiresLessonPlanVerifier: true,
+      lessonPlanVerifierMenu: true,
     },
     {
       name: 'Branch',
@@ -470,7 +558,7 @@ const Sidebar = ({ isOpen, onClose }) => {
     .filter((item) => {
       if (!item.roles.includes(userType)) return false;
       if (item.name === 'Lesson Plans' && !LESSON_PLANS_ENABLED) return false;
-      if (item.requiresLessonPlanVerifier && !isLessonPlanVerifier) return false;
+      if (item.requiresLessonPlanVerifier && !isAdminLessonPlanVerifier) return false;
       return true;
     })
     .map(item => {
@@ -710,6 +798,20 @@ const Sidebar = ({ isOpen, onClose }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname]);
 
+  const renderLessonPlanPendingBadge = () => {
+    if (lessonPlanPendingCount <= 0) return null;
+    return (
+      <span
+        className="ml-auto flex h-5 min-w-[1.25rem] flex-shrink-0 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold leading-none text-white"
+        aria-label={`${lessonPlanPendingCount} lesson plan${
+          lessonPlanPendingCount === 1 ? '' : 's'
+        } awaiting verification`}
+      >
+        {lessonPlanPendingCount > 99 ? '99+' : lessonPlanPendingCount}
+      </span>
+    );
+  };
+
   const renderSidebarChildItems = (parentItemName, childList) =>
     childList.map((child) => {
       if (child.children?.length > 0) {
@@ -939,13 +1041,17 @@ const Sidebar = ({ isOpen, onClose }) => {
           }
 
           const active = isActive(item.path);
+          const showLessonPlanBadge =
+            item.lessonPlanVerifierMenu && lessonPlanPendingCount > 0;
           return (
             <NavLink
               key={item.path}
               to={item.path}
               onClick={onClose}
               className={`
-                flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors
+                flex items-center rounded-lg transition-colors
+                ${showLessonPlanBadge ? 'justify-between gap-2' : 'space-x-3'}
+                px-4 py-3
                 ${
                   active
                     ? 'bg-[#F7C844] text-gray-900 font-medium'
@@ -953,8 +1059,11 @@ const Sidebar = ({ isOpen, onClose }) => {
                 }
               `}
             >
-              {item.icon}
-              <span className="text-sm whitespace-nowrap">{item.name}</span>
+              <span className="flex min-w-0 items-center space-x-3">
+                {item.icon}
+                <span className="text-sm whitespace-nowrap">{item.name}</span>
+              </span>
+              {showLessonPlanBadge ? renderLessonPlanPendingBadge() : null}
             </NavLink>
           );
         })}

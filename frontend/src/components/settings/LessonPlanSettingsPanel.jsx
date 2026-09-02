@@ -79,8 +79,9 @@ export default function LessonPlanSettingsPanel() {
       });
       setVerifierIds((res.data || []).map((v) => Number(v.user_id)));
       setSuccess(
-        'Admin lesson plan verifiers saved. Selected Admins will see Lesson Plans in the sidebar after they refresh. All Superadmins can already verify every branch.'
+        'Admin lesson plan verifiers saved. Selected Admins will see Lesson Plans in the sidebar after they refresh or on their next login. All Superadmins can already verify every branch.'
       );
+      window.dispatchEvent(new CustomEvent('lesson-plan-verifiers-updated'));
     } catch (err) {
       setError(err.message || 'Failed to save verifiers');
     } finally {

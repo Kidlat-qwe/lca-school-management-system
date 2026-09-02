@@ -19,7 +19,7 @@ LCA labels: **Successes**, **Amazing Moments**, **Challenges**, **Improvements**
 
 ### Form fields
 
-Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class** options come from non-archived classes in the teacher's branch (`GET /meta`). Each plan is linked to **one CMS class** via `class_id` (migration `148_add_class_id_to_lessonplanstbl.sql`).
+Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class** options come from the teacher's designated classes only (`classestbl.teacher_id` or `classteacherstbl`). Superadmin meta still lists all branch classes. Each plan is linked to **one CMS class** via `class_id` (migration `148_add_class_id_to_lessonplanstbl.sql`).
 
 ### Head Teacher review
 
@@ -48,14 +48,14 @@ Migration: `146_add_deped_meta_to_branchestbl.sql`. Editable under Branches → 
 
 ## Notifications
 
-- Teacher submit → system notification to verifiers (`navigation_key: lesson-plans`):
-  - All Superadmins (always)
-  - Admin verifiers selected in Settings whose `branch_id` matches the plan's branch
-- Verifier approve / request revision → system notification to the teacher
+- Teacher submit → **no urgent in-app alert**; verifiers see a **pending count badge** on the sidebar **Lesson Plans** item (`GET /lesson-plans/verifiers/me` → `pending_submission_count`, status = `submitted`).
+- Verifier approve / request revision → system notification to the teacher (`navigation_key: lesson-plans`, priority High)
 
 ## Review
 
-- **Superadmin** → `/superadmin/lesson-plans` (all branches; always allowed, no Settings selection)
-- **Admin** → `/admin/lesson-plans` (designated branch only; must be selected in Settings → Lesson Plans)
+- **Superadmin** → `/superadmin/lesson-plans` (all branches; always visible in sidebar when feature flag is on)
+- **Admin** → `/admin/lesson-plans` (designated branch only; sidebar visible only when selected in Settings → Lesson Plans)
+
+`POST /auth/verify` includes `is_lesson_plan_verifier` on the user object so Admin sidebars can show Lesson Plans immediately after login without waiting on a second API call.
 
 Settings only manages the **Admin** verifier list.

@@ -1,6 +1,7 @@
 import express from 'express';
 import { body } from 'express-validator';
 import { verifyFirebaseToken } from '../middleware/auth.js';
+import { isConfiguredLessonPlanAdminVerifier } from '../lib/lessonPlans/index.js';
 import { handleValidationErrors, optionalNicknameValidator } from '../middleware/validation.js';
 import { query } from '../config/database.js';
 import admin from '../config/firebase.js';
@@ -61,6 +62,21 @@ router.post(
         );
         if (userResult.rows.length > 0) {
           req.user.last_login = userResult.rows[0].last_login;
+        }
+      }
+
+      const userType = String(req.user.userType || req.user.user_type || '').trim();
+      if (req.user.userId) {
+        if (userType === 'Superadmin') {
+          req.user.is_lesson_plan_verifier = true;
+          req.user.isLessonPlanVerifier = true;
+        } else if (userType === 'Admin') {
+          const isVerifier = await isConfiguredLessonPlanAdminVerifier(query, req.user.userId);
+          req.user.is_lesson_plan_verifier = isVerifier;
+          req.user.isLessonPlanVerifier = isVerifier;
+        } else {
+          req.user.is_lesson_plan_verifier = false;
+          req.user.isLessonPlanVerifier = false;
         }
       }
 
