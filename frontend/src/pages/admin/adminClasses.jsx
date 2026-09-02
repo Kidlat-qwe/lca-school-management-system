@@ -3563,6 +3563,27 @@ const initializePackageMerchSelections = useCallback(
     (packageItem.package_type === 'Installment' ||
       (packageItem.package_type === 'Phase' && packageItem.payment_option === 'Installment'));
 
+  /** Matches Classes enroll modal package list rules (see package-selection step). */
+  const packageMatchesEnrollmentOption = (pkg, option) => {
+    const type = String(pkg?.package_type || '').trim();
+    const paymentOption = String(pkg?.payment_option || '').trim();
+    if (option === 'reservation') return type === 'Reserved';
+    if (option === 'per-phase') return type === 'Phase' || type === 'Installment';
+    return (
+      type === 'Fullpayment' ||
+      type === 'Installment' ||
+      type === 'Promo' ||
+      (type === 'Phase' && paymentOption === 'Installment')
+    );
+  };
+
+  const packageMatchesClassLevelTag = (pkg, classLevelTag) => {
+    if (!classLevelTag) return true;
+    return (
+      String(pkg?.level_tag || '').trim() === String(classLevelTag || '').trim()
+    );
+  };
+
   const getInstallmentPhaseBounds = (packageItem, classOverride = null) => {
     const classItem = classOverride || selectedClassForEnrollment;
     const classMaxPhase = Number(classItem?.number_of_phase) || null;
@@ -10762,11 +10783,12 @@ const resolvedBranchId =
                       >
                         <option value="">Choose an option...</option>
                         <option value="package">Select Package</option>
+                        <option value="per-phase">Per Phase (Phase packages)</option>
                         <option value="reservation">Student Class Reservation</option>
                         <option value="ack-receipt">With Acknowledgement Receipt</option>
                       </select>
                       <p className="mt-2 text-sm text-gray-500">
-                        Choose how you want to enroll students: package, reservation, or acknowledgement receipt.
+                        Choose how you want to enroll students: package (including Phase installment plans), per phase, reservation, or acknowledgement receipt.
                       </p>
                     </div>
                   </div>
@@ -10865,25 +10887,17 @@ const resolvedBranchId =
                   
                   {(() => {
                     // Filter packages based on enrollment option
-                    let filteredPackages =
-                      selectedEnrollmentOption === 'reservation'
-                        ? packages.filter(pkg => pkg.package_type === 'Reserved')
-                        : selectedEnrollmentOption === 'per-phase'
-                        ? packages.filter(
-                            (pkg) =>
-                              pkg.package_type === 'Phase' ||
-                              pkg.package_type === 'Installment'
-                          )
-                        : packages.filter(pkg =>
-                            pkg.package_type === 'Fullpayment' ||
-                            pkg.package_type === 'Installment' ||
-                            pkg.package_type === 'Promo'
-                          );
-                    
+                    let filteredPackages = packages.filter((pkg) =>
+                      packageMatchesEnrollmentOption(pkg, selectedEnrollmentOption)
+                    );
+
                     // Filter packages by level_tag to match the class's level_tag
                     if (selectedClassForEnrollment?.level_tag) {
-                      filteredPackages = filteredPackages.filter(pkg => 
-                        pkg.level_tag === selectedClassForEnrollment.level_tag
+                      filteredPackages = filteredPackages.filter((pkg) =>
+                        packageMatchesClassLevelTag(
+                          pkg,
+                          selectedClassForEnrollment.level_tag
+                        )
                       );
                     }
                     

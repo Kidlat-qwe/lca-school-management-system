@@ -4,6 +4,30 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `diagnoseAndFixClassPackageVisibility.js`
+
+Diagnose why packages do not appear in **Classes → Enroll → Select Package**, using the
+same filters as `Classes.jsx` / `adminClasses.jsx` (branch, `level_tag`, `package_type`,
+per-phase range).
+
+**Default: dry-run** (read-only). Pass `--apply` when you are ready to write safe fixes.
+
+Common finding: **`package_type = Phase`** packages only appear under enrollment option
+**“Per Phase”**, not standard **“Package”**.
+
+```bash
+# Dry-run — class + new package names
+node backend/scripts/diagnoseAndFixClassPackageVisibility.js --class-id=176 --package-names "Nursery Plan 3,PreK Plan 3"
+
+# Dry-run — partial class name (lists matches if multiple)
+node backend/scripts/diagnoseAndFixClassPackageVisibility.js --class-name=VMP_NURSERY --package-names "Nursery Plan 3"
+
+# Apply safe fixes (branch_id, level_tag, status) after reviewing dry-run
+node backend/scripts/diagnoseAndFixClassPackageVisibility.js --class-id=176 --package-ids=101,102 --apply --fix=branch,level-tag,status
+```
+
+Fix flags (`--fix=`): `branch`, `level-tag`, `status`, or `all`.
+
 ### `listPendingPackageMerchFromDate.js`
 
 Read-only dump of Merchandise → **Pending Issue** (same logic as
