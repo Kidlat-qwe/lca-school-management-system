@@ -2242,13 +2242,14 @@ const AdminPaymentLogs = () => {
 
       {/* End of Shift Confirmation Modal */}
       {endOfShiftModalOpen && createPortal(
-        <div className="fixed inset-0 z-[100] flex items-center justify-center backdrop-blur-sm bg-black/50 p-3 sm:p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-[min(1440px,calc(100vw-2rem))] max-h-[92vh] flex flex-col p-5 sm:p-7 min-w-0" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-gray-900 shrink-0">End of Shift</h3>
-            <p className="mt-2 text-sm text-gray-600 shrink-0">
+        <div className="fixed inset-0 z-[100] overflow-y-auto flex items-start sm:items-center justify-center backdrop-blur-sm bg-black/50 p-3 sm:p-4" onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-[min(1440px,calc(100vw-2rem))] max-h-[min(92vh,calc(100vh-2rem))] my-4 sm:my-0 flex flex-col overflow-hidden min-h-0" onClick={e => e.stopPropagation()}>
+            <div className="shrink-0 px-5 sm:px-7 pt-5 sm:pt-7">
+            <h3 className="text-lg font-semibold text-gray-900">End of Shift</h3>
+            <p className="mt-2 text-sm text-gray-600">
               Submit sales for the selected calendar day. This sends your branch EOD for Finance/Superfinance verification and notifies Superadmin and Finance.
             </p>
-            <div className="mt-4 shrink-0">
+            <div className="mt-4">
               <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">
                 Summary date <span className="text-red-500">*</span>
               </label>
@@ -2359,19 +2360,19 @@ const AdminPaymentLogs = () => {
                 Only pending dates are clickable. Submitted dates are disabled.
               </p>
             </div>
-            <p className="mt-2 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 shrink-0">
+            <p className="mt-2 text-xs text-primary-700 bg-primary-50 border border-primary-200 rounded-lg px-3 py-2">
               Totals include completed payments and standalone acknowledgement receipts with{' '}
               <strong>issue date on the selected day</strong> for your branch. One submission per branch per calendar day.
             </p>
-            <p className="mt-1 text-sm font-medium text-gray-700 shrink-0">
+            <p className="mt-1 text-sm font-medium text-gray-700">
               Submitted at: {formatDateTimeManila(new Date())} (Manila)
             </p>
             {endOfShiftPreviewLoading && (
-              <p className="mt-3 text-sm text-blue-600 shrink-0">Loading preview for selected date…</p>
+              <p className="mt-3 text-sm text-blue-600">Loading preview for selected date…</p>
             )}
             {endOfShiftPreviewReady && endOfShiftPreview && (
               <>
-                <p className="mt-2 text-sm font-medium text-gray-800 shrink-0">
+                <p className="mt-2 text-sm font-medium text-gray-800">
                   Total for {formatDateManila(endOfShiftSelectedDate) || endOfShiftSelectedDate}: ₱
                   {(endOfShiftTotalFromRows || 0).toLocaleString('en-US', {
                     minimumFractionDigits: 2,
@@ -2380,17 +2381,38 @@ const AdminPaymentLogs = () => {
                   ({endOfShiftPaymentRows.length} completed payment row(s),{' '}
                   {endOfShiftArRows.length} standalone acknowledgement receipt(s))
                 </p>
-                <p className="mt-1 text-xs text-gray-500 shrink-0">
+                <p className="mt-1 text-xs text-gray-500">
                   Collected per row is payable plus tip (matches the selected day total). Invoice total is the invoice document amount from line items (or manual invoice amount).
                 </p>
+              </>
+            )}
+            </div>
+
+            <div
+              className="flex-1 min-h-0 overflow-y-auto px-5 sm:px-7"
+              style={{
+                scrollbarWidth: 'thin',
+                scrollbarColor: '#cbd5e0 #f7fafc',
+                WebkitOverflowScrolling: 'touch',
+              }}
+            >
+            {endOfShiftPreviewReady && endOfShiftPreview && (
+              <>
                 {endOfShiftPaymentRows.length > 0 && (
-                  <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                  <div className="mt-4 min-w-0 flex flex-col">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 shrink-0">
                       Payment records (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
                     </p>
-                    <div className="rounded-lg border border-gray-200 min-w-0 overflow-hidden">
-                      <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs">
-                        <thead className="bg-gray-50">
+                    <div
+                      className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto overflow-y-auto max-h-[min(50vh,480px)]"
+                      style={{
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#cbd5e0 #f7fafc',
+                        WebkitOverflowScrolling: 'touch',
+                      }}
+                    >
+                      <table className="w-full table-fixed border-collapse text-[11px] sm:text-xs" style={{ minWidth: '960px' }}>
+                        <thead className="bg-gray-50 sticky top-0 z-10 shadow-[0_1px_0_0_#e5e7eb]">
                           <tr>
                             <th className="w-[9%] py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Invoice</th>
                             <th className="w-[9%] py-2.5 px-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">Issue date</th>
@@ -2469,12 +2491,12 @@ const AdminPaymentLogs = () => {
                   </div>
                 )}
                 {endOfShiftArRows.length > 0 && (
-                  <div className="mt-4 shrink-0 min-w-0 flex flex-col overflow-hidden">
-                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+                  <div className="mt-4 min-w-0 flex flex-col">
+                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2 shrink-0">
                       Standalone Acknowledgement Receipt sales (issue date {formatDateManila(endOfShiftSelectedDate) || 'selected day'})
                     </p>
                     <div
-                      className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto"
+                      className="rounded-lg border border-gray-200 min-w-0 overflow-x-auto overflow-y-auto max-h-[min(40vh,360px)]"
                       style={{
                         scrollbarWidth: 'thin',
                         scrollbarColor: '#cbd5e0 #f7fafc',
@@ -2482,7 +2504,7 @@ const AdminPaymentLogs = () => {
                       }}
                     >
                       <table className="w-full border-collapse text-[11px] sm:text-xs" style={{ minWidth: '760px' }}>
-                        <thead className="bg-gray-50">
+                        <thead className="bg-gray-50 sticky top-0 z-10 shadow-[0_1px_0_0_#e5e7eb]">
                           <tr>
                             <th className="py-2.5 ps-4 pe-3 text-left text-[10px] sm:text-[11px] font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
                               Receipt
@@ -2585,7 +2607,9 @@ const AdminPaymentLogs = () => {
                 )}
               </>
             )}
-            <div className="mt-6 flex justify-end gap-2 shrink-0">
+            </div>
+
+            <div className="shrink-0 px-5 sm:px-7 pb-5 sm:pb-7 pt-4 border-t border-gray-100 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => !endOfShiftLoading && setEndOfShiftModalOpen(false)}
