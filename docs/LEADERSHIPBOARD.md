@@ -12,7 +12,7 @@ Metric values come from the same source as the **Monthly Operational Dashboard**
 | Re-enrolled | Month Re-enrollment matrix — re-enrolled |
 | Rejoin | Month Re-enrollment matrix — rejoin |
 | Upsell | Month Re-enrollment matrix — upsell |
-| Active | Display only: New + Re-enrolled + Rejoin + Upsell + multi-phase completed (`active_completed_count`) — same as Monthly Operational **Total Active Students** (**not used in Overall**) |
+| Active | Display only: New + Re-enrolled + Rejoin + Upsell + qualifying completed (`active_completed_count`: multi-phase with prior new/re-enrolled/rejoin) — same as Monthly Operational **Total Active Students** (**not used in Overall**) |
 
 ---
 
@@ -31,7 +31,7 @@ Overall is a **rubric**: each criterion is graded `0–1` against peer branches 
 | Upsell | **10%** | Yes |
 | Active Students | — | **No** (shown in the table only) |
 
-**Why Active is excluded:** Active is already the sum of New + Re-enrolled + Rejoin + Upsell + multi-phase completed (same as Monthly Operational Total Active). Including it again would double-count enrollment.
+**Why Active is excluded:** Active is already the sum of New + Re-enrolled + Rejoin + Upsell + qualifying completed (same as Monthly Operational Total Active). Including it again would double-count enrollment.
 
 **Tie-breakers** (if Overall is equal):
 

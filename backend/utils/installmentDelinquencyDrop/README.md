@@ -4,7 +4,13 @@ Module: `../installmentDelinquencyDrop.js`
 
 ## Purpose
 
-When an installment phase invoice remains **fully unpaid** after `due_date + installment_final_dropoff_days` (default 30), the student is marked **dropped** for that class phase.
+When an installment phase invoice still has **remaining balance** after
+`due_date + installment_final_dropoff_days` (default 30), the student is marked
+**dropped** for that class phase.
+
+This includes the **partial-payment scenario**: any amount already paid with
+remaining unpaid past dropoff still auto-drops (so the student can attend on
+partial, then drop if the balance is never settled).
 
 ## Entry points
 
@@ -15,16 +21,24 @@ When an installment phase invoice remains **fully unpaid** after `due_date + ins
 ## UI expectations
 
 - Enrollment column shows **Dropped** (red)
-- **Pay Now** is hidden on dropped phases; the next payable phase gets the action
-- Dropped phases do not block advance pay on later phases (delinquency skip)
+- For **partial drops**: **Pay Now** settles remaining on that phase; Rejoin/next phase is blocked until settled
+- For **fully unpaid drops**: invoice not payable on Invoice page — use Rejoin (later phase)
+- Dropped phases block advance pay on later phases until settled / rejoined
 
 ## Exclusions
 
-- **Partial payment** — any amount paid on the invoice chain skips auto-drop
-- **Paid / cancelled** invoices
-- **Manual repair waiver** — invoice `remarks` containing `DELINQUENCY_DROP_WAIVED` (one-off ops repairs; see `backend/scripts/repairCelestineMendozaInstallmentPhases.js`)
+- **Paid / cancelled** invoices (remaining ≤ 0)
+- **Manual repair waiver** — invoice `remarks` containing `DELINQUENCY_DROP_WAIVED`
+- **Upgraded to full payment** — paid `PACKAGE_CHANGE_TO_FULLPAYMENT` conversion for the same `PROFILE_ID` (leftover Unpaid phase invoices must not re-drop)
+
+## Partial-payment path (after drop)
+
+1. Partial pay → enroll **`re_enrolled`** (attendance)
+2. Remaining past dropoff → **`dropped`**
+3. Settle remaining → **`dropped` → `re_enrolled`**, reactivate plan
+4. Next phase pay → **`re_enrolled`** (not `rejoin`)
 
 ## After drop
 
-- Sets `installmentinvoiceprofilestbl.is_active = false` for that student/class (stops new installment generation)
+- Sets `installmentinvoiceprofilestbl.is_active = false` for that student/class (stops new installment generation) until settle/rejoin reactivates
 - Billing email/SMS are suppressed via `billingNotificationEligibility.js` while dropped and not rejoined

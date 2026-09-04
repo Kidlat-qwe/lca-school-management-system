@@ -15,6 +15,8 @@ import {
 import {
   buildRejoinPhaseOptions,
   getDefaultRejoinPhase,
+  getMinRejoinPhaseAfterDrop,
+  resolveMaxDroppedAbsolutePhaseFromStudent,
 } from '../../utils/rejoinPhaseOptions';
 import {
   CLASS_INACTIVE_ACTION_MESSAGE,
@@ -1753,9 +1755,9 @@ const initializePackageMerchSelections = useCallback(
         return;
       }
 
-      // For enrolled students: use the dedicated drop endpoint which preserves historical
-      // phase statuses (new/re_enrolled/etc.) and inserts a "dropped" marker for the
-      // next unpaid phase so the Rejoin flow works correctly.
+      // For enrolled students: drop endpoint preserves earlier phase statuses.
+      // If the highest active phase still has installment remaining, that phase is
+      // marked dropped; otherwise a next-phase drop marker is inserted for Rejoin.
       const res = await apiRequest(`/students/class/${classId}/drop/${student.user_id}`, {
         method: 'DELETE',
         body: JSON.stringify({ reason }),
@@ -3215,12 +3217,24 @@ const initializePackageMerchSelections = useCallback(
     const { phaseSessions: ps, classSessions: cs, classDetails } =
       resolveEnrollmentPhaseContext(sourceClass);
     const maxPhase = getClassMaxPhase(sourceClass);
+    const maxDropped = resolveMaxDroppedAbsolutePhaseFromStudent(student);
+    const minPhaseAfterDrop = getMinRejoinPhaseAfterDrop(maxDropped);
     const suggestedPhase = getDefaultRejoinPhase({
       classDetails,
       phaseSessions: ps,
       classSessions: cs,
       maxPhase,
+      minPhaseAfterDrop,
     });
+
+    if (suggestedPhase == null) {
+      appAlert(
+        minPhaseAfterDrop
+          ? `No rejoin phase is available after the dropped phase (minimum Phase ${minPhaseAfterDrop}).`
+          : 'No current or future phase is available to rejoin based on the class schedule.'
+      );
+      return;
+    }
 
     setStudentToRejoin(student);
     setRejoinSourceClass(sourceClass);
@@ -14639,11 +14653,14 @@ const resolvedBranchId =
                   {(() => {
                     const { phaseSessions: ps, classSessions: cs, classDetails } =
                       resolveEnrollmentPhaseContext(rejoinSourceClass);
+                    const maxDropped =
+                      resolveMaxDroppedAbsolutePhaseFromStudent(studentToRejoin);
                     const options = buildRejoinPhaseOptions({
                       classDetails,
                       phaseSessions: ps,
                       classSessions: cs,
                       maxPhase: getClassMaxPhase(rejoinSourceClass),
+                      minPhaseAfterDrop: getMinRejoinPhaseAfterDrop(maxDropped),
                     });
                     return options.map((opt) => (
                       <option key={opt.absolute} value={opt.absolute}>

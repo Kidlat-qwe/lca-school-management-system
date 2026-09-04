@@ -73,7 +73,7 @@ async function loadFinalDropoffDays(client, branchId) {
 }
 
 /**
- * @returns {Promise<{ eligible: boolean, reason?: string, summary?: object, finalDropoffDays?: number }>}
+ * @returns {Promise<{ eligible: boolean, reason?: string, summary?: object, finalDropoffDays?: number, hadPartialPayment?: boolean }>}
  */
 export async function evaluateDelinquencyDropForChain(client, { chainRootId, dueDate, branchId }) {
   if (!chainRootId || !dueDate) {
@@ -85,20 +85,30 @@ export async function evaluateDelinquencyDropForChain(client, { chainRootId, due
     return { eligible: false, reason: 'settled', summary };
   }
 
-  const hasPartialPayment =
+  // Partial-payment scenario: remaining unpaid past dropoff is still eligible to drop
+  // (attendance was allowed via re_enrolled on partial). Fully unpaid stays eligible too.
+  const hadPartialPayment =
     summary.total_paid_in_chain > EPSILON && summary.remaining_on_leaf > EPSILON;
-  if (hasPartialPayment) {
-    return { eligible: false, reason: 'partial_payment', summary };
-  }
 
   const finalDropoffDays = await loadFinalDropoffDays(client, branchId);
   const dropoffThreshold = addDaysLocalNoon(dueDate, finalDropoffDays);
   const today = new Date();
   if (!dropoffThreshold || !isOnOrAfterDate(today, dropoffThreshold)) {
-    return { eligible: false, reason: 'before_dropoff_threshold', summary, finalDropoffDays };
+    return {
+      eligible: false,
+      reason: 'before_dropoff_threshold',
+      summary,
+      finalDropoffDays,
+      hadPartialPayment,
+    };
   }
 
-  return { eligible: true, summary, finalDropoffDays };
+  return {
+    eligible: true,
+    summary,
+    finalDropoffDays,
+    hadPartialPayment,
+  };
 }
 
 /**
@@ -108,16 +118,20 @@ export async function evaluateDelinquencyDropForChain(client, { chainRootId, due
  */
 export async function applyDelinquencyDropForAbsolutePhase(
   client,
-  { studentId, classId, absolutePhase, finalDropoffDays, dueDateYmd = null }
+  { studentId, classId, absolutePhase, finalDropoffDays, dueDateYmd = null, hadPartialPayment = false }
 ) {
   const sid = Number(studentId);
   const cid = Number(classId);
   const phase = Number(absolutePhase);
   if (!sid || !cid || !Number.isFinite(phase) || phase < 1) return false;
 
-  const reason = `Installment delinquency (>= ${finalDropoffDays} days after due date${
-    dueDateYmd ? ` ${dueDateYmd}` : ''
-  })`;
+  const reason = hadPartialPayment
+    ? `Installment delinquency after partial payment (>= ${finalDropoffDays} days after due date${
+        dueDateYmd ? ` ${dueDateYmd}` : ''
+      })`
+    : `Installment delinquency (>= ${finalDropoffDays} days after due date${
+        dueDateYmd ? ` ${dueDateYmd}` : ''
+      })`;
 
   const updateRes = await client.query(
     `UPDATE classstudentstbl
@@ -175,6 +189,24 @@ export async function applyDelinquencyDropForInvoiceChain(
     return { applied: false, reason: 'class_inactive' };
   }
 
+  if (profileId && studentId) {
+    const fullPaymentConversion = await client.query(
+      `SELECT 1
+       FROM invoicestbl i
+       INNER JOIN invoicestudentstbl ist
+         ON ist.invoice_id = i.invoice_id
+        AND ist.student_id = $1
+       WHERE i.status = 'Paid'
+         AND i.remarks ILIKE '%PACKAGE_CHANGE_TO_FULLPAYMENT%'
+         AND i.remarks ILIKE $2
+       LIMIT 1`,
+      [studentId, `%PROFILE_ID:${profileId}%`]
+    );
+    if (fullPaymentConversion.rows.length > 0) {
+      return { applied: false, reason: 'upgraded_to_full_payment' };
+    }
+  }
+
   const chainRootId = await getChainRootInvoiceId(client, invoiceId);
 
   const remarksRes = await client.query(`SELECT remarks FROM invoicestbl WHERE invoice_id = $1`, [
@@ -209,6 +241,7 @@ export async function applyDelinquencyDropForInvoiceChain(
     absolutePhase,
     finalDropoffDays: evaluation.finalDropoffDays,
     dueDateYmd: dueDate ? formatYmdLocal(dueDate) : null,
+    hadPartialPayment: Boolean(evaluation.hadPartialPayment),
   });
 
   if (applied) {
@@ -237,6 +270,29 @@ export async function syncInstallmentDelinquencyDropsForProfile(client, profileI
 
   if (!(await isClassActiveForBilling(client, profile.class_id))) {
     return { dropsApplied: 0, scanned: 0, skipped: true, reason: 'class_inactive' };
+  }
+
+  // Paid installment→full-payment conversion already covers remaining phases.
+  // Leftover Unpaid phase invoices (generated after upgrade) must not re-drop.
+  const fullPaymentConversion = await client.query(
+    `SELECT 1
+     FROM invoicestbl i
+     INNER JOIN invoicestudentstbl ist
+       ON ist.invoice_id = i.invoice_id
+      AND ist.student_id = $1
+     WHERE i.status = 'Paid'
+       AND i.remarks ILIKE '%PACKAGE_CHANGE_TO_FULLPAYMENT%'
+       AND i.remarks ILIKE $2
+     LIMIT 1`,
+    [profile.student_id, `%PROFILE_ID:${profileId}%`]
+  );
+  if (fullPaymentConversion.rows.length > 0) {
+    return {
+      dropsApplied: 0,
+      scanned: 0,
+      skipped: true,
+      reason: 'upgraded_to_full_payment',
+    };
   }
 
   const invoicesRes = await client.query(
@@ -274,8 +330,9 @@ export async function syncInstallmentDelinquencyDropsForProfile(client, profileI
 
 /**
  * Students whose unpaid installment phase will auto-drop within `withinDays`.
- * Drop date = due_date + installment_final_dropoff_days. Excludes settled, partial-paid,
- * and already-dropped phases.
+ * Drop date = due_date + installment_final_dropoff_days.
+ * Includes partially paid chains with remaining balance (partial-drop scenario).
+ * Excludes settled and already-dropped phases.
  *
  * @param {import('pg').PoolClient} client
  * @param {{ branchId?: number|null, withinDays?: number }} options
@@ -376,7 +433,7 @@ export async function listUpcomingDelinquencyDrops(client, { branchId = null, wi
       branchId: rowBranchId,
     });
 
-    if (evaluation.reason === 'settled' || evaluation.reason === 'partial_payment') {
+    if (evaluation.reason === 'settled') {
       continue;
     }
     if (evaluation.reason === 'missing_chain_or_due_date') {

@@ -31,6 +31,13 @@ import {
 } from '../utils/enrollmentStatus.js';
 import { enrollStudentForFullPaymentPhases } from '../utils/fullPaymentPhaseEnrollment.js';
 import {
+  resolveRejoinPayableForPhase,
+  supersedeOpenDroppedPhaseChainsForRejoin,
+  resolveMinRejoinPhaseAfterDrop,
+  resolveRejoinInvoiceDueDateYmd,
+  getPartialDroppedSettleBlockBeforeRejoin,
+} from '../utils/rejoinDroppedPhaseSettlement/index.js';
+import {
   insertInvoiceWithArNumber,
   insertInvoiceWithArNumberReuseOrAllocate,
 } from '../utils/invoiceArNumber.js';
@@ -1007,29 +1014,26 @@ router.post(
       }
 
       const enrollableMinPhase = await resolveInstallmentEnrollmentMinPhase(client, classData);
-      if (phaseNumber < enrollableMinPhase) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: `Cannot rejoin for past phases. Minimum rejoin phase is Phase ${enrollableMinPhase} based on the current class schedule.`,
-        });
-      }
-
-      const droppedHistory = await client.query(
-        `SELECT classstudent_id, phase_number, removed_at
-         FROM classstudentstbl
-         WHERE student_id = $1
-           AND class_id = $2
-           AND program_enrollment_status = 'dropped'
-         ORDER BY COALESCE(removed_at, enrolled_at) DESC NULLS LAST, classstudent_id DESC
-         LIMIT 1`,
-        [studentId, classId]
-      );
-      if (droppedHistory.rows.length === 0) {
+      const minAfterDrop = await resolveMinRejoinPhaseAfterDrop(client, {
+        studentId,
+        classId,
+      });
+      if (minAfterDrop == null) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: 'This student has no dropped enrollment history in this class.',
+        });
+      }
+      const minRejoinPhase = Math.max(enrollableMinPhase, minAfterDrop);
+      if (phaseNumber < minRejoinPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            minAfterDrop > enrollableMinPhase
+              ? `Cannot rejoin for the dropped phase or earlier. Minimum rejoin phase is Phase ${minRejoinPhase} (after the drop).`
+              : `Cannot rejoin for past phases. Minimum rejoin phase is Phase ${minRejoinPhase} based on the current class schedule.`,
         });
       }
 
@@ -1083,6 +1087,21 @@ router.post(
 
       // Preserve prior installment plan (generated_count, phase scope) — rejoin reactivates on payment.
       const installmentProfile = await findInstallmentProfileForRejoin(client, studentId, classId);
+      if (installmentProfile?.installmentinvoiceprofiles_id) {
+        const settleBlock = await getPartialDroppedSettleBlockBeforeRejoin(client, {
+          studentId,
+          classId,
+          profileId: installmentProfile.installmentinvoiceprofiles_id,
+        });
+        if (settleBlock.blocked) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: settleBlock.message,
+            partial_dropped_settle_block: settleBlock,
+          });
+        }
+      }
 
       const packageResult = await client.query(
         `SELECT p.package_id, p.package_name, p.package_price
@@ -1128,6 +1147,11 @@ router.post(
       const amount = roundCurrency(rawAmount);
       const invoicePackageId = installmentProfile?.package_id ?? packageRow?.package_id ?? null;
       const issueDate = formatYmdLocal(new Date());
+      const dueDateYmd =
+        (await resolveRejoinInvoiceDueDateYmd(client, {
+          classId,
+          phaseNumber,
+        })) || issueDate;
       let remarks = `CLASS_ID:${classId};PHASE_START:${phaseNumber};PHASE_END:${phaseNumber};REJOIN_PHASE:${phaseNumber}`;
       if (installmentProfile?.installmentinvoiceprofiles_id) {
         remarks += `;INSTALLMENT_PROFILE_ID:${installmentProfile.installmentinvoiceprofiles_id}`;
@@ -1152,7 +1176,7 @@ router.post(
               'Unpaid',
               remarks,
               issueDate,
-              issueDate,
+              dueDateYmd,
               req.user.userId || null,
               invoicePackageId,
               profileIdForInvoice,
@@ -1164,7 +1188,7 @@ router.post(
               'Unpaid',
               remarks,
               issueDate,
-              issueDate,
+              dueDateYmd,
               req.user.userId || null,
               invoicePackageId,
             ]
@@ -1314,29 +1338,26 @@ router.post(
       }
 
       const enrollableMinPhase = await resolveInstallmentEnrollmentMinPhase(client, classData);
-      if (phaseNumber < enrollableMinPhase) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: `Cannot rejoin for past phases. Minimum rejoin phase is Phase ${enrollableMinPhase} based on the current class schedule.`,
-        });
-      }
-
-      const droppedHistory = await client.query(
-        `SELECT classstudent_id, phase_number, removed_at
-         FROM classstudentstbl
-         WHERE student_id = $1
-           AND class_id = $2
-           AND program_enrollment_status = 'dropped'
-         ORDER BY COALESCE(removed_at, enrolled_at) DESC NULLS LAST, classstudent_id DESC
-         LIMIT 1`,
-        [studentId, classId]
-      );
-      if (droppedHistory.rows.length === 0) {
+      const minAfterDrop = await resolveMinRejoinPhaseAfterDrop(client, {
+        studentId,
+        classId,
+      });
+      if (minAfterDrop == null) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: 'This student has no dropped enrollment history in this class.',
+        });
+      }
+      const minRejoinPhase = Math.max(enrollableMinPhase, minAfterDrop);
+      if (phaseNumber < minRejoinPhase) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            minAfterDrop > enrollableMinPhase
+              ? `Cannot rejoin for the dropped phase or earlier. Minimum rejoin phase is Phase ${minRejoinPhase} (after the drop).`
+              : `Cannot rejoin for past phases. Minimum rejoin phase is Phase ${minRejoinPhase} based on the current class schedule.`,
         });
       }
 
@@ -1389,6 +1410,21 @@ router.post(
       }
 
       const installmentProfile = await findInstallmentProfileForRejoin(client, studentId, classId);
+      if (installmentProfile?.installmentinvoiceprofiles_id) {
+        const settleBlock = await getPartialDroppedSettleBlockBeforeRejoin(client, {
+          studentId,
+          classId,
+          profileId: installmentProfile.installmentinvoiceprofiles_id,
+        });
+        if (settleBlock.blocked) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: settleBlock.message,
+            partial_dropped_settle_block: settleBlock,
+          });
+        }
+      }
 
       const packageResult = await client.query(
         `SELECT p.package_id, p.package_name, p.package_price
@@ -1431,12 +1467,27 @@ router.post(
           : packageRow?.package_price != null
             ? packageRow.package_price
             : (branchPricingResult.rows[0]?.pricing_price ?? 0);
-      const invoiceAmount = roundCurrency(rawAmount);
-      if (invoiceAmount <= 0) {
+      const fullPhaseAmount = roundCurrency(rawAmount);
+      if (fullPhaseAmount <= 0) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: 'Cannot determine a valid rejoin phase amount.',
+        });
+      }
+
+      const profileIdForInvoice = installmentProfile?.installmentinvoiceprofiles_id ?? null;
+      const rejoinQuote = await resolveRejoinPayableForPhase(client, {
+        profileId: profileIdForInvoice,
+        absolutePhase: phaseNumber,
+        fullPhaseAmount,
+      });
+      const invoiceAmount = roundCurrency(rejoinQuote.payable_amount);
+      if (invoiceAmount <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Cannot determine a valid rejoin payable amount for this phase.',
         });
       }
 
@@ -1446,7 +1497,7 @@ router.post(
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
-          message: 'Rejoin requires full payment. Partial payment is not supported for rejoin.',
+          message: 'Rejoin requires full payment of the rejoin payable amount. Partial payment is not supported for rejoin.',
         });
       }
 
@@ -1462,24 +1513,55 @@ router.post(
         });
       }
 
+      // Client may send profile full amount from older UI — coerce to remaining when applicable.
+      const expectedPayable = invoiceAmount;
+      if (Math.abs(grossPayable - expectedPayable) > 0.05 && grossPayable > expectedPayable + 0.05) {
+        // Overpay vs remaining: reject so staff do not double-charge partials
+        if (rejoinQuote.source === 'remaining') {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message:
+              `Rejoin payable for Phase ${phaseNumber} is ₱${expectedPayable.toFixed(2)} ` +
+              `(remaining on the dropped-phase invoice). Refresh Student History and try again.`,
+          });
+        }
+      }
+      const settledGross =
+        rejoinQuote.source === 'remaining' ? expectedPayable : roundCurrency(grossPayable);
+      if (settledGross <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Payable amount must be greater than 0.',
+        });
+      }
+
       const discountValue = Math.max(0, parseFloat(discount_amount || 0) || 0);
-      if (discountValue >= grossPayable) {
+      if (discountValue >= settledGross) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: 'Discount amount must be less than the payable amount.',
         });
       }
-      const netPayable = Math.max(0, roundCurrency(grossPayable - discountValue));
+      const netPayable = Math.max(0, roundCurrency(settledGross - discountValue));
       const tipValue = Math.max(0, parseFloat(tip_amount || 0) || 0);
       const issueDateYmd = issue_date
         ? String(issue_date).slice(0, 10)
         : todayYmdManila();
+      const dueDateYmd =
+        (await resolveRejoinInvoiceDueDateYmd(client, {
+          classId,
+          phaseNumber,
+        })) || issueDateYmd;
       const invoicePackageId = installmentProfile?.package_id ?? packageRow?.package_id ?? null;
-      const profileIdForInvoice = installmentProfile?.installmentinvoiceprofiles_id ?? null;
       let invoiceRemarks = `CLASS_ID:${classId};PHASE_START:${phaseNumber};PHASE_END:${phaseNumber};REJOIN_PHASE:${phaseNumber}`;
       if (profileIdForInvoice) {
         invoiceRemarks += `;INSTALLMENT_PROFILE_ID:${profileIdForInvoice}`;
+      }
+      if (rejoinQuote.source === 'remaining' && rejoinQuote.leaf_invoice_id) {
+        invoiceRemarks += `;SETTLES_REMAINING_OF:${rejoinQuote.leaf_invoice_id}`;
       }
 
       const creatorUserId = req.user.userId || req.user.user_id || null;
@@ -1501,7 +1583,7 @@ router.post(
               'Paid',
               invoiceRemarks,
               issueDateYmd,
-              issueDateYmd,
+              dueDateYmd,
               creatorUserId,
               invoicePackageId,
               profileIdForInvoice,
@@ -1513,7 +1595,7 @@ router.post(
               'Paid',
               invoiceRemarks,
               issueDateYmd,
-              issueDateYmd,
+              dueDateYmd,
               creatorUserId,
               invoicePackageId,
             ]
@@ -1531,7 +1613,9 @@ router.post(
          VALUES ($1, $2, $3)`,
         [
           invoice.invoice_id,
-          `Rejoin enrollment - ${classData.program_name || classData.class_name || 'Class'} Phase ${phaseNumber}`,
+          rejoinQuote.source === 'remaining'
+            ? `Rejoin enrollment - ${classData.program_name || classData.class_name || 'Class'} Phase ${phaseNumber} (remaining balance)`
+            : `Rejoin enrollment - ${classData.program_name || classData.class_name || 'Class'} Phase ${phaseNumber}`,
           invoiceAmount,
         ]
       );
@@ -1548,7 +1632,12 @@ router.post(
       }
       if (discountValue > 0) {
         remarkParts.push(
-          `Discount applied at payment: ₱${discountValue.toFixed(2)} (Original payable: ₱${Number(grossPayable).toFixed(2)})`
+          `Discount applied at payment: ₱${discountValue.toFixed(2)} (Original payable: ₱${Number(settledGross).toFixed(2)})`
+        );
+      }
+      if (rejoinQuote.source === 'remaining') {
+        remarkParts.push(
+          `Rejoin settled remaining ₱${invoiceAmount.toFixed(2)} on prior Phase ${phaseNumber} invoice chain`
         );
       }
 
@@ -1593,6 +1682,15 @@ router.post(
           studentId,
           phaseNumber
         );
+
+        // Policy A: close open dropped-phase leaves (same phase remaining + earlier phases).
+        await supersedeOpenDroppedPhaseChainsForRejoin(client, {
+          profileId: profileIdForInvoice,
+          studentId,
+          classId,
+          rejoinPhase: phaseNumber,
+          rejoinInvoiceId: invoice.invoice_id,
+        });
       }
 
       await syncProgramPaymentStatusForInvoice(client, invoice.invoice_id);
@@ -1607,8 +1705,11 @@ router.post(
           phase_number: phaseNumber,
           amount: invoiceAmount,
           paid_amount: netPayable,
+          payable_source: rejoinQuote.source,
+          settled_prior_leaf_invoice_id: rejoinQuote.leaf_invoice_id || null,
         },
       });
+      return;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       next(error);

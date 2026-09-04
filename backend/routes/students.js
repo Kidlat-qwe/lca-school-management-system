@@ -6,8 +6,34 @@ import { query, getClient } from '../config/database.js';
 import { deactivateInstallmentProfileForClassDrop } from '../utils/billingNotificationEligibility.js';
 import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
 import { queueFirstEnrollmentWelcomeEmail } from '../utils/firstEnrollmentWelcomeEmail/index.js';
+import { findOpenInstallmentChainForAbsolutePhase } from '../utils/rejoinDroppedPhaseSettlement/index.js';
 
 const router = express.Router();
+
+const OPEN_REMAINING_EPSILON = 0.01;
+
+/**
+ * True when the student/class installment plan has open remaining on this absolute phase.
+ */
+async function phaseHasOpenInstallmentRemaining(client, studentId, classId, absolutePhase) {
+  const phase = Number(absolutePhase);
+  if (!studentId || !classId || !Number.isFinite(phase) || phase < 1) return false;
+
+  const profileRes = await client.query(
+    `SELECT installmentinvoiceprofiles_id
+     FROM installmentinvoiceprofilestbl
+     WHERE student_id = $1
+       AND class_id = $2
+     ORDER BY installmentinvoiceprofiles_id DESC
+     LIMIT 1`,
+    [studentId, classId]
+  );
+  const profileId = profileRes.rows[0]?.installmentinvoiceprofiles_id;
+  if (!profileId) return false;
+
+  const open = await findOpenInstallmentChainForAbsolutePhase(client, profileId, phase);
+  return Boolean(open && Number(open.summary?.remaining_on_leaf || 0) > OPEN_REMAINING_EPSILON);
+}
 
 /**
  * Compute payment verification status for students in a class.
@@ -425,21 +451,29 @@ router.post(
 
 /**
  * DELETE /api/v1/students/class/:classId/drop/:studentId
- * Drop a student from a class starting from the next phase.
+ * Drop a student from a class (manual unenroll from Classes page).
  *
  * Business rule:
- *   Already-paid phases (new / re_enrolled / upsell / rejoin) keep their
- *   program_enrollment_status so the history is preserved. Only removed_at
- *   is set on those rows so they stop counting as active enrollments.
- *   A new "dropped" row is inserted for the phase immediately after the
- *   highest active phase to mark the drop point — this is what
- *   determineRejoinEnrollmentStatus detects when the student rejoins later.
+ *   Earlier paid/active phases keep their program_enrollment_status; only
+ *   removed_at is set so they stop counting as active.
+ *
+ *   Drop marker:
+ *   - If the **highest active phase** still has installment **remaining balance**
+ *     (partial or unpaid), that phase itself is set to **dropped** (matches
+ *     partial-payment delinquency). No next-phase marker is inserted.
+ *   - Otherwise (highest active phase fully settled), a **dropped** row is
+ *     inserted for the next phase (highest + 1) — standard rejoin drop-point.
+ *
  *   Any pending_enrollment rows are upgraded to "dropped".
  *
- * Result in DB (e.g. student active in Phase 1 & 2, drops before Phase 3):
- *   Phase 1 → status=new,        removed_at=NOW  (historical)
- *   Phase 2 → status=re_enrolled, removed_at=NOW  (historical)
- *   Phase 3 → status=dropped,    removed_at=NOW  (drop-point marker)
+ * Example A — Phase 2 partially paid, manual drop:
+ *   Phase 1 → status=new,        removed_at=NOW
+ *   Phase 2 → status=dropped,    removed_at=NOW  (open remaining)
+ *
+ * Example B — Phase 1 & 2 fully paid/settled, manual drop:
+ *   Phase 1 → status=new,        removed_at=NOW
+ *   Phase 2 → status=re_enrolled, removed_at=NOW
+ *   Phase 3 → status=dropped,    removed_at=NOW  (next-phase marker)
  *
  * Access: Superadmin, Admin
  */
@@ -486,52 +520,86 @@ router.delete(
         });
       }
 
-      // --- Step 1: Preserve active phases — only set removed_at, keep status intact ---
       if (activeRows.length > 0) {
-        const activeIds = activeRows.map((r) => r.classstudent_id);
-        await client.query(
-          `UPDATE classstudentstbl
-           SET removed_at     = CURRENT_TIMESTAMP,
-               removed_reason = $1,
-               removed_by     = $2
-           WHERE classstudent_id = ANY($3::int[])`,
-          [reason, req.user.userId || null, activeIds]
-        );
-
-        // --- Step 2: Insert a "dropped" marker for the phase immediately after ---
         const highestActivePhase = Math.max(
           ...activeRows.map((r) => Number(r.phase_number) || 0)
         );
-        const dropPhase = highestActivePhase + 1;
+        const highestPhaseRows = activeRows.filter(
+          (r) => Number(r.phase_number) === highestActivePhase
+        );
+        const earlierActiveRows = activeRows.filter(
+          (r) => Number(r.phase_number) !== highestActivePhase
+        );
 
-        // Only insert if no row already exists for dropPhase
-        const existingDropPhase = rows.find((r) => Number(r.phase_number) === dropPhase);
-        if (!existingDropPhase) {
-          const markerEnrolledAt = activeRows.reduce((latest, row) => {
-            if (!row.enrolled_at) return latest;
-            if (!latest) return row.enrolled_at;
-            return new Date(row.enrolled_at) > new Date(latest) ? row.enrolled_at : latest;
-          }, null);
+        const highestHasOpenRemaining = await phaseHasOpenInstallmentRemaining(
+          client,
+          studentId,
+          classId,
+          highestActivePhase
+        );
+
+        // Soft-remove earlier active phases — keep historical status.
+        if (earlierActiveRows.length > 0) {
           await client.query(
-            `INSERT INTO classstudentstbl
-               (student_id, class_id, enrolled_by, phase_number,
-                program_enrollment_status, enrolled_at, removed_at, removed_reason, removed_by)
-             VALUES ($1, $2, $3, $4, 'dropped', COALESCE($5::timestamptz, CURRENT_TIMESTAMP - INTERVAL '1 second'), CURRENT_TIMESTAMP, $6, $7)`,
-            [
-              studentId,
-              classId,
-              'System (Drop marker)',
-              dropPhase,
-              markerEnrolledAt,
-              reason,
-              req.user.userId || null,
-            ]
+            `UPDATE classstudentstbl
+             SET removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, earlierActiveRows.map((r) => r.classstudent_id)]
           );
         }
-        // If existingDropPhase is a pending_enrollment row, it will be handled in Step 3 below.
+
+        if (highestHasOpenRemaining) {
+          // Partial / unpaid remaining on current phase → drop THIS phase (not next).
+          await client.query(
+            `UPDATE classstudentstbl
+             SET program_enrollment_status = 'dropped',
+                 removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, highestPhaseRows.map((r) => r.classstudent_id)]
+          );
+        } else {
+          // Fully settled highest phase → soft-remove it and mark next phase as drop point.
+          await client.query(
+            `UPDATE classstudentstbl
+             SET removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, highestPhaseRows.map((r) => r.classstudent_id)]
+          );
+
+          const dropPhase = highestActivePhase + 1;
+          const existingDropPhase = rows.find((r) => Number(r.phase_number) === dropPhase);
+          if (!existingDropPhase) {
+            const markerEnrolledAt = activeRows.reduce((latest, row) => {
+              if (!row.enrolled_at) return latest;
+              if (!latest) return row.enrolled_at;
+              return new Date(row.enrolled_at) > new Date(latest) ? row.enrolled_at : latest;
+            }, null);
+            await client.query(
+              `INSERT INTO classstudentstbl
+                 (student_id, class_id, enrolled_by, phase_number,
+                  program_enrollment_status, enrolled_at, removed_at, removed_reason, removed_by)
+               VALUES ($1, $2, $3, $4, 'dropped', COALESCE($5::timestamptz, CURRENT_TIMESTAMP - INTERVAL '1 second'), CURRENT_TIMESTAMP, $6, $7)`,
+              [
+                studentId,
+                classId,
+                'System (Drop marker)',
+                dropPhase,
+                markerEnrolledAt,
+                reason,
+                req.user.userId || null,
+              ]
+            );
+          }
+        }
       }
 
-      // --- Step 3: Mark pending_enrollment rows as dropped ---
+      // Mark pending_enrollment rows as dropped
       if (pendingRows.length > 0) {
         const pendingIds = pendingRows.map((r) => r.classstudent_id);
         await client.query(
@@ -546,7 +614,6 @@ router.delete(
         );
       }
 
-      // --- Step 4: Stop future installment invoice generation ---
       await deactivateInstallmentProfileForClassDrop(client, { studentId, classId });
 
       await client.query('COMMIT');

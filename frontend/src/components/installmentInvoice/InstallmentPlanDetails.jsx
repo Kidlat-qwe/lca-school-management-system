@@ -17,6 +17,7 @@ import {
   isInactiveInstallmentPlanSlot,
   isInstallmentPlanSlotAddressed,
   isLateStartGapPhase,
+  isPartialDroppedSettlePhase,
   isPastUnenrolledGapPhase,
   isPhaseLockedByPriorPartialBalance,
   shouldOfferInstallmentPlanRejoin,
@@ -26,6 +27,8 @@ import {
   buildRejoinPhaseOptions,
   fetchClassRejoinScheduleContext,
   getDefaultRejoinPhase,
+  getMinRejoinPhaseAfterDrop,
+  resolveMaxDroppedAbsolutePhaseFromPlan,
 } from '../../utils/rejoinPhaseOptions';
 import { formatInstallmentPlanPhaseEnrollment } from '../../utils/programEnrollmentStatus';
 import PaymentRecordedInvoiceSummaryModal from '../invoices/PaymentRecordedInvoiceSummaryModal';
@@ -53,11 +56,12 @@ import {
  *     via `POST /payments`, or **advance** on the next not-yet-generated phase
  *     via `POST .../advance-pay`
  *   - After an **unpaid dropped** phase with **no continue**, later slots show
- *     Locked and a **Rejoin** button appears. Choosing a target phase opens the
- *     payment form first; the invoice is created as **Paid** only after payment
- *     via `POST /classes/:id/students/:studentId/rejoin-pay`.
- *     If the student already continued (later rejoin/paid phase), Rejoin is
- *     hidden and **Pay Now** is offered on the next phase instead.
+ *     Locked and a **Rejoin** button appears. Target phases start **after** the
+ *     dropped phase (drop P2 → min P3), also respecting the class schedule floor.
+ *     Payable amount is the full target-phase fee; the invoice is created as
+ *     **Paid** only after payment via `POST .../rejoin-pay`. Prior open
+ *     dropped-phase invoices are superseded (Policy A). Dropped-phase invoices
+ *     cannot be paid from the Invoice page.
  *   - After a successful payment, the same **Payment recorded** modal as the
  *     Invoice page (receipt preview + Print AR PDF)
  *
@@ -791,7 +795,17 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
 
     for (let i = 0; i < visiblePhases.length; i += 1) {
       const p = visiblePhases[i];
-      if (isDroppedEnrollmentPhase(p) || isLateStartGapPhase(p)) continue;
+      if (isLateStartGapPhase(p)) continue;
+
+      // Partial-drop: allow Pay Now on the dropped phase to settle remaining first.
+      if (isDroppedEnrollmentPhase(p)) {
+        if (isPartialDroppedSettlePhase(p)) {
+          const out = getInstallmentPhaseOutstanding(p);
+          return { index: i, mode: 'invoice', outstanding: out, settle_partial_drop: true };
+        }
+        continue;
+      }
+
       // After an unpaid drop with no continue, do not offer Pay Now on later slots.
       if (blockPayAfterUnpaidDrop && i > unpaidDropIdx) continue;
       // After continue, skip empty gaps only before the latest continued phase (e.g. P2–P5).
@@ -827,6 +841,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     [visiblePhases, profile]
   );
 
+  const rejoinMinPhaseAfterDrop = useMemo(() => {
+    const maxDropped = resolveMaxDroppedAbsolutePhaseFromPlan(
+      visiblePhases,
+      phaseStartOffset
+    );
+    return getMinRejoinPhaseAfterDrop(maxDropped);
+  }, [visiblePhases, phaseStartOffset]);
+
   const rejoinPhaseOptions = useMemo(() => {
     if (!showRejoinAction) return [];
 
@@ -842,12 +864,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       phaseSessions: rejoinScheduleContext.phaseSessions,
       classSessions: rejoinScheduleContext.classSessions,
       maxPhase,
+      minPhaseAfterDrop: rejoinMinPhaseAfterDrop,
     });
   }, [
     showRejoinAction,
     rejoinScheduleContext,
     profile?.total_phases,
     phaseStartOffset,
+    rejoinMinPhaseAfterDrop,
   ]);
 
   const openRejoinModal = useCallback(() => {
@@ -857,6 +881,21 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     }
     if (rejoinScheduleContext.loading) {
       appAlert('Loading current class phase from schedule. Please try again in a moment.');
+      return;
+    }
+
+    const partialSettle = (visiblePhases || []).filter((p) => isPartialDroppedSettlePhase(p));
+    if (partialSettle.length > 0) {
+      const labels = partialSettle
+        .map((p) => {
+          const abs = Number(p.phase_number) + phaseStartOffset;
+          const bal = getInstallmentPhaseOutstanding(p);
+          return `Phase ${abs} (${formatCurrency(bal)})`;
+        })
+        .join(', ');
+      appAlert(
+        `Settle the remaining balance on the dropped phase(s) before rejoining: ${labels}. Use Pay Now on that phase.`
+      );
       return;
     }
 
@@ -871,10 +910,15 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       phaseSessions: rejoinScheduleContext.phaseSessions,
       classSessions: rejoinScheduleContext.classSessions,
       maxPhase,
+      minPhaseAfterDrop: rejoinMinPhaseAfterDrop,
     });
 
     if (defaultPhase == null) {
-      appAlert('No current or future phase is available to rejoin based on the class schedule.');
+      appAlert(
+        rejoinMinPhaseAfterDrop
+          ? `No rejoin phase is available after the dropped phase (minimum Phase ${rejoinMinPhaseAfterDrop}).`
+          : 'No current or future phase is available to rejoin based on the class schedule.'
+      );
       return;
     }
     setRejoinPhaseNumber(String(defaultPhase));
@@ -885,6 +929,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     profile?.total_phases,
     phaseStartOffset,
     rejoinScheduleContext,
+    rejoinMinPhaseAfterDrop,
+    visiblePhases,
   ]);
 
   const closeRejoinModal = useCallback(() => {
@@ -900,8 +946,23 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       appAlert('Select a valid rejoin phase.');
       return;
     }
+    if (
+      rejoinMinPhaseAfterDrop != null &&
+      phaseNumber < rejoinMinPhaseAfterDrop
+    ) {
+      appAlert(
+        `Rejoin target must be after the dropped phase (minimum Phase ${rejoinMinPhaseAfterDrop}).`
+      );
+      return;
+    }
 
-    const amount = Number(profile?.amount ?? 0);
+    const fullAmount = Number(profile?.amount ?? 0);
+    const phaseRow = (visiblePhases || []).find(
+      (p) => Number(p.phase_number) + phaseStartOffset === phaseNumber
+    );
+    const remaining = phaseRow ? getInstallmentPhaseOutstanding(phaseRow) : 0;
+    const amount =
+      Number.isFinite(remaining) && remaining > 0.009 ? remaining : fullAmount;
     if (!Number.isFinite(amount) || amount <= 0) {
       appAlert('Cannot determine the rejoin phase amount. Refresh and try again.');
       return;
@@ -914,12 +975,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       absolute: phaseNumber,
       amount,
       outstanding: amount,
+      is_remaining_balance: Number.isFinite(remaining) && remaining > 0.009,
     });
   }, [
     profile?.class_id,
     profile?.student_id,
     profile?.amount,
     rejoinPhaseNumber,
+    rejoinMinPhaseAfterDrop,
+    visiblePhases,
+    phaseStartOffset,
     closeRejoinModal,
     openPaymentModal,
   ]);
@@ -1244,7 +1309,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       const lockTitle = lockedByPriorPartial
                         ? 'Settle the remaining balance on the earlier partially paid phase before paying this phase.'
                         : blockedByUnpaidDrop
-                          ? 'Student was dropped on an unpaid phase. Use Rejoin for the current class phase from the class schedule.'
+                          ? isPartialDroppedSettlePhase(visiblePhases[unpaidDropIdx])
+                            ? 'Settle the remaining balance on the dropped phase (Pay Now) before continuing to a later phase.'
+                            : 'Student was dropped on an unpaid phase. Use Rejoin for a later phase (after the drop).'
                           : 'Pay the current phase (or earlier unpaid invoice) first';
 
                       return (
@@ -1288,11 +1355,13 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                                       ? 'font-medium text-red-700'
                                       : enrollmentKey === 'rejoin'
                                         ? 'font-medium text-orange-800'
-                                        : enrollmentKey === 're_enrolled'
-                                          ? 'font-medium text-indigo-800'
-                                          : enrollmentKey === 'completed'
-                                            ? 'font-medium text-amber-800'
-                                            : ''
+                                        : enrollmentKey === 'upsell'
+                                          ? 'font-medium text-teal-800'
+                                          : enrollmentKey === 're_enrolled'
+                                            ? 'font-medium text-indigo-800'
+                                            : enrollmentKey === 'completed'
+                                              ? 'font-medium text-amber-800'
+                                              : ''
                                   }
                                 >
                                   {enrollmentLabel}
@@ -1365,8 +1434,6 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                           <td className="px-2 py-2.5 whitespace-nowrap">
                             {isInactiveSlot ? (
                               '\u2014'
-                            ) : isDroppedEnrollmentPhase(phase) ? (
-                              '\u2014'
                             ) : isPayRow ? (
                               <button
                                 type="button"
@@ -1384,6 +1451,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                                         phase.status === 'Overdue'
                                           ? phase.status
                                           : null,
+                                      settle_partial_drop: Boolean(
+                                        firstPayAction.settle_partial_drop
+                                      ),
                                     });
                                   } else {
                                     openPaymentModal({
@@ -1398,6 +1468,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                               >
                                 Pay Now
                               </button>
+                            ) : isDroppedEnrollmentPhase(phase) ? (
+                              '\u2014'
                             ) : isLockedFuture ? (
                               <span
                                 title={lockTitle}
@@ -1485,7 +1557,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                   )}
                   {paymentModal.mode === 'rejoin' && (
                     <span className="block text-xs text-gray-400 mt-0.5">
-                      Invoice is created only after this payment is recorded
+                      {paymentModal.is_remaining_balance
+                        ? 'Remaining balance on the dropped-phase invoice — invoice is created after payment.'
+                        : 'Full phase amount — invoice is created only after this payment is recorded.'}
                     </span>
                   )}
                 </p>
@@ -1616,7 +1690,9 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       <p className="text-xs text-gray-500 mt-1">
                         {paymentModal.mode === 'invoice'
                           ? 'Remaining balance on this invoice — fixed.'
-                          : 'Full phase amount — fixed.'}
+                          : paymentModal.mode === 'rejoin' && paymentModal.is_remaining_balance
+                            ? 'Remaining dropped-phase balance — fixed.'
+                            : 'Full phase amount — fixed.'}
                       </p>
                     )}
                   </div>
@@ -1895,9 +1971,12 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               <div className="mb-4">
                 <h3 className="text-lg font-semibold text-gray-900">Rejoin Class</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  Select the target phase (defaults to the current class phase from the session
-                  schedule). Next you will enter payment details; the phase invoice is generated only
-                  after payment is recorded.
+                  Select the target phase. Options start after the phase the student dropped
+                  {rejoinMinPhaseAfterDrop
+                    ? ` (minimum Phase ${rejoinMinPhaseAfterDrop})`
+                    : ''}
+                  , and also respect the current class schedule. Next you will enter payment
+                  details; the phase invoice is generated only after payment is recorded.
                 </p>
               </div>
               <div className="space-y-4">

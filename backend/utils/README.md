@@ -136,7 +136,7 @@ Tests: `node backend/tests/phaseInstallmentCadence.test.js`.
 
 Maps invoice chains to profile-local phase rows for Student History / Installment Plan tables. See `normalizeAdjacentPhaseDisplayDates` for issue-date display ordering.
 
-`resolveInstallmentPhaseEnrollmentStatus` / `inferInstallmentPhaseEnrollmentStatus`: the first **paid** plan phase shows **new** (e.g. display Phase 2 when Phase 1 is a late-start gap); later paid phases show **re_enrolled** unless a prior **dropped** phase triggers **rejoin**. When all plan slots are paid, the **final** phase shows **completed** (matches re-enrollment matrix terminal cell). **One-phase** plans (`total_phases = 1`) show **completed** once the single slot is paid.
+`resolveInstallmentPhaseEnrollmentStatus` / `inferInstallmentPhaseEnrollmentStatus`: the first **paid** plan phase shows **new** (e.g. display Phase 2 when Phase 1 is a late-start gap); later paid phases show **re_enrolled** unless a prior **dropped** phase triggers **rejoin**. When all plan slots are paid, the **final** phase shows **completed** (matches re-enrollment matrix terminal cell). **One-phase** plans (`total_phases = 1`) show **completed** once the single slot is paid. Explicit DB labels (`new` / `re_enrolled` / `rejoin`) are shown even when the billing slot was never generated (full-payment upgrade / ops repair).
 
 `isInstallmentPlanSlotAddressed` / `annotateInstallmentPhasePlanSlots` mark a phase as cleared when it is paid, skipped, or has no outstanding balance — used so **Pay Now** / advance-pay unlocks the next phase when prior slots are settled.
 

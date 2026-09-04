@@ -31,9 +31,24 @@ export function canShowInvoicePayAction(invoice) {
   // Parent after partial payment: amount already recorded here — not payable on this row.
   if (invoice.balance_invoice_id) return false;
   if (invoice.can_record_payment === false) return false;
+  if (invoice.dropped_enrollment_payment_block?.blocked) return false;
   return getInvoicePayableRemaining(invoice) > 0.009;
 }
 
 export function invoicePayActionLabel(invoice) {
   return isBalanceContinuationInvoice(invoice) ? 'Pay balance' : 'Pay';
+}
+
+/** Tooltip / helper when Pay is hidden due to drop. */
+export function invoicePayDisabledReason(invoice) {
+  if (invoice?.dropped_enrollment_payment_block?.blocked) {
+    return (
+      invoice.dropped_enrollment_payment_block.message ||
+      'Student dropped on this phase — use Rejoin on Student History → Installment.'
+    );
+  }
+  if (invoice?.can_record_payment === false) {
+    return 'This invoice cannot accept payment.';
+  }
+  return null;
 }

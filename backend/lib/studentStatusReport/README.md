@@ -7,11 +7,12 @@ Powers **Reports → Student Status** active/inactive classification.
 Matches **Monthly Operational Dashboard → Total Active Students** for the selected billing month:
 
 - **New** matrix cells (`new`)
-- **Re-enrollment** matrix cells (`re-enrolled` and qualifying `completed` — same as the month matrix rate-header numerator)
+- **Re-enrollment** matrix cells (`re-enrolled`)
+- **Qualifying completed** — multi-phase **and** prior `new` / `re-enrolled` / `rejoin` on the same track (standalone completed excluded; same as Total Active)
 - **Rejoin** matrix cells (`rejoin`)
 - **Upsell** matrix cells (`upsell`)
 
-Reserved, dropped, pending enrollment, lifecycle **Inactive (X)**, and other labels are **inactive** for that month.
+Reserved, dropped, pending enrollment, lifecycle **Inactive (X)**, standalone completed, and other labels are **inactive** for that month.
 
 **Partial / unpaid remaining balance:** installment enrollment badges (`new` / `re_enrolled`) are created only after the phase chain is fully Paid. Open partial balances keep Enrollment blank so the Month Re-enrollment lifecycle overlay can show **Inactive**, and this report / Monthly Operational Total Active stay aligned with that month column.
 

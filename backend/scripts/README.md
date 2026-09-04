@@ -1345,6 +1345,86 @@ node scripts/repairMatthaiasDeChavezRemovePlan1.js
 node scripts/repairMatthaiasDeChavezRemovePlan1.js --apply
 ```
 
+### `repairMatthaiasDeChavezEnrollmentLabels.js`
+
+Same student / class **92** / profile **281** — continuous paid path labels for phases 1–5:
+
+| Phase | Before | After |
+|-------|--------|-------|
+| 1 | dropped (false delinquency) | **new** |
+| 2 | new | **re_enrolled** |
+| 3 | dropped (false delinquency) | **re_enrolled** |
+| 4 | re_enrolled | **re_enrolled** |
+| 5 | rejoin | **re_enrolled** |
+
+Clears `removed_at` / reason on those rows. Aborts unless invoices for phases 1–5 are Paid.
+
+```bash
+node scripts/repairMatthaiasDeChavezEnrollmentLabels.js --production
+node scripts/repairMatthaiasDeChavezEnrollmentLabels.js --production --apply
+```
+
+### `repairChloeAgadEnrollmentAfterFullPayment.js`
+
+**Chloe Skye Agad** (`Kahreen.agad@yahoo.com`, user **11**) — class **38** SOMO Pre-Kinder MWF 11:00, profile **24** (Cavite). Paid conversion **INV-1348** (`PACKAGE_CHANGE_TO_FULLPAYMENT`). Leftover Unpaid TARGET_PHASE 4–7 invoices caused Student History delinquency sync to re-drop Phases 4–6 after enrollment-only repairs.
+
+| Step | Action |
+|------|--------|
+| Billing | Cancel open Unpaid/Pending/Overdue invoices on profile **24**; deactivate profile; cancel Pending/Scheduled schedule rows |
+| Enrollment | P1 **new**, P2–9 **re_enrolled**, P10 **completed**; clear `removed_at` |
+| Verify | Re-run delinquency sync (expect 0 drops); August matrix Active |
+
+```bash
+node scripts/repairChloeAgadEnrollmentAfterFullPayment.js --production
+node scripts/repairChloeAgadEnrollmentAfterFullPayment.js --production --apply
+```
+
+### `repairAzikielTecsonPhase67DueEnrollment.js`
+
+**Azikiel T. Tecson** (`luis.tecson.ph@gmail.com`, user **643**) — class **47** SOMO Playgroup TTh, profile **472** (`phase_start` 6).
+
+| Fix | Before | After |
+|-----|--------|-------|
+| INV **2403** Phase 6 due | 2026-07-20 | **2026-08-05** |
+| INV **2820** Phase 7 due | 2026-12-05 | **2026-09-05** |
+| CS **1519** Phase 6 | `pending_enrollment` (enrolled Jul 1) | **`new`** @ **2026-08-03** (August matrix = new) |
+| CS **2481** Phase 7 | `re_enrolled` @ Sep 1 | keep **`re_enrolled`** (September matrix) |
+
+Default is dry-run. You apply.
+
+```bash
+node scripts/repairAzikielTecsonPhase67DueEnrollment.js --production
+node scripts/repairAzikielTecsonPhase67DueEnrollment.js --production --apply
+```
+
+### `repairJohnzelDeJesusEnrollmentMayJunJul.js`
+
+**JOHNZEL MAURU G. DE JESUS** (`jezreelgarcia09@gmail.com`, user **75**) — class **50** SOMO Playgroup SS, profile **49**.
+
+After Phase 2 drop, Phase 3 enrollment was missing (May blank on Month Re-enrollment). Phases 4–5 were incorrectly `rejoin`.
+
+| Fix | Result |
+|-----|--------|
+| INSERT Phase 3 `rejoin` @ 2026-05-04 | **May = rejoin** |
+| CS **1085** Phase 4 → `re_enrolled` | **June = re-enrolled** |
+| CS **1478** Phase 5 → `re_enrolled` | **July = re-enrolled** |
+
+```bash
+node scripts/repairJohnzelDeJesusEnrollmentMayJunJul.js --production
+node scripts/repairJohnzelDeJesusEnrollmentMayJunJul.js --production --apply
+```
+
+### `repairSkylerVillanuevaUpsellSeptember.js`
+
+**Skyler Dawson Legerin Villanueva** (`shannenlegerin@gmail.com`, user **254**) — Pre-K class **161** (start **2026-09-03**), profile **526**.
+
+Nursery completed April; Pre-K Phase 1 is already **`upsell`**, but `enrolled_at` was **2026-08-31**, so Month Re-enrollment showed **August upsell**. Shift enroll dates so **September = upsell**, then Oct+ = re-enrolled.
+
+```bash
+node scripts/repairSkylerVillanuevaUpsellSeptember.js --production
+node scripts/repairSkylerVillanuevaUpsellSeptember.js --production --apply
+```
+
 ### `repairKirstenMahinayPhaseEnrollmentAndPayments.js`
 
 One-off repair for **Kirsten Celesse J. Mahinay** (`cherryjaodmd@gmail.com`). **Cascades** earlier invoice + AR onto later phase slots (payments stay on the same physical invoice rows):

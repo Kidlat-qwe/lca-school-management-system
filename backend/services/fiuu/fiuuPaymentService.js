@@ -37,6 +37,7 @@ import {
 import { applyGatewayArPayment } from './applyGatewayArPayment.js';
 import { createFiuuArPayment } from './createFiuuArPayment.js';
 import { captureFiuuTokenFromWebhook, buildFiuuCustId } from './fiuuTokenService.js';
+import { getDroppedEnrollmentPaymentBlock } from '../../utils/rejoinDroppedPhaseSettlement/index.js';
 import {
   resolveInvoiceAutodebitContext,
   buildAutodebitMetadataPatch,
@@ -82,10 +83,20 @@ export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
   if (invoice.status === 'Paid') {
     throw Object.assign(new Error('Invoice is already fully paid'), { statusCode: 400 });
   }
+  if (String(invoice.status || '').toLowerCase() === 'cancelled' || String(invoice.status || '').toLowerCase() === 'canceled') {
+    throw Object.assign(new Error('Invoice is cancelled and cannot be paid'), { statusCode: 400 });
+  }
   if (invoice.balance_invoice_id) {
     throw Object.assign(new Error('Pay the balance continuation invoice instead'), {
       statusCode: 400,
     });
+  }
+
+  if (invoice.installmentinvoiceprofiles_id) {
+    const dropBlock = await getDroppedEnrollmentPaymentBlock(query, invoice);
+    if (dropBlock.blocked) {
+      throw Object.assign(new Error(dropBlock.message), { statusCode: 400 });
+    }
   }
 
   const remaining = parseFloat(invoice.amount) || 0;

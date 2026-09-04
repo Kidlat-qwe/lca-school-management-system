@@ -334,18 +334,18 @@ export function resolveInstallmentPhaseEnrollmentStatus({
     return 'upsell';
   }
 
+  // Prefer explicit enrollment labels (ops repairs / full-payment upgrade rows)
+  // even when the billing slot was never generated (e.g. phases after conversion).
+  // Without this, DB `re_enrolled` on ungenerated slots shows as "—".
+  if (dbStatus === 'new' || dbStatus === 're_enrolled' || dbStatus === 'rejoin') {
+    return dbStatus;
+  }
+
   if (phaseRow?.billing_kind === 'late_start_gap') {
     return null;
   }
   if (!phaseRow?.is_generated) {
     return null;
-  }
-
-  // Prefer explicit enrollment labels (ops repairs / sync) over paid-phase
-  // inference. Without this, a paid Phase 2 can never display "new" while Phase 1
-  // is also paid — inference always forces re_enrolled.
-  if (dbStatus === 'new' || dbStatus === 're_enrolled' || dbStatus === 'rejoin') {
-    return dbStatus;
   }
 
   const start = Math.max(1, parseInt(phaseStart, 10) || 1);

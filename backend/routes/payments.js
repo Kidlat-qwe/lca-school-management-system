@@ -26,6 +26,7 @@ import {
 } from '../lib/paymentDateNetTotals.js';
 import { loadFinancialDashboardPaidInvoicePenalties } from '../lib/financialDashboardPaidInvoicePenalties/index.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
+import { getDroppedEnrollmentPaymentBlock } from '../utils/rejoinDroppedPhaseSettlement/index.js';
 import {
   PROGRAM_ENROLLMENT_STATUS,
   determineRejoinAwarePhaseStatus,
@@ -2514,6 +2515,16 @@ router.post(
             prior_partial_balance_block: priorBlock,
           });
         }
+
+        const dropBlock = await getDroppedEnrollmentPaymentBlock(client, invoice);
+        if (dropBlock.blocked) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: dropBlock.message,
+            dropped_enrollment_payment_block: dropBlock,
+          });
+        }
       }
 
       // Verify student exists
@@ -2939,9 +2950,9 @@ router.post(
                 req._pendingInvoiceGeneration = invoiceGenData;
               }
             } else if (!isPendingDownpayment) {
-              // Regular installment phase payment. Enrollment sync enrolls only when
-              // the phase chain is fully settled (partial remaining stays blank /
-              // Inactive on Month Re-enrollment + Total Active / Student Status).
+              // Regular installment phase payment. Enrollment sync enrolls on any
+              // completed payment (partial → re_enrolled for attendance; full settle
+              // also restores dropped → re_enrolled after a partial delinquency drop).
               
               // Only proceed if we have class_id and student_id matches
               if (profile.class_id && profile.student_id === student_id) {
@@ -3836,8 +3847,8 @@ router.put(
                     req._pendingInvoiceGeneration = invoiceGenData;
                   }
                 } else if (!isPendingDownpayment) {
-                  // Regular installment phase payment. Enrollment sync requires a fully
-                  // settled phase chain (partial remaining stays blank / Inactive).
+                  // Regular installment phase payment. Enrollment sync enrolls on any
+                  // completed payment (partial → re_enrolled; full settle restores drop).
                   
                   // Only proceed if we have class_id and student_id matches
                   if (profile.class_id && profile.student_id === payment.student_id) {

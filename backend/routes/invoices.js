@@ -22,6 +22,7 @@ import {
   sumInvoicePaymentAdjustments,
 } from '../utils/ackReceiptTableLineItems.js';
 import { getPriorPartialBalanceBlockers } from '../lib/installmentPaymentEligibility.js';
+import { getDroppedEnrollmentPaymentBlock } from '../utils/rejoinDroppedPhaseSettlement/index.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
 import { DEFAULT_PDF_CONTACT_EMAIL } from '../utils/pdfBranding.js';
 import {
@@ -888,10 +889,28 @@ router.get(
                 ? Math.max(0, baseAmountFromItems - totalSettled)
                 : Number(invoice.amount) || 0;
 
-            const canRecordPayment =
+            const canRecordPaymentBase =
               !invoice.balance_invoice_id &&
               invoice.status !== 'Paid' &&
               invoice.status !== 'Cancelled';
+            let canRecordPayment = canRecordPaymentBase;
+            let droppedEnrollmentPaymentBlock = null;
+            if (canRecordPaymentBase && invoice.installmentinvoiceprofiles_id) {
+              try {
+                droppedEnrollmentPaymentBlock = await getDroppedEnrollmentPaymentBlock(
+                  pool,
+                  invoice
+                );
+                if (droppedEnrollmentPaymentBlock?.blocked) {
+                  canRecordPayment = false;
+                }
+              } catch (dropBlockErr) {
+                console.error(
+                  `getDroppedEnrollmentPaymentBlock for invoice ${invoice.invoice_id}:`,
+                  dropBlockErr
+                );
+              }
+            }
             const displayDescription = await resolveInvoiceDisplayDescription(pool, invoice);
             let chainSummary = null;
             if (invoice.parent_invoice_id || invoice.balance_invoice_id || invoice.invoice_chain_root_id) {
@@ -944,6 +963,9 @@ router.get(
               items,
               students: studentsWithDisplayName,
               can_record_payment: canRecordPayment,
+              dropped_enrollment_payment_block: droppedEnrollmentPaymentBlock?.blocked
+                ? droppedEnrollmentPaymentBlock
+                : null,
               reservation: reservation ? {
                 reserved_id: reservation.reserved_id,
                 status: reservation.reservation_status,
@@ -1168,11 +1190,21 @@ router.get(
         }
       }
 
+      let droppedEnrollmentPaymentBlock = { blocked: false, message: null, absolute_phase: null };
+      if (invoiceRow.installmentinvoiceprofiles_id) {
+        try {
+          droppedEnrollmentPaymentBlock = await getDroppedEnrollmentPaymentBlock(pool, invoiceRow);
+        } catch (dropBlockErr) {
+          console.error('getDroppedEnrollmentPaymentBlock:', dropBlockErr);
+        }
+      }
+
       const canRecordPayment =
         !invoiceRow.balance_invoice_id &&
         invoiceRow.status !== 'Paid' &&
         invoiceRow.status !== 'Cancelled' &&
-        !priorPartialBalanceBlock.blocked;
+        !priorPartialBalanceBlock.blocked &&
+        !droppedEnrollmentPaymentBlock.blocked;
 
       const lastPaymentDateYmd = (
         await query(
@@ -1272,6 +1304,7 @@ router.get(
           continued_to_invoice: continuedToInvoice,
           can_record_payment: canRecordPayment,
           prior_partial_balance_block: priorPartialBalanceBlock,
+          dropped_enrollment_payment_block: droppedEnrollmentPaymentBlock,
           reservation: reservation ? {
             reserved_id: reservation.reserved_id,
             status: reservation.reservation_status,

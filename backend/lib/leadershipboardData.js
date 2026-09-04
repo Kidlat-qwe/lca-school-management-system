@@ -10,7 +10,7 @@
  *   `branch_breakdown` (via loadMonthlyOperationalDashboardPayload).
  * - Active students = new + re_enrollment + rejoin + upsell + multi-phase
  *   completed (`active_completed_count`) — same formula as Monthly Operational
- *   "Total Active Students" card.
+ *   "Total Active Students" card (multi-phase completed with prior new/re-enrolled/rejoin).
  *
  * Overall ranking uses a weighted score (Active is display-only, not in Overall):
  *   Invoice Sales 40% + New 20% + Re-enrolled 20% + Rejoin 10% + Upsell 10%.

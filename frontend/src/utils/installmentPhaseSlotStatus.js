@@ -57,13 +57,24 @@ export const getInstallmentPhaseOutstanding = (phase) => {
 };
 
 /**
- * Dropped enrollment with remaining invoice balance — student must Rejoin,
- * not Pay Now / advance on later phases.
+ * Dropped enrollment with remaining invoice balance.
+ * Fully unpaid drops use Rejoin; partial drops can Pay Now to settle remaining.
  */
 export const isUnpaidDroppedEnrollmentPhase = (phase) => {
   if (!isDroppedEnrollmentPhase(phase)) return false;
   if (!phase?.is_generated) return true;
   return getInstallmentPhaseOutstanding(phase) > PHASE_OUTSTANDING_EPSILON;
+};
+
+/** Dropped phase that already has payment and still has remaining (settle via Pay Now). */
+export const isPartialDroppedSettlePhase = (phase) => {
+  if (!isDroppedEnrollmentPhase(phase)) return false;
+  if (!phase?.is_generated) return false;
+  const paid = Number(phase.paid_amount || 0);
+  return (
+    paid > PHASE_OUTSTANDING_EPSILON &&
+    getInstallmentPhaseOutstanding(phase) > PHASE_OUTSTANDING_EPSILON
+  );
 };
 
 /** Index of the latest unpaid-dropped phase in a visible phases list, or -1. */

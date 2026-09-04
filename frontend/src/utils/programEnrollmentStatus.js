@@ -105,8 +105,9 @@ export function formatInstallmentPlanPhaseEnrollment(status) {
     case 'completed':
       return 'completed';
     case 're_enrolled':
-    case 'upsell':
       return 're enrolled';
+    case 'upsell':
+      return 'upsell';
     case 'new':
       return 'new';
     case 'rejoin':

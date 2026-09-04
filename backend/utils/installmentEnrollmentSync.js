@@ -136,13 +136,14 @@ async function ensureIntermediatePhaseEnrollments({
 }
 
 /**
- * After an installment phase invoice is **fully settled**, promote pending_enrollment
- * or insert the active phase row (mirrors payments.js post-payment enrollment sync).
+ * After an installment phase invoice has **any completed payment**, sync the
+ * class phase enrollment row:
  *
- * Partial / open balance chains do **not** create `new` / `re_enrolled` rows. That
- * keeps Month Re-enrollment, Monthly Operational Total Active, and Student Status
- * aligned: unpaid remaining balance stays blank / lifecycle Inactive instead of
- * counting as Active via a premature re-enrolled cell.
+ * - **Partial** (remaining > 0): enroll as `new` / `re_enrolled` so attendance works.
+ * - **Fully settled**: same enroll; if the phase was **dropped** after a partial
+ *   delinquency drop, restore `dropped` → `re_enrolled` and reactivate the plan.
+ *
+ * Fully unpaid chains still do not enroll.
  */
 export async function syncInstallmentEnrollmentForPaidInvoice({
   client,
@@ -157,16 +158,16 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   }
 
   const hasInvoiceContext = Boolean(invoice?.invoice_id);
+  let fullySettled = false;
+  let chainHasPayment = false;
+
   if (hasInvoiceContext) {
-    const fullySettled = await isPhaseChainFullySettled(client, invoice);
-    if (!fullySettled) {
+    chainHasPayment = await phaseChainHasPayment(client, invoice);
+    if (!chainHasPayment) {
       return;
     }
+    fullySettled = await isPhaseChainFullySettled(client, invoice);
   }
-
-  const chainHasPayment = hasInvoiceContext
-    ? await phaseChainHasPayment(client, invoice)
-    : false;
 
   const { paidPhaseCount: paidInstallmentCount } = await getCanonicalInstallmentPhaseCounts(
     client,
@@ -202,11 +203,8 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   }
 
   const markCompletedIfFullyPaid = async () => {
+    if (!fullySettled) return;
     if (!(maxPhase !== null && targetPhase >= maxPhase)) return;
-    if (hasInvoiceContext) {
-      const fullySettled = await isPhaseChainFullySettled(client, invoice);
-      if (!fullySettled) return;
-    }
     const keepFirstPhaseNewResult = await client.query(
       `UPDATE classstudentstbl
        SET program_enrollment_status = CASE
@@ -254,17 +252,59 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
     }
   };
 
+  const reactivateProfile = async () => {
+    await client.query(
+      `UPDATE installmentinvoiceprofilestbl
+       SET is_active = true
+       WHERE installmentinvoiceprofiles_id = $1
+         AND is_active = false`,
+      [profileId]
+    );
+  };
+
+  // Partial-drop settle: restore dropped → re_enrolled when remaining is cleared.
+  if (fullySettled) {
+    const restored = await client.query(
+      `UPDATE classstudentstbl
+       SET program_enrollment_status = 're_enrolled',
+           removed_at = NULL,
+           removed_reason = NULL,
+           removed_by = NULL,
+           enrolled_by = $1,
+           enrolled_at = CURRENT_TIMESTAMP
+       WHERE student_id = $2
+         AND class_id = $3
+         AND COALESCE(phase_number, 1) = $4
+         AND program_enrollment_status = 'dropped'
+       RETURNING classstudent_id`,
+      [sourceLabel, studentId, profile.class_id, targetPhase]
+    );
+    if (restored.rows.length > 0) {
+      console.log(
+        `✅ Restored Phase ${targetPhase} dropped → re_enrolled after settling remaining ` +
+          `(student ${studentId} class ${profile.class_id})`
+      );
+      await reactivateProfile();
+      await markCompletedIfFullyPaid();
+      return;
+    }
+  }
+
   const installmentDefaultStatus =
     Number(targetPhase) === phaseStart
       ? PROGRAM_ENROLLMENT_STATUS.NEW
       : PROGRAM_ENROLLMENT_STATUS.RE_ENROLLED;
-  const installmentEnrollStatus = await determineRejoinAwarePhaseStatus({
-    db: client,
-    studentId,
-    classId: profile.class_id,
-    phaseNumber: targetPhase,
-    defaultStatus: installmentDefaultStatus,
-  });
+  // Partial-drop continue path uses re_enrolled for later phases; rejoin label is for
+  // fully unpaid drop comebacks. Prefer default when restoring/enrolling after payment.
+  const installmentEnrollStatus = fullySettled
+    ? await determineRejoinAwarePhaseStatus({
+        db: client,
+        studentId,
+        classId: profile.class_id,
+        phaseNumber: targetPhase,
+        defaultStatus: installmentDefaultStatus,
+      })
+    : installmentDefaultStatus;
 
   const promoted = await client.query(
     `UPDATE classstudentstbl
@@ -287,14 +327,16 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
       classstudentId: promoted.rows[0]?.classstudent_id,
       invoiceId: invoice?.invoice_id ?? null,
     });
-    await ensureIntermediatePhaseEnrollments({
-      client,
-      studentId,
-      classId: profile.class_id,
-      targetPhase,
-      sourceLabel,
-    });
-    await markCompletedIfFullyPaid();
+    if (fullySettled) {
+      await ensureIntermediatePhaseEnrollments({
+        client,
+        studentId,
+        classId: profile.class_id,
+        targetPhase,
+        sourceLabel,
+      });
+      await markCompletedIfFullyPaid();
+    }
     return;
   }
 
@@ -310,6 +352,21 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   );
 
   if (existingPhaseEnrollment.rows.length > 0) {
+    if (fullySettled) {
+      await ensureIntermediatePhaseEnrollments({
+        client,
+        studentId,
+        classId: profile.class_id,
+        targetPhase,
+        sourceLabel,
+      });
+      await markCompletedIfFullyPaid();
+    }
+    return;
+  }
+
+  // Do not backfill intermediate gaps on partial — only enroll the paid phase.
+  if (fullySettled) {
     await ensureIntermediatePhaseEnrollments({
       client,
       studentId,
@@ -317,17 +374,7 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
       targetPhase,
       sourceLabel,
     });
-    await markCompletedIfFullyPaid();
-    return;
   }
-
-  await ensureIntermediatePhaseEnrollments({
-    client,
-    studentId,
-    classId: profile.class_id,
-    targetPhase,
-    sourceLabel,
-  });
 
   const inserted = await client.query(
     `INSERT INTO classstudentstbl (student_id, class_id, enrolled_by, phase_number, program_enrollment_status)
@@ -337,7 +384,8 @@ export async function syncInstallmentEnrollmentForPaidInvoice({
   );
 
   console.log(
-    `✅ Auto-enrolled student ${studentId} in Phase ${targetPhase} after installment payment (status: ${installmentEnrollStatus})`
+    `✅ Auto-enrolled student ${studentId} in Phase ${targetPhase} after installment payment ` +
+      `(status: ${installmentEnrollStatus}${fullySettled ? '' : ', partial'})`
   );
 
   queueFirstEnrollmentWelcomeEmail({

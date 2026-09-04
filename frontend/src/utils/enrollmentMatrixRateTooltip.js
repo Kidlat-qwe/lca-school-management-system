@@ -55,7 +55,7 @@ export function formatReEnrollmentRateTooltip(periodType, row) {
     `Numerator — ${currentLabel} (${periodWord}): ${numeratorTotal}`,
     `• Re-enrolled: ${num(numBreakdown.re_enrolled)}`,
     `• Active: ${num(numBreakdown.active)}`,
-    `• Completed (with prior new/re-enrolled/rejoin): ${num(numBreakdown.completed)}`,
+    `• Completed: ${num(numBreakdown.completed)}`,
     '',
     `Denominator — ${priorLabel} (previous ${priorWord}): ${denominatorTotal}`,
     `• New: ${num(denBreakdown.new)}`,
@@ -64,7 +64,7 @@ export function formatReEnrollmentRateTooltip(periodType, row) {
     `• Rejoin: ${num(denBreakdown.rejoin)}`,
     `• Completed (with prior new/re-enrolled/rejoin): ${num(denBreakdown.completed)}`,
     '',
-    'Active counts in the numerator; Inactive does not. Completed counts in either side only when that same student already had a prior new, re-enrolled, or rejoin cell — standalone completed is excluded.',
+    'Active counts in the numerator; Inactive does not. Numerator completed includes standalone completed. Denominator completed still requires a prior new, re-enrolled, or rejoin cell on the same track.',
   ];
 
   return lines.join('\n');
@@ -74,7 +74,7 @@ export function formatReEnrollmentRateRowHeaderTooltip(periodType) {
   const periodWord = periodType === 'month' ? 'month' : 'phase';
   return (
     `Re-enrollment rate = numerator ÷ denominator × 100.\n\n` +
-    `Numerator: re-enrolled + Active + completed (completed only when that student already had a prior new, re-enrolled, or rejoin) in the current ${periodWord} column. Inactive is excluded.\n\n` +
+    `Numerator: re-enrolled + Active + completed (including standalone completed) in the current ${periodWord} column. Inactive is excluded.\n\n` +
     `Denominator: new + re-enrolled + upsell + rejoin + completed (completed only with a prior new, re-enrolled, or rejoin) cells from the previous ${periodWord} only.\n\n` +
     `Hover each fraction (e.g. 18/20) for the full count breakdown.`
   );
