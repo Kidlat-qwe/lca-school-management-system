@@ -14,9 +14,22 @@ partial, then drop if the balance is never settled).
 
 ## Entry points
 
-- **Daily cron** — `jobs/installmentDelinquencyScheduler.js` → `processInstallmentDelinquencies()`
+- **Daily cron** — `jobs/installmentDelinquencyScheduler.js` → `processInstallmentDelinquencies()` in `installmentDelinquencyService.js` (late penalty + drop)
 - **Installment plan UI** — `GET /installment-invoices/profiles/:id/phases` calls `syncInstallmentDelinquencyDropsForProfile()` before loading enrollment
 - **Branch Admin alert** — `GET /installment-invoices/upcoming-delinquency-drops` → `listUpcomingDelinquencyDrops()` (students whose drop date falls within the next 7 days; powers the Admin login-time urgent modal and Admin/Superadmin Installment Invoice **Student drop off list** tab). Superadmin has no login modal; Superadmin may pass optional `?branch_id=` or list all branches.
+
+## Late penalty idempotency (partial-pay chains)
+
+`processInstallmentDelinquencies` applies a **one-time** late penalty (`installment_penalty_rate` after `installment_penalty_grace_days`) on the payable **leaf** of the invoice chain.
+
+| Rule | Behavior |
+|------|----------|
+| Where penalty line is written | Payable leaf (`getChainFinancialSummary` → `payable_invoice_id`) |
+| Idempotency check | Any invoice in the chain already has `late_penalty_applied_for_due_date` equal to that chain’s `due_date` |
+| After apply | Stamp `late_penalty_applied_for_due_date` on **all** invoices in the chain |
+| Candidate order | Prefer leaf / continuation rows (`invoice_chain_root_id IS NOT NULL`) so the job locks the payable invoice when possible |
+
+**Why:** On partial payment, the parent stays `Partially Paid` (still overdue) while the balance leaf holds remaining + penalties. Checking/stamping only the leaf left the parent unflagged, so the nightly job re-applied 10% on the inflated leaf and compounded balances (e.g. stacked “Late Payment Penalty (10%)” lines).
 
 ## UI expectations
 

@@ -1379,6 +1379,113 @@ node scripts/repairChloeAgadEnrollmentAfterFullPayment.js --production
 node scripts/repairChloeAgadEnrollmentAfterFullPayment.js --production --apply
 ```
 
+### `repairAtashaOchengcoMatrixSeptemberNew.js`
+
+**Atasha Cailin O. Ochengco** (`arochengco@gmail.com`, user **676**) — class **151** VMM Playgroup TTh 11:00, profile **504**, Phase **3** `new` (Malolos). Paid early, but Phase 3 program start is **September** — move matrix **new** from August → September.
+
+| Field | Before | After |
+|-------|--------|-------|
+| CS **1987** `enrolled_at` | 2026-08-01 | **2026-09-01** |
+| INV **2379** issue/due | 2026-08-01 / 2026-08-05 | **2026-09-01 / 2026-09-05** |
+| Profile `first_billing_month` | 2026-08-01 | **2026-09-01** |
+
+Expected matrix: **Sep new** / **Oct Active** (August no longer `new`). Payment date unchanged.
+
+```bash
+node scripts/repairAtashaOchengcoMatrixSeptemberNew.js --production
+node scripts/repairAtashaOchengcoMatrixSeptemberNew.js --production --apply
+```
+
+### `repairKristianLaotMatrixAprilNew.js`
+
+**Kristian Matteo M. Laot** (`kmsm.law@gmail.com`, user **588**) — class **67** VMP Playgroup TTh 11:00, profile **397**, Phase **3** `new` (Pampanga). Matrix **new** showed **June**; should start in **April**.
+
+| Field | Before | After |
+|-------|--------|-------|
+| CS **1114** `enrolled_at` | 2026-06-04 | **2026-04-01** |
+| INV **1267** issue/due | 2026-02-02 / 2026-02-02 | **2026-03-25 / 2026-04-05** |
+| Profile `first_billing_month` | ~2026-05-01 | **2026-04-01** |
+
+Expected matrix: **Apr new** / May–Aug re-enrolled / **Sep Active** (June no longer `new`).
+
+```bash
+node scripts/repairKristianLaotMatrixAprilNew.js --production
+node scripts/repairKristianLaotMatrixAprilNew.js --production --apply
+```
+
+### `repairMorganAquinoPlan2MatrixSeptember.js`
+
+**Morgan Atlas Milag Aquino** (`kimberlymilag@gmail.com`, user **514**) — class **89** Playgroup TTh 9:30, Malolos. Plan 2 profile **525** had `phase_start=10` / `total_phases=1`, which hid Plan 1 phases and left only Aug single-phase `completed` (September blank → not Total Active).
+
+| Change | Detail |
+|--------|--------|
+| Profile **525** | `phase_start` 10→**1**, `total_phases` 1→**10**, `first_billing_month`→**2026-04-01** |
+| Enrollments | Remove duplicate P7 / orphan P8–P9 / extra P10 rows; keep CS **2488** (P10) |
+| INV **2782** | Stays on Plan 2 (`TARGET_PHASE:10`) |
+
+Expected matrix: Apr new … Jul dropped … Aug rejoin … **Sep re-enrolled** (counts Active).
+
+```bash
+node scripts/repairMorganAquinoPlan2MatrixSeptember.js --production
+node scripts/repairMorganAquinoPlan2MatrixSeptember.js --production --apply
+```
+
+### `repairMorganAquinoRemovePlan2KeepPlan1.js`
+
+**Morgan Atlas Milag Aquino** — Student History should show **one** plan only (profile **296**, phases **1–7**). Removes erroneous Plan 2 profile **525** (INV-2782 cancelled + detached; phase ≥8 enrollments deleted).
+
+```bash
+node scripts/repairMorganAquinoRemovePlan2KeepPlan1.js --production
+node scripts/repairMorganAquinoRemovePlan2KeepPlan1.js --production --apply
+```
+
+### `repairKaelHamdanMatrixJuneNew.js`
+
+**Kael Devin Burayag Hamdan** (`myrna01@gmail.com`, user **524**) — class **91** VMM Playgroup SS 9:30, profile **307**, Phase **3** `new` (Malolos). Matrix **new** showed **May**; should start in **June**.
+
+| Field | Before | After |
+|-------|--------|-------|
+| CS **626** `enrolled_at` | 2026-05-02 | **2026-06-01** |
+| INV **753** issue/due | 2026-04-25 / 2026-05-05 | **2026-05-25 / 2026-06-05** |
+| Profile `first_billing_month` | 2026-05-01 | **2026-06-01** |
+| CS **627** (Phase 4) | `new` | **re_enrolled** |
+
+Expected matrix: **Jun new** / Jul–Sep re-enrolled (May no longer `new`).
+
+```bash
+node scripts/repairKaelHamdanMatrixJuneNew.js --production
+node scripts/repairKaelHamdanMatrixJuneNew.js --production --apply
+```
+
+### `repairJosephGonzalezPhase4Balance3472.js`
+
+**Joseph Lee Mykael G. Gonzalez** (`gergontrucking@gmail.com`, user **602**) — Phase 4 chain INV **2170** → **2412**. Leaf balance invoice accumulated stacked late-penalty rows (UI Amount ~₱46,281.97 / Balance ~₱45,517.97). Restore normal phase fee after partial pay.
+
+| | Before | After |
+|--|--------|-------|
+| Amount (phase fee) | ~₱46,281.97 | **₱4,236** |
+| Paid | ₱764 | **₱764** (unchanged) |
+| Balance (leaf INV-2412) | ~₱45,517.97 | **₱3,472** |
+
+```bash
+node scripts/repairJosephGonzalezPhase4Balance3472.js --production
+node scripts/repairJosephGonzalezPhase4Balance3472.js --production --apply
+```
+
+### `repairJosephGonzalezPhase34DueSwap.js`
+
+Same student — swap Phase **3** and Phase **4** due dates on profile **449**:
+
+| Phase | Invoices | Before due | After due |
+|-------|----------|------------|-----------|
+| 3 | 1966, 1967 | 2026-09-05 | **2026-08-05** |
+| 4 | 2170, 2412 | 2026-08-05 | **2026-09-05** |
+
+```bash
+node scripts/repairJosephGonzalezPhase34DueSwap.js --production
+node scripts/repairJosephGonzalezPhase34DueSwap.js --production --apply
+```
+
 ### `repairAzikielTecsonPhase67DueEnrollment.js`
 
 **Azikiel T. Tecson** (`luis.tecson.ph@gmail.com`, user **643**) — class **47** SOMO Playgroup TTh, profile **472** (`phase_start` 6).

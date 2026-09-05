@@ -1422,38 +1422,23 @@ const studentHasPriorActiveEnrollmentCell = (student, currentKey, periodCellsAcc
   return false;
 };
 
-const monthMatrixPeriodCellsAccessor = (student, key) => student?.months?.[key];
-
 /**
  * Completed cells that count toward Total Active Students / Student Status:
- * multi-phase track AND prior new / re-enrolled / rejoin on the same matrix row.
- * Standalone completed (e.g. only "completed" with no earlier enrollment cell) is excluded.
+ * multi-phase tracks only (excludes single-phase completed such as Active Champs).
+ * Prior new / re-enrolled / rejoin is NOT required — a completed cell on a multi-phase
+ * track still counts as active for the billing month.
  */
-const matrixCompletedCountsTowardTotalActive = (cell, student, monthKey) => {
+const matrixCompletedCountsTowardTotalActive = (cell, student, _monthKey = null) => {
   if (!isVisibleCompletedLabel(cell?.label)) return false;
-  if (resolveMatrixTrackPhaseCountForCompletionKpi(student, cell) <= 1) return false;
-  if (!monthKey) return false;
-  return studentHasPriorActiveEnrollmentCell(
-    student,
-    monthKey,
-    monthMatrixPeriodCellsAccessor
-  );
+  return resolveMatrixTrackPhaseCountForCompletionKpi(student, cell) > 1;
 };
 
 /**
  * Completed KPI / Monthly Operational "Completed" card:
- * count orange completed cells only when the track already had prior new / re-enrolled / rejoin.
- * Standalone completed is omitted to avoid confusion with Total Active.
+ * all visible orange completed cells in the month column (including standalone completed).
  */
-const matrixCompletedCountsTowardCompletedKpi = (cell, student, monthKey) => {
-  if (!isVisibleCompletedLabel(cell?.label)) return false;
-  if (!monthKey) return false;
-  return studentHasPriorActiveEnrollmentCell(
-    student,
-    monthKey,
-    monthMatrixPeriodCellsAccessor
-  );
-};
+const matrixCompletedCountsTowardCompletedKpi = (cell, _student = null, _monthKey = null) =>
+  isVisibleCompletedLabel(cell?.label);
 
 /**
  * Re-enrollment KPI / purple badge: visible re-enrolled labels only.
@@ -1468,7 +1453,8 @@ const matrixLabelCountsTowardReEnrollmentKpi = (label, _student = null, _cell = 
  * - Count Active (✓) lifecycle cells as retained (same as re-enrolled for the rate).
  * - Never count Inactive (X).
  * - Always count visible completed cells (including standalone completed with no prior
- *   new / re-enrolled / rejoin). Total Active Students still excludes standalone completed.
+ *   new / re-enrolled / rejoin). Total Active Students uses multi-phase completed only
+ *   (no prior-history gate).
  */
 const matrixCellCountsTowardReEnrollmentRate = (
   cell,
@@ -5947,8 +5933,8 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
     re_enrollment_count: reEnrollmentCount,
     upsell_count: upsellCount,
     reserved_count: reservedCount,
-    completed_count: completedCount, // completed with prior new/re-enrolled/rejoin only
-    /** Qualifying completed only — Total Active (multi-phase + prior new/re-enrolled/rejoin). */
+    completed_count: completedCount, // all visible completed cells
+    /** Multi-phase completed only — Total Active (no prior new/re-enrolled/rejoin required). */
     active_completed_count: activeCompletedCount,
     dropped_unenrolled_count: droppedUnenrolledCount,
     rejoin_count: rejoinCount,
@@ -6194,7 +6180,7 @@ export const loadMonthReEnrollmentStatForMonth = loadMonthMatrixOperationalStats
 /**
  * Whether a month-matrix cell counts as "active" for Reports → Student Status and
  * Monthly Operational Dashboard total active students
- * (new + re-enrollment + rejoin + upsell + qualifying completed).
+ * (new + re-enrollment + rejoin + upsell + multi-phase completed).
  * Soft-removed enrollments on/before the billing month do not count.
  */
 export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student, monthKey = null) => {
@@ -6207,7 +6193,7 @@ export const isMonthMatrixCellActiveForOperationalDashboard = (cell, student, mo
   const label = String(cell.label).trim().toLowerCase();
   if (label === 'new' || label === 'rejoin' || label === 'upsell') return true;
   if (label === 're-enrolled' || label === 're_enrolled') return true;
-  // Multi-phase completed only when prior new / re-enrolled / rejoin exists on the track.
+  // Multi-phase completed counts even without prior new / re-enrolled / rejoin.
   if (label === 'completed') {
     return matrixCompletedCountsTowardTotalActive(cell, student, monthKey);
   }

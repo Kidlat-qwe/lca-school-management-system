@@ -84,15 +84,15 @@ export const MONTHLY_OPERATIONAL = {
   newEnrolleesReenroll:
     'Counts from the Month Re-enrollment matrix for the selected month (billing month column). New = green "new" cells. Re-enrollment = purple "re-enrolled" cells only (same badge count as the Month Re-enrollment matrix). Completed cells are on the Completed card, not here.',
   totalActiveStudents:
-    'Sum of new enrollees + re-enrollment + rejoin + upsell + qualifying completed for the selected month (Month Re-enrollment matrix column). Completed counts only when the same track already had a prior new, re-enrolled, or rejoin cell (standalone completed is excluded). Single-phase completed (e.g. Active Champs) is also excluded. Counts matrix cells, not unique students — one student in two classes counts twice.',
+    'Sum of new enrollees + re-enrollment + rejoin + upsell + multi-phase completed for the selected month (Month Re-enrollment matrix column). Multi-phase completed counts even without a prior new / re-enrolled / rejoin cell. Single-phase completed (e.g. Active Champs) is excluded. Counts matrix cells, not unique students — one student in two classes counts twice.',
   droppedRejoin:
     'Dropped / unenrolled = pink cells in the matrix month column. Rejoin = orange "rejoin" cells in that column.',
   reservedUpsell:
     'Reserved = amber "reserved" cells. Upsell = teal "upsell" cells — same labels as the Re-enrollment matrix table.',
   completedEnrollment:
-    'Completed = orange "completed" cells in the matrix month column that already had a prior new, re-enrolled, or rejoin on the same track. Standalone completed (no prior enrollment cell) is not shown. Retention base = prior-month new + re-enrolled + rejoin + upsell (rate-row denominator).',
+    'Completed = orange "completed" cells in the matrix month column (including standalone completed with no prior new / re-enrolled / rejoin). Retention base = prior-month new + re-enrolled + rejoin + upsell (rate-row denominator).',
   completedRetentionCombined:
-    'Completed uses the Month Re-enrollment matrix for the selected month, excluding standalone completed (no prior new / re-enrolled / rejoin). Retention base uses the rate-row denominator rules.',
+    'Completed uses the Month Re-enrollment matrix for the selected month (all visible completed cells). Retention base uses the rate-row denominator rules.',
   merchandiseSection: 'Merchandise releases for the selected month',
   recentMerchandiseReleases:
     'Stock release log lines for this month (package first payment + merchandise AR). Shows three rows at a time; scroll for more.',
@@ -259,7 +259,7 @@ export const LEADERSHIPBOARD = {
   invoiceSales:
     'Same as Monthly Operational Invoice Sales / completed payment Total Payments for the month: payable + tips on Completed payments by issue date, excluding Returned and Rejected. Does not include Acknowledgement Receipt sales.',
   activeStudents:
-    'Same as Monthly Operational Total Active Students: New + Re-enrollment + Rejoin + Upsell + qualifying completed for the selected month (Month Re-enrollment matrix). Completed needs a prior new / re-enrolled / rejoin on the track; standalone completed and lifecycle Inactive do not count. Unpaid partial phases (Enrollment blank until Paid) do not count.',
+    'Same as Monthly Operational Total Active Students: New + Re-enrollment + Rejoin + Upsell + multi-phase completed for the selected month (Month Re-enrollment matrix). Multi-phase completed counts without requiring a prior new / re-enrolled / rejoin; single-phase completed and lifecycle Inactive do not count. Unpaid partial phases (Enrollment blank until Paid) do not count.',
 };
 
 export const PHASE_ENROLLMENT_DASHBOARD = {

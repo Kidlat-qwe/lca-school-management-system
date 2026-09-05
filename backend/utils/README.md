@@ -95,8 +95,9 @@ Auto-drop students when an installment phase invoice is unpaid past **`installme
 | No enrollment row | Inserts a `dropped` marker row for that phase |
 | Plan view sync | `GET .../profiles/:id/phases` runs sync so Student History shows **Dropped** immediately |
 | Daily job | `installmentDelinquencyService.js` + `installmentDelinquencyScheduler.js` |
+| Late penalty (same job) | One-time % of leaf remaining after grace; idempotency is **chain-wide** for that `due_date` (see `installmentDelinquencyDrop/README.md`) |
 
-Partially paid phases are **not** auto-dropped (student remains enrolled until balance is settled or manually dropped).
+See `installmentDelinquencyDrop/README.md` for drop rules (including partial-payment drops) and late-penalty chain stamping.
 
 ## `installmentPhaseBillingSync.js`
 

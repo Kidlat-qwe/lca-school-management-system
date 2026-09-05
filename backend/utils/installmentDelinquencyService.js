@@ -80,6 +80,11 @@ const computeInvoiceTotals = async (client, invoiceId) => {
  * Process delinquent installment invoices:
  * - Apply one-time penalty after due_date + grace_days (based on remaining balance)
  * - Remove student from class if overdue by >= final_dropoff_days
+ *
+ * Partial-payment chains: penalty lines are written on the payable **leaf**, but the job
+ * may scan the partially-paid **parent**. Idempotency must key off any chain invoice
+ * already flagged for that due date (and stamp the whole chain after apply), or 10%
+ * penalties stack every night and compound on the balance leaf.
  */
 export const processInstallmentDelinquencies = async () => {
   const client = await getClient();
@@ -96,6 +101,8 @@ export const processInstallmentDelinquencies = async () => {
     const settingsCache = new Map();
     const processedChains = new Set();
 
+    // Prefer leaf / continuation rows first so we lock the payable invoice when possible.
+    // Chain de-dupe below still ensures one pass per chain_root.
     const candidates = await client.query(
       `SELECT
         i.invoice_id,
@@ -115,7 +122,10 @@ export const processInstallmentDelinquencies = async () => {
          AND i.status NOT IN ('Paid', 'Cancelled')
          AND i.due_date IS NOT NULL
          AND i.due_date < CURRENT_DATE
-         AND (i.issue_date IS NULL OR i.due_date >= i.issue_date)`
+         AND (i.issue_date IS NULL OR i.due_date >= i.issue_date)
+       ORDER BY
+         CASE WHEN i.invoice_chain_root_id IS NOT NULL THEN 0 ELSE 1 END,
+         i.invoice_id ASC`
     );
 
     result.scanned = candidates.rows.length;
@@ -146,12 +156,36 @@ export const processInstallmentDelinquencies = async () => {
 
         const invoice = invoiceLock.rows[0];
         const dueDate = invoice.due_date;
+        const dueYmd = formatYmdLocal(dueDate);
         const today = new Date();
 
         const chainSummary = await getChainFinancialSummary(client, chainRootId);
         if (chainSummary.remaining_on_leaf <= EPSILON) {
           await client.query('ROLLBACK');
           continue;
+        }
+
+        const payableInvoiceId = Number(chainSummary.payable_invoice_id);
+        const chainInvoiceIds = (chainSummary.chain_invoice_ids || [])
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+        const stampIds = chainInvoiceIds.length ? chainInvoiceIds : [payableInvoiceId];
+
+        // Lock payable leaf (may differ from scanned parent on partial-pay chains).
+        let payableInvoice = invoice;
+        if (payableInvoiceId && payableInvoiceId !== Number(invoice.invoice_id)) {
+          const leafLock = await client.query(
+            `SELECT invoice_id, status, due_date, late_penalty_applied_for_due_date
+             FROM invoicestbl
+             WHERE invoice_id = $1
+             FOR UPDATE`,
+            [payableInvoiceId]
+          );
+          if (leafLock.rows.length === 0) {
+            await client.query('ROLLBACK');
+            continue;
+          }
+          payableInvoice = leafLock.rows[0];
         }
 
         const branchId = row.branch_id !== undefined && row.branch_id !== null ? Number(row.branch_id) : null;
@@ -182,12 +216,19 @@ export const processInstallmentDelinquencies = async () => {
           profileId: row.installmentinvoiceprofiles_id,
         });
 
-        const payableInvoiceId = chainSummary.payable_invoice_id;
         const { remainingBalance } = await computeInvoiceTotals(client, payableInvoiceId);
 
-        const alreadyAppliedForDueDate =
-          invoice.late_penalty_applied_for_due_date &&
-          formatYmdLocal(invoice.late_penalty_applied_for_due_date) === formatYmdLocal(dueDate);
+        // Idempotency across the whole chain for this due date (not only the scanned row).
+        const chainFlagRes = await client.query(
+          `SELECT invoice_id, late_penalty_applied_for_due_date
+           FROM invoicestbl
+           WHERE invoice_id = ANY($1::int[])
+             AND late_penalty_applied_for_due_date IS NOT NULL`,
+          [stampIds]
+        );
+        const alreadyAppliedForDueDate = chainFlagRes.rows.some(
+          (r) => formatYmdLocal(r.late_penalty_applied_for_due_date) === dueYmd
+        );
 
         if (!penaltyExempt && !alreadyAppliedForDueDate && isPenaltyEligible && remainingBalance > EPSILON) {
           const safeRate = Number.isFinite(penaltyRate)
@@ -214,10 +255,17 @@ export const processInstallmentDelinquencies = async () => {
 
             await client.query(
               `UPDATE invoicestbl
-               SET amount = $1,
-                   late_penalty_applied_for_due_date = due_date
+               SET amount = $1
                WHERE invoice_id = $2`,
               [round2(remainingBalance + penalty), payableInvoiceId]
+            );
+
+            // Stamp every invoice in the chain so a later parent scan cannot re-apply.
+            await client.query(
+              `UPDATE invoicestbl
+               SET late_penalty_applied_for_due_date = $1::date
+               WHERE invoice_id = ANY($2::int[])`,
+              [dueYmd, stampIds]
             );
 
             const totalsAfterPenalty = await computeInvoiceTotals(client, payableInvoiceId);
@@ -228,7 +276,8 @@ export const processInstallmentDelinquencies = async () => {
                   ? 'Partially Paid'
                   : 'Unpaid';
 
-            if (newStatus !== row.status) {
+            const leafStatus = String(payableInvoice.status || '');
+            if (newStatus !== leafStatus) {
               await client.query('UPDATE invoicestbl SET status = $1 WHERE invoice_id = $2', [
                 newStatus,
                 payableInvoiceId,
@@ -239,9 +288,9 @@ export const processInstallmentDelinquencies = async () => {
           } else {
             await client.query(
               `UPDATE invoicestbl
-               SET late_penalty_applied_for_due_date = due_date
-               WHERE invoice_id = $1`,
-              [payableInvoiceId]
+               SET late_penalty_applied_for_due_date = $1::date
+               WHERE invoice_id = ANY($2::int[])`,
+              [dueYmd, stampIds]
             );
           }
         }

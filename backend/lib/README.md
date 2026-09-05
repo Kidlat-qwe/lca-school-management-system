@@ -4,7 +4,7 @@
 
 Cross-branch Leadershipboard payload (`GET /dashboard/leadershipboard`).
 
-Overall = weighted criteria (Invoice Sales 40%, New 20%, Re-enrolled 20%, Rejoin 10%, Upsell 10%). Active is display-only and equals Monthly Operational **Total Active Students** (New + Re-enrolled + Rejoin + Upsell + qualifying completed with prior new/re-enrolled/rejoin).
+Overall = weighted criteria (Invoice Sales 40%, New 20%, Re-enrolled 20%, Rejoin 10%, Upsell 10%). Active is display-only and equals Monthly Operational **Total Active Students** (New + Re-enrolled + Rejoin + Upsell + multi-phase completed).
 
 Full formula and sample computation: [docs/LEADERSHIPBOARD.md](../../docs/LEADERSHIPBOARD.md).
 
@@ -99,10 +99,10 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 
 - Multi-phase classes: terminal billing phase/month shows **completed** when the student progresses past the first phase (unchanged).
 - **Single-phase** classes (`curriculum.number_of_phase = 1`): the only phase/month shows **completed** when the student has paid (full payment, DB `completed` status, or all installment phases paid).
-- Each matrix response includes `kpi_totals` (new / re-enrolled / reserved / upsell / dropped / rejoin / completed) summed from visible labeled cells for the selected year scope. **Completed** in `kpi_totals` / Monthly Operational Completed card excludes standalone completed (no prior new / re-enrolled / rejoin on the track). **Reserved** and **Upsell** KPI cards use `reserved_count` and `upsell_count` from the matrix (not a live DB snapshot).
+- Each matrix response includes `kpi_totals` (new / re-enrolled / reserved / upsell / dropped / rejoin / completed) summed from visible labeled cells for the selected year scope. **Completed** in `kpi_totals` / Monthly Operational Completed card counts all visible completed cells (including standalone completed). **Reserved** and **Upsell** KPI cards use `reserved_count` and `upsell_count` from the matrix (not a live DB snapshot).
 - Month/phase matrix **rate header** numerator = visible **`re-enrolled`** + lifecycle **Active (✓)** + all visible **`completed`** (including standalone completed). **Inactive (X)** is excluded. **Denominator** = prior month/phase cells labeled `new`, `re-enrolled`, `rejoin`, or `upsell`, plus `completed` only when that prior completed cell already had an earlier new/re-enrolled/rejoin on the same track.
 - **Re-enrollment KPI card** (Month Re-enrollment + Monthly Operational) = purple `re-enrolled` cell count only, so both dashboards match the matrix table.
-- **Total Active Students** = new + re-enrolled + rejoin + upsell + qualifying completed (multi-phase **and** prior new / re-enrolled / rejoin on the same track). Standalone completed and single-phase completed (e.g. Active Champs) are excluded.
+- **Total Active Students** = new + re-enrolled + rejoin + upsell + multi-phase completed (no prior new / re-enrolled / rejoin required). Single-phase completed (e.g. Active Champs) is excluded.
 - **Monthly operational dashboard** enrollment KPI cards use `loadMonthlyOperationalEnrollmentFromMonthMatrix` — the selected month's matrix column, same rules as the Month Re-enrollment table.
 - **Phase Re-enrollment** dashboard KPI cards use the same **month** matrix totals as Month Re-enrollment when a year is selected (`kpi_card_source: month_matrix`); the phase matrix table remains for phase-by-phase drill-down.
 - **New** cells that follow a paid reservation on the same class track include `from_previous_reserved: true`; the UI tooltip shows **Previous reserved**.
@@ -121,7 +121,7 @@ Month and phase re-enrollment dashboard matrices (`loadStudentMonthEnrollmentMat
 
 ## `studentStatusReport/`
 
-**Reports → Student Status** tab: `loadStudentStatusReportPage` classifies **active** / **inactive** for a selected billing month (`summary_month`) using the same Month Re-enrollment matrix rules as **Monthly Operational Dashboard → Total Active Students** (`new` + `re-enrolled` + qualifying `completed` with prior new/re-enrolled/rejoin + `rejoin` + `upsell`). Active list is **one row per matrix track** (matches Total Active cell sum). See `studentStatusReport/README.md`.
+**Reports → Student Status** tab: `loadStudentStatusReportPage` classifies **active** / **inactive** for a selected billing month (`summary_month`) using the same Month Re-enrollment matrix rules as **Monthly Operational Dashboard → Total Active Students** (`new` + `re-enrolled` + multi-phase `completed` + `rejoin` + `upsell`). Active list is **one row per matrix track** (matches Total Active cell sum). See `studentStatusReport/README.md`.
 
 ## `operationalDashboardRecentPayments.js`
 
