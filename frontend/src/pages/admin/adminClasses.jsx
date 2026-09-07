@@ -2009,11 +2009,27 @@ const initializePackageMerchSelections = useCallback(
   };
 
   // Helper function to get count of reserved students that should be counted
+  // Excludes students who already occupy an active enrolled seat (avoid double-count).
   const getCountableReservedStudents = () => {
-    return enrollReservedStudents.filter(shouldCountReservation).length;
+    const activeEnrolledIds = new Set(
+      enrolledStudents
+        .filter((s) => s.student_type === 'enrolled')
+        .filter((s) => {
+          if (s.shouldCount === false) return false;
+          const status = String(s.program_enrollment_status || '').trim().toLowerCase();
+          return ['new', 're_enrolled', 'upsell', 'rejoin', 'completed', ''].includes(status);
+        })
+        .map((s) => s.user_id)
+    );
+    return enrollReservedStudents.filter((reservation) => {
+      const sid = reservation.student_id;
+      if (sid != null && activeEnrolledIds.has(sid)) return false;
+      return shouldCountReservation(reservation);
+    }).length;
   };
 
   // Helper function to get count of students that should be counted (from enrolledStudents array)
+  // Capacity checks should pass enrolled-only rows; reserved seats use getCountableReservedStudents.
   const getCountableStudents = (students) => {
     return students.filter(student => {
       if (student.student_type === 'enrolled') {
@@ -2031,6 +2047,15 @@ const initializePackageMerchSelections = useCallback(
       }
       return false;
     }).length;
+  };
+
+  /** Class max occupancy: active enrolled seats + valid reservations (aligned with class list X/max). */
+  const getClassCapacityOccupancy = () => {
+    const currentEnrolled = getCountableStudents(
+      enrolledStudents.filter((s) => s.student_type === 'enrolled')
+    );
+    const currentReserved = getCountableReservedStudents();
+    return { currentEnrolled, currentReserved };
   };
 
   const fetchEnrolledStudentsForView = async (classId, phaseNumber = null) => {
@@ -3929,10 +3954,8 @@ const initializePackageMerchSelections = useCallback(
         }
         
         // Check if adding this student would exceed max_students
-        // Count both enrolled students AND reserved students that should be counted
         if (selectedClassForEnrollment?.max_students) {
-          const currentEnrolled = getCountableStudents(enrolledStudents);
-          const currentReserved = getCountableReservedStudents(); // Only count valid reservations
+          const { currentEnrolled, currentReserved } = getClassCapacityOccupancy();
           const totalAfterAdd = currentEnrolled + currentReserved + 1;
           if (totalAfterAdd > selectedClassForEnrollment.max_students) {
             appAlert(`Cannot add student. Class has a maximum of ${selectedClassForEnrollment.max_students} students. Currently enrolled: ${currentEnrolled}, Reserved: ${currentReserved}`);
@@ -4143,8 +4166,7 @@ const initializePackageMerchSelections = useCallback(
 
   const getAvailableSlots = () => {
     if (!selectedClassForEnrollment?.max_students) return null;
-    const currentEnrolled = getCountableStudents(enrolledStudents);
-    const currentReserved = getCountableReservedStudents();
+    const { currentEnrolled, currentReserved } = getClassCapacityOccupancy();
     const currentlySelected = selectedStudents.length;
     return selectedClassForEnrollment.max_students - currentEnrolled - currentReserved - currentlySelected;
   };
@@ -4753,11 +4775,11 @@ const initializePackageMerchSelections = useCallback(
       }
     }
 
-    // Check max students limit
-    // Count both enrolled students AND reserved students (reservations reserve spots but don't enroll)
+    // Check max students limit — match class list X/max (active seats + valid reservations only).
+    // Do NOT use enrolledStudents.length: manage modal keeps dropped/unenrolled rows, and
+    // reserved rows may already be merged into enrolledStudents (would inflate / double-count).
     if (selectedClassForEnrollment?.max_students) {
-      const currentEnrolled = enrolledStudents.length;
-      const currentReserved = enrollReservedStudents.length; // Reserved students also count toward max
+      const { currentEnrolled, currentReserved } = getClassCapacityOccupancy();
       const totalAfterEnroll = currentEnrolled + currentReserved + selectedStudents.length;
       if (totalAfterEnroll > selectedClassForEnrollment.max_students) {
         const availableSlots = selectedClassForEnrollment.max_students - currentEnrolled - currentReserved;

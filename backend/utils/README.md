@@ -1,5 +1,9 @@
 # Backend utilities
 
+## `classCapacityExpand/`
+
+Rejoin overflow: always allow dropped students to rejoin a full class; raise `max_students` to active headcount (e.g. **11/11**). See [classCapacityExpand/README.md](./classCapacityExpand/README.md).
+
 ## `dateUtils.js`
 
 Asia/Manila (`UTC+8`) helpers for business dates and JSON timestamps.

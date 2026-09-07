@@ -3,6 +3,10 @@ import {
   determineRejoinAwarePhaseStatus,
 } from './enrollmentStatus.js';
 import { queueFirstEnrollmentWelcomeEmail } from './firstEnrollmentWelcomeEmail/index.js';
+import {
+  expandClassMaxStudentsToFitActiveCount,
+  isRejoinEnrollmentSourceLabel,
+} from './classCapacityExpand/index.js';
 
 /**
  * Enroll or reactivate a student across a phase range after full payment (or conversion).
@@ -16,6 +20,8 @@ export async function enrollStudentForFullPaymentPhases({
   sourceLabel,
   invoiceId = null,
   ackReceiptId = null,
+  /** When true (or rejoin source label), raise max_students if active count exceeds it. */
+  expandMaxStudentsIfNeeded = null,
 }) {
   let insertedOrReactivated = 0;
   let welcomeClassstudentId = null;
@@ -132,6 +138,13 @@ export async function enrollStudentForFullPaymentPhases({
       invoiceId,
       ackReceiptId,
     });
+  }
+
+  const shouldExpandMax =
+    expandMaxStudentsIfNeeded === true ||
+    (expandMaxStudentsIfNeeded !== false && isRejoinEnrollmentSourceLabel(sourceLabel));
+  if (shouldExpandMax && insertedOrReactivated > 0) {
+    await expandClassMaxStudentsToFitActiveCount(client, classId);
   }
 
   return insertedOrReactivated;

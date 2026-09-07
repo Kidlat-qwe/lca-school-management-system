@@ -954,6 +954,7 @@ router.post(
  * Create a one-phase invoice that lets a previously dropped student rejoin
  * after payment. Actual enrollment still happens in payments.js after the
  * invoice is marked Paid.
+ * Capacity: always allowed when class is full; max_students expands on enrollment (N/N).
  * Access: Superadmin, Admin
  */
 router.post(
@@ -1056,34 +1057,8 @@ router.post(
         });
       }
 
-      if (classData.max_students != null) {
-        const activeStudentCount = await client.query(
-          `SELECT COUNT(DISTINCT student_id) AS count
-           FROM classstudentstbl
-           WHERE class_id = $1
-             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-             AND removed_at IS NULL`,
-          [classId]
-        );
-        const alreadyActiveInOtherPhase = await client.query(
-          `SELECT 1
-           FROM classstudentstbl
-           WHERE student_id = $1
-             AND class_id = $2
-             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-             AND removed_at IS NULL
-           LIMIT 1`,
-          [studentId, classId]
-        );
-        const currentCount = parseInt(activeStudentCount.rows[0]?.count || 0, 10);
-        if (alreadyActiveInOtherPhase.rows.length === 0 && currentCount >= Number(classData.max_students)) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Class is full (${currentCount}/${classData.max_students} students).`,
-          });
-        }
-      }
+      // Rejoin always allowed past max_students (no overflow limit).
+      // On payment enrollment, max_students is raised to fit active headcount (e.g. 11/11).
 
       // Preserve prior installment plan (generated_count, phase scope) — rejoin reactivates on payment.
       const installmentProfile = await findInstallmentProfileForRejoin(client, studentId, classId);
@@ -1249,6 +1224,7 @@ router.post(
  * Payment-first rejoin: create the target-phase invoice only when payment is
  * recorded (Paid + Completed payment + enrollment). Skipped intermediate phases
  * stay not enrolled (no dropped gap markers).
+ * Capacity: always allowed when class is full; max_students expands on enrollment (N/N).
  * Access: Superadmin, Admin
  */
 router.post(
@@ -1380,34 +1356,8 @@ router.post(
         });
       }
 
-      if (classData.max_students != null) {
-        const activeStudentCount = await client.query(
-          `SELECT COUNT(DISTINCT student_id) AS count
-           FROM classstudentstbl
-           WHERE class_id = $1
-             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-             AND removed_at IS NULL`,
-          [classId]
-        );
-        const alreadyActiveInOtherPhase = await client.query(
-          `SELECT 1
-           FROM classstudentstbl
-           WHERE student_id = $1
-             AND class_id = $2
-             AND program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
-             AND removed_at IS NULL
-           LIMIT 1`,
-          [studentId, classId]
-        );
-        const currentCount = parseInt(activeStudentCount.rows[0]?.count || 0, 10);
-        if (alreadyActiveInOtherPhase.rows.length === 0 && currentCount >= Number(classData.max_students)) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            success: false,
-            message: `Class is full (${currentCount}/${classData.max_students} students).`,
-          });
-        }
-      }
+      // Rejoin always allowed past max_students (no overflow limit).
+      // enrollStudentForFullPaymentPhases expands max_students when active count exceeds it.
 
       const installmentProfile = await findInstallmentProfileForRejoin(client, studentId, classId);
       if (installmentProfile?.installmentinvoiceprofiles_id) {

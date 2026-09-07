@@ -13,6 +13,7 @@ Helpers in `backend/utils/rejoinDroppedPhaseSettlement/`.
 | Rejoin target | — | Must be **after** highest dropped phase (drop P2 → min P3) |
 | Later-phase rejoin (full unpaid drop) | — | Charge full target phase; **supersede** earlier **fully unpaid** dropped chains only |
 | Rejoin invoice due date | — | **First session date** of the target phase |
+| Class capacity | — | Dropped students free a seat (−1 enrolled). Rejoin under max fills free seats only (e.g. 7/10 → 8/10). Rejoin when full always allowed; `max_students` expands to active headcount (e.g. 10/10 + 2 rejoins → **12/12**). New enroll/reserve still hard-cap at stored max. |
 
 ## Partial-payment delinquency path
 
