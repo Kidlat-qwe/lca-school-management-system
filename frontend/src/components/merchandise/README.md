@@ -17,7 +17,9 @@ Tab panel listing **released stocks** from `merchandise_release_logtbl`.
 
 **API:** `GET /dashboard/merchandise-released-details` with `summary_month` or `summary_date` (+ optional `branch_id`).
 
-Sources: Package first payment (`package_enroll`) and Merchandise AR (`merchandise_ar`).
+Sources: Package first payment (`package_enroll`), Merchandise AR (`merchandise_ar`), and
+manual deduct (`manual_deduct`). Released times use **12-hour** Manila format (AM/PM).
+Actions column → **View details** modal (full row + remarks).
 
 Package items still owed after 0-stock enroll/pay are on **Pending issue**
 (`PackageMerchPendingQueue` in `components/packageMerch/`).
@@ -56,6 +58,9 @@ RHET Inventory-style status chips for Merchandise → **My Requests** /
 
 **RequestQuantityDisplay** — read-only qty when RHET adjusted before ship
 (Requested N · Approved for ship M + warehouse remarks).
+
+**PackageInclusionToggle** / **ManualDeductStockModal** — type flag Included vs
+Not included in package; not-included stock uses Manual deduct + required remarks.
 
 Shows live counts and filters the request table. Legacy `Approved` counts as Delivered.
 Each module has its own pagination (10 requests per page via `FixedTablePagination`).

@@ -468,12 +468,25 @@ router.post(
 
           // Verify merchandise exists if provided
           if (merchandise_id) {
-            const merchandiseCheck = await client.query('SELECT merchandise_id FROM merchandisestbl WHERE merchandise_id = $1', [merchandise_id]);
+            const merchandiseCheck = await client.query(
+              `SELECT merchandise_id, merchandise_name, is_package_included
+               FROM merchandisestbl WHERE merchandise_id = $1`,
+              [merchandise_id]
+            );
             if (merchandiseCheck.rows.length === 0) {
               await client.query('ROLLBACK');
               return res.status(400).json({
                 success: false,
                 message: `Merchandise with ID ${merchandise_id} not found`,
+              });
+            }
+            const merchRow = merchandiseCheck.rows[0];
+            if (merchRow.is_package_included === false || merchRow.is_package_included === 0) {
+              await client.query('ROLLBACK');
+              return res.status(400).json({
+                success: false,
+                message: `"${merchRow.merchandise_name}" is marked Not included in package and cannot be added to a package.`,
+                error: { code: 'NOT_PACKAGE_INCLUDED' },
               });
             }
           }
@@ -912,11 +925,23 @@ router.post(
 
       // Verify merchandise exists if provided
       if (merchandise_id) {
-        const merchandiseCheck = await query('SELECT merchandise_id FROM merchandisestbl WHERE merchandise_id = $1', [merchandise_id]);
+        const merchandiseCheck = await query(
+          `SELECT merchandise_id, merchandise_name, is_package_included
+           FROM merchandisestbl WHERE merchandise_id = $1`,
+          [merchandise_id]
+        );
         if (merchandiseCheck.rows.length === 0) {
           return res.status(400).json({
             success: false,
             message: 'Merchandise not found',
+          });
+        }
+        const merchRow = merchandiseCheck.rows[0];
+        if (merchRow.is_package_included === false || merchRow.is_package_included === 0) {
+          return res.status(400).json({
+            success: false,
+            message: `"${merchRow.merchandise_name}" is marked Not included in package and cannot be added to a package.`,
+            error: { code: 'NOT_PACKAGE_INCLUDED' },
           });
         }
       }

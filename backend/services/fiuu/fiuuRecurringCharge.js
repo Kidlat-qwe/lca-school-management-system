@@ -220,8 +220,8 @@ export async function tryAutopayInstallmentInvoice({ invoiceId, profileId, stude
     }
 
     const amountNum = parseFloat(contact.amount);
-    if (!Number.isFinite(amountNum) || amountNum <= 1) {
-      // FIUU requires amount > 1.00
+    // FIUU HPP accepts PHP 1.00; reject only non-positive amounts.
+    if (!Number.isFinite(amountNum) || amountNum < 0.01) {
       return { attempted: false, reason: 'amount_below_fiuu_minimum', amount: amountNum };
     }
 

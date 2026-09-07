@@ -93,6 +93,8 @@ export function getFiuuPublicApiBaseUrl() {
 /**
  * FIUU Recurring / MIT API endpoint (RecordType T token charges).
  * Spec: Fiuu Recurring API v7.1.4 — input_v7.php
+ * Default host matches HPP (`pay.fiuu.com`), not legacy `pay.merchant.razer.com`
+ * (mismatched hosts can yield FIUU "Token not found" after a successful HPP tokenize).
  */
 export function getFiuuRecurringUrl() {
   const custom = trim(process.env.FIUU_RECURRING_URL);
@@ -100,7 +102,7 @@ export function getFiuuRecurringUrl() {
   const sandbox = trim(process.env.FIUU_SANDBOX) === 'true';
   return sandbox
     ? 'https://sandbox-payment.fiuu.com/RMS/API/Recurring/input_v7.php'
-    : 'https://pay.merchant.razer.com/RMS/API/Recurring/input_v7.php';
+    : 'https://pay.fiuu.com/RMS/API/Recurring/input_v7.php';
 }
 
 /** Optional SubMerchant ID for multi-outlet MIDs (usually empty). */

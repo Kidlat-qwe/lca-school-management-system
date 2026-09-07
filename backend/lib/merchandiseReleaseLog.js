@@ -13,6 +13,7 @@ import {
 export const MERCH_RELEASE_SOURCE = {
   MERCHANDISE_AR: 'merchandise_ar',
   PACKAGE_ENROLL: 'package_enroll',
+  MANUAL_DEDUCT: 'manual_deduct',
 };
 
 export const MERCH_PENDING_MARKER = 'MERCH_PENDING:';
@@ -562,9 +563,12 @@ export async function insertMerchandiseReleaseLog(client, entry) {
     return;
   }
 
-  const source = entry.source === MERCH_RELEASE_SOURCE.PACKAGE_ENROLL
-    ? MERCH_RELEASE_SOURCE.PACKAGE_ENROLL
-    : MERCH_RELEASE_SOURCE.MERCHANDISE_AR;
+  const source =
+    entry.source === MERCH_RELEASE_SOURCE.PACKAGE_ENROLL
+      ? MERCH_RELEASE_SOURCE.PACKAGE_ENROLL
+      : entry.source === MERCH_RELEASE_SOURCE.MANUAL_DEDUCT
+        ? MERCH_RELEASE_SOURCE.MANUAL_DEDUCT
+        : MERCH_RELEASE_SOURCE.MERCHANDISE_AR;
 
   const releasedAt = entry.releasedAt
     ? entry.releasedAt instanceof Date
@@ -572,43 +576,93 @@ export async function insertMerchandiseReleaseLog(client, entry) {
       : new Date(String(entry.releasedAt))
     : null;
 
-  await client.query(
-    `INSERT INTO merchandise_release_logtbl (
-       release_batch_id,
-       source,
-       merchandise_id,
-       quantity,
-       branch_id,
-       merchandise_name,
-       size,
-       category,
-       student_id,
-       class_id,
-       package_id,
-       ack_receipt_id,
-       payment_id,
-       created_by,
-       released_at
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, CURRENT_TIMESTAMP))`,
-    [
-      String(entry.releaseBatchId || '').slice(0, 80),
-      source,
-      merchId,
-      qty,
-      branchId,
-      entry.merchandiseName || null,
-      entry.size || null,
-      entry.category || null,
-      entry.studentId != null ? Number(entry.studentId) : null,
-      entry.classId != null ? Number(entry.classId) : null,
-      entry.packageId != null ? Number(entry.packageId) : null,
-      entry.ackReceiptId != null ? Number(entry.ackReceiptId) : null,
-      entry.paymentId != null ? Number(entry.paymentId) : null,
-      entry.createdBy != null ? Number(entry.createdBy) : null,
-      releasedAt,
-    ]
-  );
+  const remarks =
+    entry.remarks != null && String(entry.remarks).trim()
+      ? String(entry.remarks).trim().slice(0, 2000)
+      : null;
+
+  try {
+    await client.query(
+      `INSERT INTO merchandise_release_logtbl (
+         release_batch_id,
+         source,
+         merchandise_id,
+         quantity,
+         branch_id,
+         merchandise_name,
+         size,
+         category,
+         student_id,
+         class_id,
+         package_id,
+         ack_receipt_id,
+         payment_id,
+         created_by,
+         released_at,
+         remarks
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, CURRENT_TIMESTAMP), $16)`,
+      [
+        String(entry.releaseBatchId || '').slice(0, 80),
+        source,
+        merchId,
+        qty,
+        branchId,
+        entry.merchandiseName || null,
+        entry.size || null,
+        entry.category || null,
+        entry.studentId != null ? Number(entry.studentId) : null,
+        entry.classId != null ? Number(entry.classId) : null,
+        entry.packageId != null ? Number(entry.packageId) : null,
+        entry.ackReceiptId != null ? Number(entry.ackReceiptId) : null,
+        entry.paymentId != null ? Number(entry.paymentId) : null,
+        entry.createdBy != null ? Number(entry.createdBy) : null,
+        releasedAt,
+        remarks,
+      ]
+    );
+  } catch (error) {
+    // Migration 148 may not have run yet — retry without remarks column
+    const msg = String(error?.message || '');
+    if (!msg.includes('remarks') && error?.code !== '42703') throw error;
+    await client.query(
+      `INSERT INTO merchandise_release_logtbl (
+         release_batch_id,
+         source,
+         merchandise_id,
+         quantity,
+         branch_id,
+         merchandise_name,
+         size,
+         category,
+         student_id,
+         class_id,
+         package_id,
+         ack_receipt_id,
+         payment_id,
+         created_by,
+         released_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, CURRENT_TIMESTAMP))`,
+      [
+        String(entry.releaseBatchId || '').slice(0, 80),
+        source,
+        merchId,
+        qty,
+        branchId,
+        entry.merchandiseName || null,
+        entry.size || null,
+        entry.category || null,
+        entry.studentId != null ? Number(entry.studentId) : null,
+        entry.classId != null ? Number(entry.classId) : null,
+        entry.packageId != null ? Number(entry.packageId) : null,
+        entry.ackReceiptId != null ? Number(entry.ackReceiptId) : null,
+        entry.paymentId != null ? Number(entry.paymentId) : null,
+        entry.createdBy != null ? Number(entry.createdBy) : null,
+        releasedAt,
+      ]
+    );
+  }
 }
 
 export function buildMerchandiseArReleaseBatchId(ackReceiptId) {
@@ -948,8 +1002,11 @@ export async function loadMerchandiseReleasedDetails(db, opts) {
        mrl.package_id,
        mrl.payment_id,
        mrl.ack_receipt_id,
+       mrl.created_by,
+       mrl.remarks,
+       mrl.released_at,
        TO_CHAR(TIMEZONE('Asia/Manila', mrl.released_at), 'YYYY-MM-DD') AS released_date_manila,
-       TO_CHAR(TIMEZONE('Asia/Manila', mrl.released_at), 'YYYY-MM-DD HH24:MI') AS released_at_manila,
+       TO_CHAR(TIMEZONE('Asia/Manila', mrl.released_at), 'YYYY-MM-DD HH12:MI AM') AS released_at_manila,
        u.full_name AS student_name,
        u.email AS student_email,
        COALESCE(b.branch_nickname, b.branch_name) AS branch_name,
@@ -988,6 +1045,9 @@ export async function loadMerchandiseReleasedDetails(db, opts) {
     package_name: row.package_name,
     payment_id: row.payment_id,
     ack_receipt_id: row.ack_receipt_id,
+    created_by: row.created_by,
+    remarks: row.remarks || null,
+    released_at: row.released_at || null,
     released_date_manila: row.released_date_manila,
     released_at_manila: row.released_at_manila,
     issued_by_name: row.issued_by_name,
@@ -998,10 +1058,12 @@ export async function loadMerchandiseReleasedDetails(db, opts) {
   let totalQty = 0;
   let arQty = 0;
   let pkgQty = 0;
+  let manualQty = 0;
   for (const row of rows) {
     totalQty += row.quantity;
     if (row.source === MERCH_RELEASE_SOURCE.MERCHANDISE_AR) arQty += row.quantity;
     else if (row.source === MERCH_RELEASE_SOURCE.PACKAGE_ENROLL) pkgQty += row.quantity;
+    else if (row.source === MERCH_RELEASE_SOURCE.MANUAL_DEDUCT) manualQty += row.quantity;
     if (row.release_batch_id) batchIds.add(row.release_batch_id);
   }
 
@@ -1012,6 +1074,7 @@ export async function loadMerchandiseReleasedDetails(db, opts) {
       release_event_count: batchIds.size,
       merchandise_ar_quantity: arQty,
       package_enroll_quantity: pkgQty,
+      manual_deduct_quantity: manualQty,
       line_count: rows.length,
     },
   };

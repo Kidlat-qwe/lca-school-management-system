@@ -26,7 +26,11 @@ import RequestQuantityDisplay from '../../components/merchandise/RequestQuantity
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
+import ManualDeductStockModal from '../../components/merchandise/ManualDeductStockModal';
 import { useConfirmDelivery } from '../../contexts/confirmDelivery';
+import {
+  isMerchandisePackageIncluded,
+} from '../../utils/merchandisePackageInclusion';
 import FixedTablePagination, {
   TablePaginationSummary,
 } from '../../components/table/FixedTablePagination';
@@ -144,6 +148,7 @@ const AdminMerchandise = () => {
   const [catalogWarning, setCatalogWarning] = useState('');
   const [inventoryIntegrationEnabled, setInventoryIntegrationEnabled] = useState(true);
   const [editingMerchandiseType, setEditingMerchandiseType] = useState(null); // For editing merchandise type (not individual stock)
+  const [manualDeductStock, setManualDeductStock] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [requestFormErrors, setRequestFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -796,6 +801,7 @@ const AdminMerchandise = () => {
 
     return filteredStocks.map((item) => ({
       merchandise_id: item.merchandise_id,
+      merchandise_name: item.merchandise_name,
       size: item.size || 'N/A',
       quantity: item.quantity || 0,
       price: item.price || 0,
@@ -804,6 +810,7 @@ const AdminMerchandise = () => {
       remarks: item.remarks || '',
       item_name: item.item_name || '',
       sku: item.sku || '',
+      is_package_included: isMerchandisePackageIncluded(item),
     }));
   };
 
@@ -884,10 +891,6 @@ const AdminMerchandise = () => {
         errors.merchandise_name =
           'Select a category from the RHET Inventory list (exact category name required).';
       }
-    }
-
-    if (creatingType && inventoryIntegrationEnabled && !formData.image_url?.trim()) {
-      errors.image_url = 'Image is required for merchandise types';
     }
 
     // Add / Edit Stock: keep attribute validation (not on create-type shell)
@@ -1470,6 +1473,7 @@ const AdminMerchandise = () => {
         typeMap.set(name, {
           name,
           image_url: withImage?.image_url || item.image_url || null,
+          is_package_included: isMerchandisePackageIncluded(item),
           // Get any item of this type for reference
           sampleItem: item,
         });
@@ -1478,6 +1482,9 @@ const AdminMerchandise = () => {
         const existing = typeMap.get(name);
         if (!existing.image_url && item.image_url) {
           existing.image_url = item.image_url;
+        }
+        if (!isMerchandisePackageIncluded(item)) {
+          existing.is_package_included = false;
         }
       }
     });
@@ -1536,7 +1543,7 @@ const AdminMerchandise = () => {
                         ? 'Update the image for this merchandise type'
                         : viewingStocksFor
                           ? 'Fill in the stock details for this merchandise type'
-                          : 'Pick a RHET Inventory category and set a display image. Stock and sizes come from Request Stock.'}
+                          : 'Pick a RHET Inventory category and optionally set a display image. Stock and sizes come from Request Stock.'}
                     </p>
                   )}
                 </div>
@@ -2530,7 +2537,8 @@ const AdminMerchandise = () => {
       (isItemNamedStocks ? 2 : 0) + // item name + sku
       (showGenderTypeColumns ? 2 : 0) +
       (showSizeColumn ? 1 : 0) +
-      3; // qty, price, remarks
+      3 + // qty, price, remarks
+      1; // actions
 
     return (
       <div className="space-y-6">
@@ -2700,6 +2708,9 @@ const AdminMerchandise = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Remarks
                   </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-[#ffffff] divide-y divide-gray-200">
@@ -2749,6 +2760,20 @@ const AdminMerchandise = () => {
                           {stock.remarks || '—'}
                         </div>
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        {!isMerchandisePackageIncluded(stock) &&
+                        (parseInt(stock.quantity, 10) || 0) > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => setManualDeductStock(stock)}
+                            className="px-3 py-1 text-sm font-medium text-amber-900 bg-amber-50 hover:bg-amber-100 rounded-lg transition-colors"
+                          >
+                            Deduct
+                          </button>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))
                 ) : (
@@ -2766,6 +2791,17 @@ const AdminMerchandise = () => {
         </div>
         {/* Modals */}
         {renderModals()}
+        <ManualDeductStockModal
+          open={Boolean(manualDeductStock)}
+          stock={manualDeductStock}
+          onClose={() => setManualDeductStock(null)}
+          onSuccess={async () => {
+            setManualDeductStock(null);
+            if (adminBranchId) {
+              await fetchMerchandiseByBranch(adminBranchId);
+            }
+          }}
+        />
       </div>
     );
   }
@@ -2909,10 +2945,15 @@ const AdminMerchandise = () => {
           {getUniqueMerchandiseTypes().map((merchType) => (
             <div
               key={merchType.name}
-              className="bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200 border border-gray-200"
+              className="relative bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200 border border-gray-200"
             >
+              {!isMerchandisePackageIncluded(merchType) ? (
+                <span className="absolute top-2 right-2 z-10 inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-100 text-amber-900 shadow-sm">
+                  Not in package
+                </span>
+              ) : null}
               {/* Image Section - Fixed aspect ratio for consistent card sizes */}
-              <div className="relative w-full aspect-square bg-gray-100 overflow-hidden">
+              <div className="relative w-full aspect-square bg-gray-100 overflow-hidden rounded-t-xl">
                 {merchType.image_url ? (
                   <img
                     src={merchType.image_url}

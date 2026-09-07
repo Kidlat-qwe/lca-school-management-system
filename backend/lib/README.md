@@ -174,6 +174,11 @@ Records each physical merchandise stock deduction in `merchandise_release_logtbl
 |--------|-------------|-------------------|
 | `merchandise_ar` | Merchandise acknowledgement receipt created (stock deduct) | `ar-{ack_receipt_id}` |
 | `package_enroll` | First qualifying package payment (downpayment or Phase 1 / full payment) | `pkg-pay-{payment_id}` |
+| `manual_deduct` | Admin/Superadmin manual deduct for types **Not included in package** (required remarks) | `manual-{merch_id}-{ts}` |
+
+Types with `merchandisestbl.is_package_included = false` cannot be added to packages
+and are not auto-issued on enroll. See migration **148** and
+`merchandisePackageInclusion.js`.
 
 Package included merchandise (e.g. PE uniform top + bottom):
 

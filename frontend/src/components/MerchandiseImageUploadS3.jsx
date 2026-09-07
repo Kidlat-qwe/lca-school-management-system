@@ -294,7 +294,7 @@ const MerchandiseImageUploadS3 = ({ currentImageUrl, onImageUploaded, merchandis
           </label>
           {!previewUrl && (
             <p className="text-xs text-gray-500">
-              Recommended: Square image, max 50MB
+              Optional. Recommended: square image, max 50MB
             </p>
           )}
         </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
-import { formatDateManila, manilaMonthYYYYMM, todayManilaYMD } from '../../utils/dateUtils';
+import { formatDateManila, formatDateTimeManila, manilaMonthYYYYMM, todayManilaYMD } from '../../utils/dateUtils';
 
 const tableScrollStyle = {
   scrollbarWidth: 'thin',
@@ -13,7 +14,15 @@ const formatNumber = (value) => (Number(value) || 0).toLocaleString('en-PH');
 const sourceLabel = (source) => {
   if (source === 'merchandise_ar') return 'Merchandise AR';
   if (source === 'package_enroll') return 'Package (first payment)';
+  if (source === 'manual_deduct') return 'Manual deduct';
   return source || '—';
+};
+
+const sourceBadgeClass = (source) => {
+  if (source === 'merchandise_ar') return 'bg-violet-100 text-violet-800';
+  if (source === 'manual_deduct') return 'bg-amber-100 text-amber-900';
+  if (source === 'package_enroll') return 'bg-sky-100 text-sky-900';
+  return 'bg-gray-100 text-gray-700';
 };
 
 const itemLabel = (row) => {
@@ -26,8 +35,117 @@ const itemLabel = (row) => {
 const referenceLabel = (row) => {
   if (row.payment_id) return `PAY-${row.payment_id}`;
   if (row.ack_receipt_id) return `AR-${row.ack_receipt_id}`;
+  if (row.source === 'manual_deduct' && row.release_batch_id) {
+    return row.release_batch_id;
+  }
   return '—';
 };
+
+/** Prefer API 12-hour Manila string; else format ISO with hour12. */
+const formatReleasedDisplay = (row) => {
+  if (row?.released_at) {
+    const formatted = formatDateTimeManila(row.released_at, { hour12: true });
+    if (formatted && formatted !== '-') {
+      // Drop seconds for table compactness: "Month DD, YYYY, H:MM:SS AM" → without seconds
+      return formatted.replace(/:(\d{2}) (AM|PM)/i, ' $2');
+    }
+  }
+  const raw = row?.released_at_manila || row?.released_date_manila || '';
+  if (!raw) return '—';
+  // Legacy 24h "YYYY-MM-DD HH:MM" → 12h
+  const m = String(raw).match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) {
+    let hour = parseInt(m[2], 10);
+    const minute = m[3];
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+    return `${m[1]} ${hour}:${minute} ${suffix}`;
+  }
+  return raw;
+};
+
+function DetailRow({ label, value }) {
+  return (
+    <div className="grid grid-cols-1 gap-0.5 sm:grid-cols-3 sm:gap-3 py-2 border-b border-gray-100 last:border-0">
+      <dt className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</dt>
+      <dd className="sm:col-span-2 text-sm text-gray-900 break-words whitespace-pre-wrap">
+        {value != null && value !== '' ? value : '—'}
+      </dd>
+    </div>
+  );
+}
+
+function ReleaseLogDetailsModal({ row, open, onClose, showBranchColumn }) {
+  if (!open || !row) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/40">
+      <div
+        className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="release-log-details-title"
+      >
+        <div className="px-4 py-3 border-b border-gray-200 flex items-center justify-between gap-2">
+          <h2 id="release-log-details-title" className="text-lg font-semibold text-gray-900">
+            Release details
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 text-xl leading-none px-1"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="p-4 overflow-y-auto flex-1">
+          <dl>
+            <DetailRow label="Released" value={formatReleasedDisplay(row)} />
+            <DetailRow
+              label="Source"
+              value={
+                <span
+                  className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${sourceBadgeClass(row.source)}`}
+                >
+                  {sourceLabel(row.source)}
+                </span>
+              }
+            />
+            <DetailRow label="Item" value={itemLabel(row)} />
+            <DetailRow label="Quantity" value={formatNumber(row.quantity)} />
+            {showBranchColumn ? (
+              <DetailRow label="Branch" value={row.branch_name} />
+            ) : null}
+            <DetailRow label="Student" value={row.student_name} />
+            <DetailRow label="Student email" value={row.student_email} />
+            <DetailRow label="Package" value={row.package_name} />
+            <DetailRow
+              label="Class"
+              value={row.class_level_tag ? `Class: ${row.class_level_tag}` : null}
+            />
+            <DetailRow label="Issued by" value={row.issued_by_name} />
+            <DetailRow label="Reference" value={referenceLabel(row)} />
+            <DetailRow label="Batch ID" value={row.release_batch_id} />
+            <DetailRow label="Merchandise ID" value={row.merchandise_id} />
+            <DetailRow label="Remarks / reason" value={row.remarks} />
+          </dl>
+        </div>
+        <div className="px-4 py-3 border-t border-gray-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 /**
  * Merchandise page tab: release log for issued/released stocks.
@@ -48,6 +166,8 @@ const MerchandiseReleaseLogsPanel = ({
   const [error, setError] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [detailsRow, setDetailsRow] = useState(null);
+  const [menuOpenId, setMenuOpenId] = useState(null);
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -80,6 +200,13 @@ const MerchandiseReleaseLogsPanel = ({
     fetchLogs();
   }, [fetchLogs]);
 
+  useEffect(() => {
+    if (menuOpenId == null) return undefined;
+    const close = () => setMenuOpenId(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [menuOpenId]);
+
   const filteredRows = useMemo(() => {
     let list = rows;
     if (sourceFilter !== 'all') {
@@ -98,6 +225,7 @@ const MerchandiseReleaseLogsPanel = ({
         r.class_level_tag,
         r.branch_name,
         r.issued_by_name,
+        r.remarks,
         referenceLabel(r),
         sourceLabel(r.source),
       ]
@@ -127,8 +255,7 @@ const MerchandiseReleaseLogsPanel = ({
           <div className="min-w-0">
             <h2 className="text-lg font-semibold text-gray-900">Merchandise Logs</h2>
             <p className="mt-1 text-sm text-gray-500">
-              All released stocks from package first payment and Merchandise AR issue —
-              deducted from inventory when stock was issued.
+              Released stocks from package first payment, Merchandise AR, and manual deduct.
             </p>
             <p className="mt-1 text-xs text-gray-400">{scopeSubtitle}</p>
           </div>
@@ -225,6 +352,14 @@ const MerchandiseReleaseLogsPanel = ({
               {formatNumber(summary?.package_enroll_quantity ?? 0)}
             </p>
           </div>
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 shadow-sm">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+              Manual deduct
+            </p>
+            <p className="mt-0.5 text-lg font-bold tabular-nums text-gray-900">
+              {formatNumber(summary?.manual_deduct_quantity ?? 0)}
+            </p>
+          </div>
         </div>
       </div>
 
@@ -235,6 +370,7 @@ const MerchandiseReleaseLogsPanel = ({
               { id: 'all', label: 'All' },
               { id: 'package_enroll', label: 'Package' },
               { id: 'merchandise_ar', label: 'Merchandise AR' },
+              { id: 'manual_deduct', label: 'Manual deduct' },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -291,20 +427,25 @@ const MerchandiseReleaseLogsPanel = ({
                     <div className="min-w-0">
                       <p className="text-sm font-semibold text-gray-900">{itemLabel(row)}</p>
                       <p className="mt-0.5 text-xs text-gray-500">
-                        {row.released_at_manila || row.released_date_manila || '—'}
+                        {formatReleasedDisplay(row)}
                       </p>
                     </div>
-                    <span className="flex-shrink-0 text-sm font-bold tabular-nums text-gray-900">
-                      ×{formatNumber(row.quantity)}
-                    </span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="flex-shrink-0 text-sm font-bold tabular-nums text-gray-900">
+                        ×{formatNumber(row.quantity)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setDetailsRow(row)}
+                        className="text-xs font-medium text-gray-700 underline"
+                      >
+                        View details
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <span
-                      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        row.source === 'merchandise_ar'
-                          ? 'bg-violet-100 text-violet-800'
-                          : 'bg-amber-100 text-amber-900'
-                      }`}
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium ${sourceBadgeClass(row.source)}`}
                     >
                       {sourceLabel(row.source)}
                     </span>
@@ -325,7 +466,7 @@ const MerchandiseReleaseLogsPanel = ({
 
             {/* Desktop table */}
             <div className="hidden overflow-x-auto rounded-lg md:block" style={tableScrollStyle}>
-              <table style={{ width: '100%', minWidth: '960px' }} className="border-collapse text-sm">
+              <table style={{ width: '100%', minWidth: '1040px' }} className="border-collapse text-sm">
                 <thead className="bg-gray-50 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                   <tr>
                     <th className="px-3 py-3">Released</th>
@@ -337,13 +478,14 @@ const MerchandiseReleaseLogsPanel = ({
                     <th className="px-3 py-3">Package / class</th>
                     <th className="px-3 py-3">Issued by</th>
                     <th className="px-3 py-3">Reference</th>
+                    <th className="px-3 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-gray-800">
                   {filteredRows.map((row) => (
                     <tr key={row.release_log_id} className="transition-colors hover:bg-amber-50/40">
                       <td className="whitespace-nowrap px-3 py-2.5 align-top text-xs tabular-nums text-gray-600">
-                        {row.released_at_manila || row.released_date_manila || '—'}
+                        {formatReleasedDisplay(row)}
                       </td>
                       {showBranchColumn ? (
                         <td className="px-3 py-2.5 align-top text-xs text-gray-700">
@@ -352,11 +494,7 @@ const MerchandiseReleaseLogsPanel = ({
                       ) : null}
                       <td className="px-3 py-2.5 align-top">
                         <span
-                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                            row.source === 'merchandise_ar'
-                              ? 'bg-violet-100 text-violet-800'
-                              : 'bg-amber-100 text-amber-900'
-                          }`}
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${sourceBadgeClass(row.source)}`}
                         >
                           {sourceLabel(row.source)}
                         </span>
@@ -396,6 +534,42 @@ const MerchandiseReleaseLogsPanel = ({
                       <td className="whitespace-nowrap px-3 py-2.5 align-top text-xs font-medium text-gray-700">
                         {referenceLabel(row)}
                       </td>
+                      <td className="px-3 py-2.5 align-top text-right">
+                        <div className="relative inline-block text-left">
+                          <button
+                            type="button"
+                            aria-label="Actions"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMenuOpenId((id) =>
+                                id === row.release_log_id ? null : row.release_log_id
+                              );
+                            }}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+                          >
+                            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
+                              <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                            </svg>
+                          </button>
+                          {menuOpenId === row.release_log_id ? (
+                            <div
+                              className="absolute right-0 z-20 mt-1 w-40 origin-top-right rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="block w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-amber-50"
+                                onClick={() => {
+                                  setMenuOpenId(null);
+                                  setDetailsRow(row);
+                                }}
+                              >
+                                View details
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -404,6 +578,13 @@ const MerchandiseReleaseLogsPanel = ({
           </>
         )}
       </div>
+
+      <ReleaseLogDetailsModal
+        open={Boolean(detailsRow)}
+        row={detailsRow}
+        showBranchColumn={showBranchColumn}
+        onClose={() => setDetailsRow(null)}
+      />
     </div>
   );
 };

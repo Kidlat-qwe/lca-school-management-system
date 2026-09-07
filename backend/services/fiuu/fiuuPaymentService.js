@@ -92,13 +92,6 @@ export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
     });
   }
 
-  if (invoice.installmentinvoiceprofiles_id) {
-    const dropBlock = await getDroppedEnrollmentPaymentBlock(query, invoice);
-    if (dropBlock.blocked) {
-      throw Object.assign(new Error(dropBlock.message), { statusCode: 400 });
-    }
-  }
-
   const remaining = parseFloat(invoice.amount) || 0;
   if (remaining <= 0.009) {
     throw Object.assign(new Error('No remaining balance on this invoice'), { statusCode: 400 });
@@ -115,16 +108,20 @@ export async function loadInvoiceForFiuuCreate(invoiceId, studentId) {
     throw Object.assign(new Error('Student is not on this invoice'), { statusCode: 400 });
   }
 
-  const client = await getClient();
-  try {
-    if (invoice.installmentinvoiceprofiles_id) {
+  if (invoice.installmentinvoiceprofiles_id) {
+    const client = await getClient();
+    try {
+      const dropBlock = await getDroppedEnrollmentPaymentBlock(client, invoice);
+      if (dropBlock.blocked) {
+        throw Object.assign(new Error(dropBlock.message), { statusCode: 400 });
+      }
       const priorBlock = await getPriorPartialBalanceBlockers(client, invoiceId);
       if (priorBlock.blocked) {
         throw Object.assign(new Error(priorBlock.message), { statusCode: 400 });
       }
+    } finally {
+      client.release();
     }
-  } finally {
-    client.release();
   }
 
   return { invoice, student: studentRes.rows[0], remaining };

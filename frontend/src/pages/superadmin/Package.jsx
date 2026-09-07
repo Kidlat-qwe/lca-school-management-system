@@ -336,6 +336,7 @@ const Package = () => {
 
   // Get unique merchandise types from the fetched merchandise data
   // Optionally filter by branch if branch_id is provided
+  // Exclude types marked Not included in package
   const getUniqueMerchandiseTypes = (branchId = null) => {
     const typeMap = new Map();
     // Filter merchandise by branch if branchId is provided
@@ -345,6 +346,9 @@ const Package = () => {
     
     filteredMerchandise.forEach((item) => {
       if (item.merchandise_name) {
+        if (item.is_package_included === false || item.is_package_included === 0) {
+          return;
+        }
         if (!typeMap.has(item.merchandise_name)) {
           typeMap.set(item.merchandise_name, []);
         }
@@ -622,6 +626,15 @@ const Package = () => {
         const merchandiseItem = merchandise.find(m => m.merchandise_id === merchandiseId);
         if (!merchandiseItem) {
           appAlert('Selected merchandise not found. Please refresh and try again.');
+          return;
+        }
+        if (
+          merchandiseItem.is_package_included === false ||
+          merchandiseItem.is_package_included === 0
+        ) {
+          appAlert(
+            `"${merchandiseItem.merchandise_name}" is marked Not included in package and cannot be added to a package.`
+          );
           return;
         }
       }

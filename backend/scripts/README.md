@@ -4,6 +4,32 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `generateInstallmentInvoiceByEmail.js`
+
+Generate the **next installment invoice** for students listed in `TARGET_STUDENT_EMAILS`
+(same pattern as `hardDeleteStudentsFromClassesAndBilling.js`).
+
+Default target:
+
+```js
+const TARGET_STUDENT_EMAILS = [
+  'it.kier@little-champion.com',
+];
+```
+
+Default is **preview only**. Use `--generate` to create the invoice. If the queue is not due yet, add `--force-due` to set `next_generation_date` to today (Manila). After generate, runs the same monthly notice + AutoPay MIT hooks as the daily scheduler (unless `--skip-email` / `--skip-mit`).
+
+```bash
+# Preview profiles / queue / AutoPay token status
+node backend/scripts/generateInstallmentInvoiceByEmail.js
+
+# Force queue due + generate next invoice (+ MIT if enabled)
+node backend/scripts/generateInstallmentInvoiceByEmail.js --force-due --generate
+
+# Multiple plans: pick one
+node backend/scripts/generateInstallmentInvoiceByEmail.js --profile-id=123 --force-due --generate
+```
+
 ### `diagnoseAndFixClassPackageVisibility.js`
 
 Diagnose why packages do not appear in **Classes → Enroll → Select Package**, using the

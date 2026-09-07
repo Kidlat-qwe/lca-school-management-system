@@ -39,8 +39,11 @@ export function extractFiuuTokenFromWebhook(payload = {}) {
     extraP.CustID ?? extraP.custID ?? extraP.custId ?? payload.CustID ?? ''
   ).trim();
 
-  const bin4 = String(extraP.bin4 ?? extraP.last4 ?? extraP.card_last4 ?? '').trim();
-  const bin = String(extraP.bin ?? '').trim();
+  // FIUU ExtraP uses cclast4 / ccbrand (docs); keep legacy aliases too.
+  const bin4 = String(
+    extraP.cclast4 ?? extraP.bin4 ?? extraP.last4 ?? extraP.card_last4 ?? ''
+  ).trim();
+  const bin = String(extraP.bin ?? extraP.cobin ?? '').trim();
   const cardLast4 =
     bin4 ||
     (bin.length >= 4 ? bin.slice(-4) : '') ||
@@ -50,7 +53,11 @@ export function extractFiuuTokenFromWebhook(payload = {}) {
     token,
     custId,
     cardBrand: String(
-      extraP.card_brand ?? extraP.cardBrand ?? extraP.brand ?? ''
+      extraP.ccbrand ??
+        extraP.card_brand ??
+        extraP.cardBrand ??
+        extraP.brand ??
+        ''
     ).trim(),
     cardLast4,
     expMonth: String(extraP.expMonth ?? extraP.exp_month ?? '').trim().slice(0, 2),

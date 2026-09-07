@@ -596,11 +596,28 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
         );
   const imageUrl = await resolveImageUrl(client, request);
 
+  let packageIncluded = true;
+  try {
+    const flagRes = await client.query(
+      `SELECT is_package_included
+       FROM merchandisestbl
+       WHERE branch_id = $1 AND merchandise_name = $2
+       ORDER BY CASE WHEN quantity IS NULL THEN 0 ELSE 1 END, merchandise_id
+       LIMIT 1`,
+      [request.requested_branch_id, typeName]
+    );
+    if (flagRes.rows.length > 0 && flagRes.rows[0].is_package_included === false) {
+      packageIncluded = false;
+    }
+  } catch {
+    /* column may be missing before migration 148 */
+  }
+
   try {
     const inserted = await client.query(
       `INSERT INTO merchandisestbl
-         (merchandise_name, size, quantity, price, branch_id, image_url, gender, type, remarks, item_name, sku)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (merchandise_name, size, quantity, price, branch_id, image_url, gender, type, remarks, item_name, sku, is_package_included)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING merchandise_id, quantity, merchandise_name`,
       [
         typeName,
@@ -614,6 +631,7 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
         null,
         merchandiseItemName,
         merchandiseSku,
+        packageIncluded,
       ]
     );
 
@@ -633,10 +651,38 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
           `Original: ${msg}`
       );
     }
-    // Migration 133 not applied yet — fall back to remarks identity (Learning Kit legacy)
+    // Migration 133 / 148 not applied yet — fall back
     const missingItemCols =
-      msg.includes('item_name') || msg.includes('sku');
+      msg.includes('item_name') || msg.includes('sku') || msg.includes('is_package_included');
     if (!missingItemCols) throw insertError;
+
+    if (msg.includes('is_package_included') && !msg.includes('item_name') && !msg.includes('sku')) {
+      const inserted = await client.query(
+        `INSERT INTO merchandisestbl
+           (merchandise_name, size, quantity, price, branch_id, image_url, gender, type, remarks, item_name, sku)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING merchandise_id, quantity, merchandise_name`,
+        [
+          typeName,
+          merchandiseSize,
+          qtyToAdd,
+          finalPrice,
+          request.requested_branch_id,
+          imageUrl,
+          merchandiseGender,
+          merchandiseType,
+          null,
+          merchandiseItemName,
+          merchandiseSku,
+        ]
+      );
+      return {
+        action: 'created',
+        merchandiseId: inserted.rows[0].merchandise_id,
+        newQuantity: inserted.rows[0].quantity,
+        merchandiseName: inserted.rows[0].merchandise_name,
+      };
+    }
 
     if (isUniform && (!merchandiseGender || !merchandiseType || !merchandiseSize)) {
       throw new Error(

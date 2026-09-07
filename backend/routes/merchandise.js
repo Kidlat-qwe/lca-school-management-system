@@ -3,7 +3,15 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
-import { PACKAGE_UNIFORM_TYPE_NAMES } from '../lib/merchandiseReleaseLog.js';
+import {
+  PACKAGE_UNIFORM_TYPE_NAMES,
+  insertMerchandiseReleaseLog,
+  MERCH_RELEASE_SOURCE,
+} from '../lib/merchandiseReleaseLog.js';
+import {
+  parseIsPackageIncluded,
+  isMerchandisePackageIncluded,
+} from '../lib/merchandisePackageInclusion.js';
 import {
   issuePendingPackageMerchLine,
   listPendingPackageMerch,
@@ -366,6 +374,7 @@ router.post(
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     body('item_name').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Item name must be a string'),
     body('sku').optional({ nullable: true, checkFalsy: true }).isString().withMessage('SKU must be a string'),
+    body('is_package_included').optional({ nullable: true }),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -412,6 +421,12 @@ router.post(
             ) THEN
               ALTER TABLE merchandisestbl ADD COLUMN sku VARCHAR(64);
             END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'merchandisestbl' AND column_name = 'is_package_included'
+            ) THEN
+              ALTER TABLE merchandisestbl ADD COLUMN is_package_included BOOLEAN NOT NULL DEFAULT true;
+            END IF;
           END $$;
         `);
       } catch (err) {
@@ -426,6 +441,7 @@ router.post(
       const { quantity, price, branch_id, image_url, remarks } = req.body;
       const item_name = String(req.body.item_name || '').trim() || null;
       const sku = String(req.body.sku || '').trim() || null;
+      const is_package_included = parseIsPackageIncluded(req.body.is_package_included, true);
 
       // Learning Kit is allowed as a local type/category (RHET categoryName).
       // Does not create RHET warehouse kits — stock is credited on fulfill.
@@ -536,8 +552,8 @@ router.post(
       }
 
       const result = await query(
-        `INSERT INTO merchandisestbl (merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks, item_name, sku)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO merchandisestbl (merchandise_name, size, quantity, price, branch_id, gender, type, image_url, remarks, item_name, sku, is_package_included)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING *`,
         [
           merchandise_name,
@@ -551,6 +567,7 @@ router.post(
           remarks || null,
           isUniformMerchandiseName(merchandise_name) ? null : item_name,
           isUniformMerchandiseName(merchandise_name) ? null : sku,
+          is_package_included,
         ]
       );
 
@@ -608,6 +625,7 @@ router.put(
     body('remarks').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Remarks must be a string'),
     body('item_name').optional({ nullable: true, checkFalsy: true }).isString().withMessage('Item name must be a string'),
     body('sku').optional({ nullable: true, checkFalsy: true }).isString().withMessage('SKU must be a string'),
+    body('is_package_included').optional({ nullable: true }),
     handleValidationErrors,
   ],
   requireRole('Superadmin', 'Admin'),
@@ -653,6 +671,12 @@ router.put(
               WHERE table_name = 'merchandisestbl' AND column_name = 'sku'
             ) THEN
               ALTER TABLE merchandisestbl ADD COLUMN sku VARCHAR(64);
+            END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns 
+              WHERE table_name = 'merchandisestbl' AND column_name = 'is_package_included'
+            ) THEN
+              ALTER TABLE merchandisestbl ADD COLUMN is_package_included BOOLEAN NOT NULL DEFAULT true;
             END IF;
           END $$;
         `);
@@ -808,6 +832,10 @@ router.put(
               ? null
               : sku
             : undefined,
+        is_package_included:
+          req.body.is_package_included !== undefined
+            ? parseIsPackageIncluded(req.body.is_package_included, true)
+            : undefined,
       };
       Object.entries(fields).forEach(([key, value]) => {
         if (value !== undefined) {
@@ -830,6 +858,23 @@ router.put(
       const sql = `UPDATE merchandisestbl SET ${updates.join(', ')} WHERE merchandise_id = $${paramCount} RETURNING *`;
       const result = await query(sql, params);
 
+      // When package-inclusion changes on a type/stock row, sync all rows of that
+      // category on the same branch so type-level toggle stays consistent.
+      if (req.body.is_package_included !== undefined && result.rows[0]) {
+        const updated = result.rows[0];
+        const flag = parseIsPackageIncluded(updated.is_package_included, true);
+        if (updated.branch_id && updated.merchandise_name) {
+          await query(
+            `UPDATE merchandisestbl
+             SET is_package_included = $1
+             WHERE branch_id = $2
+               AND merchandise_name = $3
+               AND merchandise_id <> $4`,
+            [flag, updated.branch_id, updated.merchandise_name, updated.merchandise_id]
+          );
+        }
+      }
+
       res.json({
         success: true,
         message: 'Merchandise updated successfully',
@@ -837,6 +882,122 @@ router.put(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/merchandise/:id/manual-deduct
+ * Deduct branch stock for types not included in packages (required remarks).
+ * Access: Superadmin, Admin (own branch)
+ */
+router.post(
+  '/:id/manual-deduct',
+  [
+    param('id').isInt().withMessage('Merchandise ID must be an integer'),
+    body('quantity')
+      .exists()
+      .withMessage('Quantity is required')
+      .isInt({ min: 1 })
+      .withMessage('Quantity must be a positive integer'),
+    body('remarks')
+      .exists()
+      .withMessage('Remarks / reason is required')
+      .isString()
+      .trim()
+      .isLength({ min: 3, max: 2000 })
+      .withMessage('Remarks must be 3–2000 characters'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const locked = await client.query(
+        `SELECT * FROM merchandisestbl WHERE merchandise_id = $1 FOR UPDATE`,
+        [req.params.id]
+      );
+      if (locked.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Merchandise not found' });
+      }
+
+      const row = locked.rows[0];
+
+      if (req.user.userType === 'Admin') {
+        if (Number(row.branch_id) !== Number(req.user.branchId)) {
+          await client.query('ROLLBACK');
+          return res.status(403).json({
+            success: false,
+            message: 'You can only deduct stock for your own branch',
+          });
+        }
+      }
+
+      if (isMerchandisePackageIncluded(row)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'This merchandise type is marked Included in package. Use package enroll / Pending issue for stock release, or set the type to Not included in package first.',
+          error: { code: 'PACKAGE_INCLUDED' },
+        });
+      }
+
+      const qty = parseInt(req.body.quantity, 10);
+      const remarks = String(req.body.remarks || '').trim();
+      const available =
+        row.quantity == null || row.quantity === ''
+          ? 0
+          : parseInt(row.quantity, 10) || 0;
+
+      if (available < qty) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Insufficient stock (available: ${available}, requested: ${qty})`,
+          error: { code: 'INSUFFICIENT_STOCK' },
+        });
+      }
+
+      const newQuantity = available - qty;
+      await client.query(`UPDATE merchandisestbl SET quantity = $1 WHERE merchandise_id = $2`, [
+        newQuantity,
+        row.merchandise_id,
+      ]);
+
+      const batchId = `manual-${row.merchandise_id}-${Date.now()}`.slice(0, 80);
+      await insertMerchandiseReleaseLog(client, {
+        releaseBatchId: batchId,
+        source: MERCH_RELEASE_SOURCE.MANUAL_DEDUCT,
+        merchandiseId: row.merchandise_id,
+        quantity: qty,
+        branchId: row.branch_id,
+        merchandiseName: row.merchandise_name,
+        size: row.size,
+        category: row.type || null,
+        createdBy: req.user.userId || req.user.user_id || null,
+        remarks,
+      });
+
+      const refreshed = await client.query(
+        'SELECT * FROM merchandisestbl WHERE merchandise_id = $1',
+        [row.merchandise_id]
+      );
+
+      await client.query('COMMIT');
+      return res.json({
+        success: true,
+        message: `Deducted ${qty} unit(s). New quantity: ${newQuantity}.`,
+        data: refreshed.rows[0],
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      next(error);
+    } finally {
+      client.release();
     }
   }
 );

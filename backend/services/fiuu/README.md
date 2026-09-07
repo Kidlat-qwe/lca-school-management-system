@@ -21,8 +21,9 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 1. Run migrations `136_create_gateway_paymentstbl.sql`, `142_create_fiuu_payment_tokenstbl.sql`, `143_create_fiuu_autodebit_consentstbl.sql`.
 2. Env vars — see `.env.example` (`FIUU_*`, `EMAIL_LOGO_URL`, etc.).
 3. Webhooks: notify / callback / return as before (MIT results use the same CallbackURL).
-4. Enable **Tokenization** + **Recurring** on the MID (FIUU support).
-5. Set `FIUU_AUTOPAY_MIT_ENABLED=true` only after Dev UAT of token save + MIT charge.
+4. Enable **Tokenization** + **Recurring** on the MID (email `support@fiuu.com`). Without Recurring enabled, HPP may still return `extraP.token`, but MIT RecordType `T` fails with **Token not found**.
+5. Default Recurring URL is `https://pay.fiuu.com/RMS/API/Recurring/input_v7.php` (same host as HPP). Override with `FIUU_RECURRING_URL` only if FIUU instructs otherwise.
+6. Set `FIUU_AUTOPAY_MIT_ENABLED=true` only after Dev UAT of token save + MIT charge.
 
 ## Order ID / CustID
 

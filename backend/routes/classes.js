@@ -4973,7 +4973,8 @@ router.post(
         const packageResult = await client.query(
           `SELECT p.*, pd.pricinglist_id, pd.merchandise_id, pd.is_included,
                   pl.name as pricing_name, pl.level_tag as pricing_level_tag, pl.price as pricing_price,
-                  m.merchandise_name, m.size, m.price as merchandise_price, m.quantity as merchandise_quantity
+                  m.merchandise_name, m.size, m.price as merchandise_price, m.quantity as merchandise_quantity,
+                  m.is_package_included
            FROM packagestbl p
            LEFT JOIN packagedetailstbl pd ON p.package_id = pd.package_id
            LEFT JOIN pricingliststbl pl ON pd.pricinglist_id = pl.pricinglist_id
@@ -5332,6 +5333,8 @@ router.post(
           if (pkgDetail.merchandise_id) {
             packageMerchandiseMap.set(pkgDetail.merchandise_id, {
               is_included: pkgDetail.is_included !== false, // Default to true if not set
+              // Type-level flag: not included in package → never auto-issue on enroll
+              is_package_included: pkgDetail.is_package_included !== false,
               merchandise_name: pkgDetail.merchandise_name,
               size: pkgDetail.size,
               price: pkgDetail.merchandise_price,
@@ -5616,6 +5619,7 @@ router.post(
       ) {
         for (const [pkgMerchId, meta] of packageMerchandiseMap.entries()) {
           if (meta && meta.is_included === false) continue;
+          if (meta && meta.is_package_included === false) continue;
           const mid = parseInt(String(pkgMerchId), 10);
           if (!Number.isFinite(mid) || mid <= 0) continue;
 

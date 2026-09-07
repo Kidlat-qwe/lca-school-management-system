@@ -60,7 +60,7 @@ Creating a branch merchandise type is **not** Request Stock and must not invent 
 | Field | Rule |
 |---|---|
 | Category | Required. Exact RHET `categoryName` from catalog proxy. |
-| Image | Required when inventory integration is enabled. |
+| Image | Optional (recommended). Can be added later via Edit Type. |
 | Learning Kit | Hidden from create-type dropdown by default (`excludeLearningKit: true`). |
 | Already added | Pass `excludeNames` so branch types already present are omitted. |
 | Edit type | Image always. Category editable when current name is **not** an exact RHET `categoryName` (`canEditMerchandiseTypeCategory`). Catalog is loaded on edit (not only on create). Aligned types stay locked. |
