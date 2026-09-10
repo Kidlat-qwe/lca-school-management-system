@@ -36,7 +36,7 @@ import {
 } from './applyGatewayInvoicePayment.js';
 import { applyGatewayArPayment } from './applyGatewayArPayment.js';
 import { createFiuuArPayment } from './createFiuuArPayment.js';
-import { captureFiuuTokenFromWebhook, buildFiuuCustId } from './fiuuTokenService.js';
+import { captureFiuuTokenFromWebhook, buildFiuuCustId, resolveFiuuBillingContacts } from './fiuuTokenService.js';
 import { getDroppedEnrollmentPaymentBlock } from '../../utils/rejoinDroppedPhaseSettlement/index.js';
 import {
   resolveInvoiceAutodebitContext,
@@ -188,6 +188,10 @@ export async function createFiuuInvoicePayment({
     initiatorName: initiator_name,
   });
 
+  const billingContacts = await resolveFiuuBillingContacts(student_id);
+  const billMobile =
+    String(student.phone_number || '').trim() || billingContacts.billing_mobile || '';
+
   const vcode = buildPaymentVcode({ amount, orderid, currency });
   const merchantId = getFiuuMerchantId();
   const channelPath = resolveFiuuChannelPath(fiuuChannel);
@@ -198,7 +202,7 @@ export async function createFiuuInvoicePayment({
     orderid,
     bill_name: student.full_name || 'Student',
     bill_email: student.email || '',
-    bill_mobile: student.phone_number || '',
+    bill_mobile: billMobile,
     bill_desc: description,
     currency,
     vcode,
@@ -424,6 +428,8 @@ export async function applyParentAutodebitDecisionOnPayToken(
   formFields = { ...formFields };
 
   // Enabling auto-debit needs Card (CREDIT) so FIUU can return a token.
+  // Also ensure billing mobile is present — empty bill_mobile causes MIT "Token not found"
+  // when FIUU stores a phone on the tokenization profile.
   if (accepted) {
     const amount = formFields.amount;
     const orderid = formFields.orderid || row.orderid;
@@ -431,6 +437,24 @@ export async function applyParentAutodebitDecisionOnPayToken(
     formFields.channel = 'CREDIT';
     formFields.vcode = buildPaymentVcode({ amount, orderid, currency });
     meta.channel = 'CREDIT';
+
+    if (!String(formFields.bill_mobile || '').trim() && row.student_id) {
+      try {
+        const contacts = await resolveFiuuBillingContacts(row.student_id);
+        if (contacts.billing_mobile) {
+          formFields.bill_mobile = contacts.billing_mobile;
+        }
+      } catch (err) {
+        console.warn('[fiuu] bill_mobile fill on AutoPay accept failed:', err?.message || err);
+      }
+    }
+    if (
+      !String(formFields.bill_mobile || '').trim() &&
+      String(meta.autopay_otp_channel || '').toLowerCase() === 'sms' &&
+      meta.autopay_otp_contact
+    ) {
+      formFields.bill_mobile = String(meta.autopay_otp_contact).trim();
+    }
   }
 
   await query(

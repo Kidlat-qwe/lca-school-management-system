@@ -2821,6 +2821,346 @@ router.post(
 );
 
 /**
+ * POST /api/sms/installment-invoices/profiles/:id/advance-draft
+ *
+ * Create an Unpaid advance invoice for the next unbilled phase (no payment row)
+ * so staff can collect via FIUU Pay now / email link. Advances generated_count +
+ * schedule the same as advance-pay; enrollment waits until FIUU/manual payment.
+ *
+ * Access: Superadmin, Admin, Finance, Superfinance
+ */
+router.post(
+  '/profiles/:id/advance-draft',
+  [
+    param('id').isInt().withMessage('Profile ID must be an integer'),
+    body('phase_index')
+      .isInt({ min: 1 })
+      .withMessage('phase_index must be a positive integer (1-based profile-local phase)'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin', 'Finance', 'Superfinance'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      const { id } = req.params;
+      const phaseIdx = parseInt(req.body.phase_index, 10);
+
+      const profileRes = await client.query(
+        `SELECT ip.*,
+                ii.installmentinvoicedtl_id,
+                ii.next_generation_date      AS sched_next_gen_date,
+                ii.next_invoice_month        AS sched_next_inv_month,
+                ii.frequency                 AS ii_frequency,
+                ii.total_amount_including_tax,
+                ii.total_amount_excluding_tax
+         FROM installmentinvoiceprofilestbl ip
+         LEFT JOIN installmentinvoicestbl ii
+           ON ii.installmentinvoiceprofiles_id = ip.installmentinvoiceprofiles_id
+         WHERE ip.installmentinvoiceprofiles_id = $1
+         ORDER BY ii.installmentinvoicedtl_id DESC
+         LIMIT 1`,
+        [id]
+      );
+
+      if (profileRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Installment profile not found' });
+      }
+
+      const profile = profileRes.rows[0];
+
+      if (
+        req.user?.userType !== 'Superadmin' &&
+        req.user?.branchId &&
+        profile.branch_id != null &&
+        Number(profile.branch_id) !== Number(req.user.branchId)
+      ) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ success: false, message: 'Access denied for this branch' });
+      }
+
+      const totalPhases = profile.total_phases != null ? parseInt(profile.total_phases, 10) : null;
+      const { loadInstallmentProfilePhaseChains } = await import(
+        '../lib/installmentPaymentEligibility.js'
+      );
+      const { phaseChains } = await loadInstallmentProfilePhaseChains(client, id);
+      const targetMapped = mapPhaseChainsToLocalSlots(phaseChains, profile);
+      const activeEnrollmentAbsolutePhases =
+        profile.student_id != null && profile.class_id != null
+          ? await loadActiveEnrollmentAbsolutePhases(
+              client,
+              Number(profile.student_id),
+              Number(profile.class_id)
+            )
+          : new Set();
+      const firstBillableAbsolutePhase = resolveFirstBillableAbsolutePhase(
+        profile,
+        activeEnrollmentAbsolutePhases,
+        phaseChains
+      );
+      const nextUnbilledLocal = findNextUnbilledLocalPhase(
+        targetMapped,
+        totalPhases,
+        profile,
+        activeEnrollmentAbsolutePhases,
+        firstBillableAbsolutePhase
+      );
+
+      if (nextUnbilledLocal == null) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'All installment phases are already billed for this plan.',
+        });
+      }
+
+      if (phaseIdx !== nextUnbilledLocal) {
+        await client.query('ROLLBACK');
+        const phaseStartAdv = resolveProfilePhaseStart(profile);
+        const nextAbsolute = phaseStartAdv + nextUnbilledLocal - 1;
+        return res.status(400).json({
+          success: false,
+          message: `Advance draft must be for the next unbilled phase (Phase ${nextAbsolute}, profile slot ${nextUnbilledLocal}).`,
+        });
+      }
+
+      const generatedCount = generatedCountForNextLocalPhase(nextUnbilledLocal);
+      if (totalPhases !== null && phaseIdx > totalPhases) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: `Phase ${phaseIdx} exceeds the total phase count (${totalPhases}).`,
+        });
+      }
+
+      const advancePriorBlock = await getAdvancePayPriorPartialBlockers(client, id, phaseIdx);
+      if (advancePriorBlock.blocked) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: advancePriorBlock.message,
+          prior_partial_balance_block: advancePriorBlock,
+        });
+      }
+
+      const phaseStart = resolveProfilePhaseStart(profile);
+      const absolutePhaseNumber = phaseStart + (phaseIdx - 1);
+      const advanceRemarks = `Advance payment — Phase ${absolutePhaseNumber};TARGET_PHASE:${absolutePhaseNumber} (profile #${id})`;
+
+      // Reuse an open unpaid advance invoice for this phase if staff re-opens FIUU.
+      const existingDraft = await client.query(
+        `SELECT i.invoice_id, i.amount, i.status, i.issue_date, i.due_date, i.invoice_ar_number
+         FROM invoicestbl i
+         WHERE i.installmentinvoiceprofiles_id = $1
+           AND i.status = 'Unpaid'
+           AND COALESCE(i.remarks, '') LIKE $2
+         ORDER BY i.invoice_id DESC
+         LIMIT 1`,
+        [id, `Advance payment — Phase ${absolutePhaseNumber};%`]
+      );
+      if (existingDraft.rows[0]) {
+        await client.query('COMMIT');
+        const row = existingDraft.rows[0];
+        return res.json({
+          success: true,
+          message: `Existing unpaid advance invoice for Phase ${absolutePhaseNumber}.`,
+          data: {
+            invoice_id: row.invoice_id,
+            invoice_ar_number: row.invoice_ar_number || null,
+            phase_index: phaseIdx,
+            absolute_phase_number: absolutePhaseNumber,
+            amount: Number(row.amount || 0),
+            issue_date: coerceToManilaYmd(row.issue_date, { fallbackToToday: true }),
+            due_date: coerceToManilaYmd(row.due_date, { fallbackToToday: false }),
+            reused: true,
+          },
+        });
+      }
+
+      const frequency = profile.ii_frequency || profile.frequency || '1 month(s)';
+      const freqMonths = parseFrequency(frequency);
+      let issueDateYmd = todayYmdManila();
+      let dueDateYmd = null;
+
+      if (isPhaseInstallmentProfile(profile)) {
+        const phaseSchedule = await buildPhaseInstallmentSchedule({
+          db: client,
+          profile: {
+            class_id: profile.class_id,
+            phase_start: profile.phase_start,
+            total_phases: profile.total_phases,
+            generated_count: profile.generated_count,
+            next_generation_date: profile.sched_next_gen_date || null,
+            next_invoice_month: profile.sched_next_inv_month || null,
+          },
+          generatedCountOverride: generatedCount,
+          issueDateOverride: todayYmdManila(),
+        });
+        dueDateYmd = phaseSchedule?.current_due_date || null;
+        if (phaseSchedule?.current_issue_date) {
+          issueDateYmd = phaseSchedule.current_issue_date;
+        }
+      }
+
+      if (!dueDateYmd) {
+        const nextGenRaw = profile.sched_next_gen_date || new Date();
+        const nextGenBase =
+          typeof nextGenRaw === 'string'
+            ? (() => {
+                const [y, m, d] = nextGenRaw.slice(0, 10).split('-').map(Number);
+                return new Date(y, m - 1, d, 12, 0, 0, 0);
+              })()
+            : new Date(nextGenRaw);
+        const extraMonths = (phaseIdx - (generatedCount + 1)) * freqMonths;
+        const phaseAnchor = new Date(nextGenBase);
+        phaseAnchor.setMonth(phaseAnchor.getMonth() + extraMonths);
+        phaseAnchor.setDate(25);
+        const dueDate = new Date(phaseAnchor);
+        dueDate.setMonth(dueDate.getMonth() + 1);
+        dueDate.setDate(5);
+        dueDateYmd = formatYmdLocal(dueDate);
+      }
+
+      const invoiceAmount = Number(profile.amount || 0);
+      const creatorUserId = req.user.userId || req.user.user_id || null;
+
+      const newInvoice = await insertInvoiceWithArNumber(
+        client,
+        `INSERT INTO invoicestbl
+           (invoice_description, branch_id, amount, status, remarks, issue_date, due_date,
+            created_by, installmentinvoiceprofiles_id, invoice_ar_number)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          'TEMP',
+          profile.branch_id || null,
+          invoiceAmount,
+          'Unpaid',
+          advanceRemarks,
+          issueDateYmd,
+          dueDateYmd,
+          creatorUserId,
+          parseInt(id, 10),
+        ]
+      );
+
+      await client.query(
+        'UPDATE invoicestbl SET invoice_description = $1 WHERE invoice_id = $2',
+        [`INV-${newInvoice.invoice_id}`, newInvoice.invoice_id]
+      );
+
+      await client.query(
+        `INSERT INTO invoiceitemstbl (invoice_id, description, amount)
+         VALUES ($1, $2, $3)`,
+        [
+          newInvoice.invoice_id,
+          `Installment Phase ${absolutePhaseNumber} — advance payment`,
+          invoiceAmount,
+        ]
+      );
+
+      await client.query(
+        'INSERT INTO invoicestudentstbl (invoice_id, student_id) VALUES ($1, $2)',
+        [newInvoice.invoice_id, profile.student_id]
+      );
+
+      await syncProgramPaymentStatusForInvoice(client, newInvoice.invoice_id);
+
+      // Advance schedule so the next phase is not auto-generated for the same cycle.
+      const newGeneratedCount = phaseIdx;
+      const isLastPhase = totalPhases !== null && newGeneratedCount >= totalPhases;
+
+      if (profile.installmentinvoicedtl_id) {
+        let newNextGenYmd = null;
+        let newNextInvMonthYmd = null;
+
+        if (!isLastPhase) {
+          const currentGenYmd = coerceToManilaYmd(profile.sched_next_gen_date, {
+            fallbackToToday: false,
+          });
+
+          if (currentGenYmd) {
+            const advanced = advanceInstallmentQueueByOneCycle(currentGenYmd, freqMonths);
+            newNextGenYmd = advanced.next_generation_date;
+            newNextInvMonthYmd = advanced.next_invoice_month;
+          } else if (isPhaseInstallmentProfile(profile)) {
+            const nextSched = await buildPhaseInstallmentSchedule({
+              db: client,
+              profile: {
+                class_id: profile.class_id,
+                phase_start: profile.phase_start,
+                total_phases: profile.total_phases,
+                generated_count: newGeneratedCount,
+                next_generation_date: profile.sched_next_gen_date || null,
+                next_invoice_month: profile.sched_next_inv_month || null,
+              },
+              generatedCountOverride: newGeneratedCount,
+            });
+            const useFirstPhaseQueue = newGeneratedCount === 1;
+            newNextGenYmd = useFirstPhaseQueue
+              ? nextSched?.next_generation_date || nextSched?.current_generation_date || null
+              : nextSched?.current_generation_date || null;
+            newNextInvMonthYmd = useFirstPhaseQueue
+              ? nextSched?.next_invoice_month || nextSched?.current_invoice_month || null
+              : nextSched?.current_invoice_month || null;
+          } else {
+            const nextGenBase = new Date();
+            const newNextGen = new Date(nextGenBase);
+            newNextGen.setMonth(newNextGen.getMonth() + freqMonths);
+            newNextGen.setDate(25);
+            const newNextInvMonth = new Date(newNextGen);
+            newNextInvMonth.setDate(1);
+            newNextInvMonth.setMonth(newNextInvMonth.getMonth() + 1);
+            newNextGenYmd = formatYmdLocal(newNextGen);
+            newNextInvMonthYmd = formatYmdLocal(newNextInvMonth);
+          }
+        }
+
+        await client.query(
+          `UPDATE installmentinvoicestbl
+           SET status = NULL, next_generation_date = $1, next_invoice_month = $2
+           WHERE installmentinvoicedtl_id = $3`,
+          [newNextGenYmd, newNextInvMonthYmd, profile.installmentinvoicedtl_id]
+        );
+      }
+
+      await client.query(
+        `UPDATE installmentinvoiceprofilestbl
+         SET generated_count = $1 ${isLastPhase ? ', is_active = false' : ''}
+         WHERE installmentinvoiceprofiles_id = $2`,
+        [newGeneratedCount, id]
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        success: true,
+        message: `Unpaid advance invoice created for Phase ${absolutePhaseNumber}. Pay via FIUU to settle.`,
+        data: {
+          invoice_id: newInvoice.invoice_id,
+          invoice_ar_number: newInvoice.invoice_ar_number || null,
+          phase_index: phaseIdx,
+          absolute_phase_number: absolutePhaseNumber,
+          amount: invoiceAmount,
+          issue_date: issueDateYmd,
+          due_date: dueDateYmd,
+          new_generated_count: newGeneratedCount,
+          is_last_phase: isLastPhase,
+          reused: false,
+        },
+      });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      return next(err);
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/**
  * POST /api/sms/installment-invoices/program-payment-status/sync-all
  *
  * One-time or periodic backfill: rebuilds program_payment_statustbl from

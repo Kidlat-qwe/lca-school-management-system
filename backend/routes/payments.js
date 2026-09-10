@@ -15,7 +15,7 @@ import {
   getPhaseDueDateYmd,
   isPhaseInstallmentProfile,
 } from '../utils/phaseInstallmentUtils.js';
-import { paymentLogApprovalFromArVerification } from '../lib/paymentLogArApproval.js';
+import { paymentLogApprovalFromArVerification, isFiuuPaymentMethod } from '../lib/paymentLogArApproval.js';
 import {
   syncArUnverifiedFromPaymentRevoke,
   syncArVerifiedFromPaymentApproval,
@@ -1830,6 +1830,7 @@ router.get(
                           ar.payment_attachment_url,
                           ar.level_tag,
                           ar.status,
+                          ar.payment_method,
                           ar.verified_by_user_id,
                           TO_CHAR(ar.verified_at, 'YYYY-MM-DD HH24:MI:SS') as verified_at,
                           ${paymentCreatedAtSelectSql('ar.created_at', 'created_at')},
@@ -1926,23 +1927,37 @@ router.get(
       arSql += ` ORDER BY ar.issue_date DESC, ar.ack_receipt_id DESC`;
       let arRows = [];
       // Unapplied package AR (Submitted or Verified): Payment Logs approval when Finance verified (not Admin).
-      const includeUnappliedAr = !pmFilter || pmFilter === 'Acknowledgement Receipt';
+      // FIUU package ARs also appear here as Pending until Finance verifies.
+      const includeUnappliedAr =
+        !pmFilter ||
+        pmFilter === 'Acknowledgement Receipt' ||
+        isFiuuPaymentMethod(pmFilter);
       if (includeUnappliedAr) {
         const arRes = await query(arSql, arParams);
         arRows = (arRes.rows || []).map((row) => {
           const plApproval = paymentLogApprovalFromArVerification(row);
+          const isFiuuAr = isFiuuPaymentMethod(row.payment_method);
+          // When filtering by a specific FIUU method label, skip non-matching unapplied rows.
+          if (pmFilter && isFiuuPaymentMethod(pmFilter) && !isFiuuAr) {
+            return null;
+          }
+          if (pmFilter === 'Acknowledgement Receipt' && isFiuuAr) {
+            return null;
+          }
           return {
             payment_id: `AR-${row.ack_receipt_id}`,
             invoice_id: null,
             student_id: null,
             branch_id: row.branch_id,
-            payment_method: 'Acknowledgement Receipt',
+            payment_method: isFiuuAr ? 'FIUU Online' : 'Acknowledgement Receipt',
             payment_type: 'Unapplied Acknowledgement Receipt',
             payable_amount: Number(row.payment_amount || 0) + Number(row.tip_amount || 0),
             issue_date: row.issue_date,
             status: row.status || 'Submitted',
             reference_number: row.reference_number,
-            remarks: 'Awaiting enrollment attachment',
+            remarks: isFiuuAr
+              ? 'Awaiting enrollment attachment | Awaiting Finance verification (FIUU)'
+              : 'Awaiting enrollment attachment',
             payment_attachment_url: row.payment_attachment_url,
             created_by: row.created_by,
             created_at: row.created_at,
@@ -1970,7 +1985,7 @@ router.get(
             source_id: `AR-${row.ack_receipt_id}`,
             sort_id: Number(row.ack_receipt_id) || 0,
           };
-        });
+        }).filter(Boolean);
         if (approvalStatusFilter === 'Approved') {
           arRows = arRows.filter((r) => r.approval_status === 'Approved');
         } else if (pendingOnly) {

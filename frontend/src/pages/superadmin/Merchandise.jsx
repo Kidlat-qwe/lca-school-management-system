@@ -28,9 +28,12 @@ import TrackRequestProgressModal from '../../components/merchandise/TrackRequest
 import RequestQuantityDisplay from '../../components/merchandise/RequestQuantityDisplay';
 import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu';
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
+import BranchInventoryCategoryTabs from '../../components/merchandise/BranchInventoryCategoryTabs';
 import {
   isMerchandisePackageIncluded,
   parseIsPackageIncluded,
+  BRANCH_INVENTORY_CATEGORY_TABS,
+  filterTypesByInventoryCategoryTab,
 } from '../../utils/merchandisePackageInclusion';
 import FixedTablePagination, {
   TablePaginationSummary,
@@ -114,6 +117,10 @@ const Merchandise = () => {
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('branches'); // 'branches' | 'requests' | 'pending' | 'logs'
+  /** Merchandise vs Supplies on branch card grid. */
+  const [branchInventoryTab, setBranchInventoryTab] = useState(
+    BRANCH_INVENTORY_CATEGORY_TABS.MERCHANDISE
+  );
   const [requestStatusModule, setRequestStatusModule] = useState(DEFAULT_REQUEST_STATUS_MODULE);
   /** Page number per status module so switching tabs keeps each module's page. */
   const [requestModulePageByStatus, setRequestModulePageByStatus] = useState({});
@@ -308,6 +315,7 @@ const Merchandise = () => {
     setSelectedBranchName(branchName);
     setViewingStocksFor(null); // Reset stocks view
     setStockFilters({ gender: '', type: '', size: '' });
+    setBranchInventoryTab(BRANCH_INVENTORY_CATEGORY_TABS.MERCHANDISE);
   };
 
   const handleBackToBranches = () => {
@@ -316,6 +324,7 @@ const Merchandise = () => {
     setMerchandise([]);
     setViewingStocksFor(null);
     setStockFilters({ gender: '', type: '', size: '' });
+    setBranchInventoryTab(BRANCH_INVENTORY_CATEGORY_TABS.MERCHANDISE);
   };
 
   const handleViewStocks = (merchandiseName) => {
@@ -1090,6 +1099,10 @@ const Merchandise = () => {
   };
 
   const merchandiseTypeList = getUniqueMerchandiseTypes();
+  const visibleMerchandiseTypes = filterTypesByInventoryCategoryTab(
+    merchandiseTypeList,
+    branchInventoryTab
+  );
   const createTypeCategoryOptions = getCreateMerchandiseCategoryOptions(inventoryCatalog, {
     excludeLearningKit: true,
     excludeNames: merchandiseTypeList.map((t) => t.name),
@@ -2604,10 +2617,15 @@ const Merchandise = () => {
           </div>
         )}
 
-        {/* Merchandise Types List - Card Grid */}
-        {getUniqueMerchandiseTypes().length > 0 ? (
+        <BranchInventoryCategoryTabs
+          value={branchInventoryTab}
+          onChange={setBranchInventoryTab}
+        />
+
+        {/* Merchandise / Supplies Types List - Card Grid */}
+        {visibleMerchandiseTypes.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-            {getUniqueMerchandiseTypes().map((merchType) => (
+            {visibleMerchandiseTypes.map((merchType) => (
               <div
                 key={merchType.name}
                 className="relative bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200 border border-gray-200"
@@ -2737,10 +2755,13 @@ const Merchandise = () => {
         ) : (
           <div className="bg-white rounded-lg shadow p-12 text-center">
             <p className="text-gray-500">
-              No merchandise types found for this branch.
-              {ADD_MERCHANDISE_TYPE_ENABLED
-                ? ' Click "Add Merchandise Type" to create one.'
-                : ' Adding new types is temporarily disabled until inventory deployment is complete.'}
+              {branchInventoryTab === BRANCH_INVENTORY_CATEGORY_TABS.SUPPLIES
+                ? 'No supplies (not in package) found for this branch.'
+                : 'No merchandise types found for this branch.'}
+              {branchInventoryTab !== BRANCH_INVENTORY_CATEGORY_TABS.SUPPLIES &&
+                (ADD_MERCHANDISE_TYPE_ENABLED
+                  ? ' Click "Add Merchandise Type" to create one.'
+                  : ' Adding new types is temporarily disabled until inventory deployment is complete.')}
             </p>
           </div>
         )}
@@ -2961,7 +2982,7 @@ const Merchandise = () => {
                           onClick={() => handleViewMerch(branch.branch_id, branch.branch_name)}
                           className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
                         >
-                          View Merch
+                          View Stocks
                         </button>
                       </td>
                     </tr>

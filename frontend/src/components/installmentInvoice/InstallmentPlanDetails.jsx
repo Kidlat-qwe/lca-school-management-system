@@ -36,6 +36,8 @@ import InvoicePaymentDueStatusBadge from '../invoices/InvoicePaymentDueStatusBad
 import { PaymentDiscountField, PaymentTipField } from '../common/PaymentAdjustmentFields';
 import PaymentMethodSelect from '../common/PaymentMethodSelect';
 import PaymentReferenceNumberField from '../common/PaymentReferenceNumberField';
+import FiuuPayOnlinePanel from '../payments/FiuuPayOnlinePanel';
+import { FIUU_PAYMENT_UI_ENABLED, fetchFiuuConfig } from '../../utils/fiuuPayment';
 import {
   INSTALLMENT_PARTIAL_PAYMENT_ENROLLMENT_HINT,
   PAYMENT_DISCOUNT_ADJUSTMENT_LABEL,
@@ -53,8 +55,8 @@ import {
  *   - phases table (every phase: paid, unpaid, or not yet generated)
  *   - totals card (outstanding balance, total paid by student)
  *   - **Pay Now** on the first actionable phase: **existing** unpaid invoice
- *     via `POST /payments`, or **advance** on the next not-yet-generated phase
- *     via `POST .../advance-pay`
+ *     via `POST /payments` or **Pay via FIUU** (when enabled), or **advance** on the next not-yet-generated phase
+ *     via `POST .../advance-pay` (manual) or **Pay via FIUU** (`POST .../advance-draft` then HPP/email link)
  *   - After an **unpaid dropped** phase with **no continue**, later slots show
  *     Locked and a **Rejoin** button appears. Target phases start **after** the
  *     dropped phase (drop P2 → min P3), also respecting the class schedule floor.
@@ -137,6 +139,10 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   const [apSubmitting, setApSubmitting] = useState(false);
   const [apAttachUploading, setApAttachUploading] = useState(false);
   const apModalRef = useRef(null);
+  /** 'manual' | 'fiuu' — FIUU for existing unpaid invoice or advance (creates unpaid draft first). */
+  const [paymentEntryMode, setPaymentEntryMode] = useState('manual');
+  const [fiuuEnabled, setFiuuEnabled] = useState(false);
+  const [advanceDraftLoading, setAdvanceDraftLoading] = useState(false);
 
   const [paymentRecordedSummary, setPaymentRecordedSummary] = useState(null);
   const [paymentRecordedPdfLoading, setPaymentRecordedPdfLoading] = useState(false);
@@ -247,6 +253,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
         : Number(payload.amount ?? 0);
 
     setPaymentModal({ ...payload, payment_due_status_label: paymentDueStatusLabel });
+    setPaymentEntryMode('manual');
     setApForm({
       payment_method: '',
       payment_type:
@@ -270,8 +277,32 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
   const closePaymentModal = useCallback(() => {
     if (apSubmitting) return;
     setPaymentModal(null);
+    setPaymentEntryMode('manual');
+    setAdvanceDraftLoading(false);
     setApFormErrors({});
   }, [apSubmitting]);
+
+  useEffect(() => {
+    const canOfferFiuu =
+      Boolean(paymentModal) &&
+      (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') &&
+      FIUU_PAYMENT_UI_ENABLED;
+    if (!canOfferFiuu) {
+      setFiuuEnabled(false);
+      return undefined;
+    }
+    let cancelled = false;
+    fetchFiuuConfig()
+      .then((cfg) => {
+        if (!cancelled) setFiuuEnabled(Boolean(cfg?.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setFiuuEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentModal]);
 
   const handleApInput = useCallback((e) => {
     const { name, value } = e.target;
@@ -418,6 +449,108 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
     });
   }, []);
 
+  const handleFiuuPaymentSuccess = useCallback(
+    async ({ amount }) => {
+      const paidInvoiceId = paymentModal?.invoice_id;
+      const studentId = data?.profile?.student_id;
+      if (!paidInvoiceId || studentId == null) return;
+
+      setPaymentModal(null);
+      setPaymentEntryMode('manual');
+      await fetchPhases();
+
+      try {
+        await loadPaymentRecordedSummary(
+          paidInvoiceId,
+          {
+            student_id: studentId,
+            payable_amount: parseFloat(amount) || 0,
+            discount_amount: 0,
+            tip_amount: 0,
+            issue_date: todayManilaYMD(),
+            reference_number: '',
+          },
+          data?.profile?.branch_id
+        );
+      } catch (fetchErr) {
+        console.error('Error loading invoice after FIUU payment:', fetchErr);
+        appAlert('Payment received via FIUU. Refresh the page if the summary does not appear.');
+      }
+    },
+    [
+      paymentModal,
+      data?.profile?.student_id,
+      data?.profile?.branch_id,
+      fetchPhases,
+      loadPaymentRecordedSummary,
+    ]
+  );
+
+  const handleFiuuLinkSent = useCallback(async () => {
+    setPaymentModal(null);
+    setPaymentEntryMode('manual');
+    await fetchPhases();
+  }, [fetchPhases]);
+
+  const selectFiuuPaymentEntry = useCallback(async () => {
+    if (!paymentModal || !profileId) return;
+
+    if (paymentModal.mode === 'invoice' && paymentModal.invoice_id != null) {
+      setPaymentEntryMode('fiuu');
+      return;
+    }
+
+    if (paymentModal.mode !== 'advance') {
+      appAlert('Pay via FIUU is only available for existing invoices or advance (not generated) phases.');
+      return;
+    }
+
+    if (paymentModal.invoice_id != null) {
+      setPaymentEntryMode('fiuu');
+      return;
+    }
+
+    try {
+      setAdvanceDraftLoading(true);
+      const draftRes = await apiRequest(
+        `/installment-invoices/profiles/${profileId}/advance-draft`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            phase_index: paymentModal.phase_number,
+          }),
+        }
+      );
+      const draft = draftRes?.data;
+      if (!draft?.invoice_id) {
+        throw new Error(draftRes?.message || 'Failed to create advance invoice for FIUU.');
+      }
+      setPaymentModal((prev) =>
+        prev
+          ? {
+              ...prev,
+              invoice_id: draft.invoice_id,
+              amount: draft.amount ?? prev.amount,
+              outstanding: draft.amount ?? prev.outstanding ?? prev.amount,
+            }
+          : prev
+      );
+      setApForm((prev) => ({
+        ...prev,
+        payment_type: 'Full Payment',
+        payable_amount: String(draft.amount ?? paymentModal.amount ?? prev.payable_amount),
+      }));
+      setPaymentEntryMode('fiuu');
+      await fetchPhases();
+    } catch (err) {
+      console.error('Advance draft for FIUU failed:', err);
+      appAlert(err?.message || 'Could not create advance invoice for FIUU. Please try again.');
+      setPaymentEntryMode('manual');
+    } finally {
+      setAdvanceDraftLoading(false);
+    }
+  }, [paymentModal, profileId, fetchPhases]);
+
   const submitPaymentModal = useCallback(async (e) => {
     e?.preventDefault();
     const studentId = data?.profile?.student_id;
@@ -438,12 +571,16 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       errors.tip_amount = 'Must be a valid number.';
 
     const invoiceOutstanding =
-      paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+      paymentModal.mode === 'invoice' ||
+      paymentModal.mode === 'rejoin' ||
+      (paymentModal.mode === 'advance' && paymentModal.invoice_id != null)
         ? Number(paymentModal.outstanding ?? paymentModal.amount ?? 0)
         : 0;
     const phasePayableAmount = Number(paymentModal.amount ?? 0);
     const grossPayable =
-      paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin'
+      paymentModal.mode === 'invoice' ||
+      paymentModal.mode === 'rejoin' ||
+      (paymentModal.mode === 'advance' && paymentModal.invoice_id != null)
         ? parseFloat(apForm.payable_amount) || 0
         : apForm.payment_type === 'Partial Payment'
           ? parseFloat(apForm.payable_amount) || 0
@@ -461,7 +598,8 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
         errors.payable_amount = 'Payable amount must be greater than 0';
       } else if (
         apForm.payment_type === 'Partial Payment' &&
-        paymentModal.mode === 'invoice' &&
+        (paymentModal.mode === 'invoice' ||
+          (paymentModal.mode === 'advance' && paymentModal.invoice_id != null)) &&
         invoiceOutstanding > 0 &&
         grossPayable >= invoiceOutstanding
       ) {
@@ -470,6 +608,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
       } else if (
         apForm.payment_type === 'Partial Payment' &&
         paymentModal.mode === 'advance' &&
+        paymentModal.invoice_id == null &&
         phasePayableAmount > 0 &&
         grossPayable >= phasePayableAmount
       ) {
@@ -567,7 +706,10 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               `Rejoin payment for Phase ${modalSnap.absolute} recorded successfully.`
           );
         }
-      } else if (modalSnap.mode === 'invoice') {
+      } else if (
+        modalSnap.mode === 'invoice' ||
+        (modalSnap.mode === 'advance' && modalSnap.invoice_id != null)
+      ) {
         if (!Number.isFinite(grossPayable) || grossPayable < 0.01) {
           setApFormErrors({ _general: 'Invalid amount to pay for this phase.' });
           setApSubmitting(false);
@@ -1550,9 +1692,11 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       ? (paymentModal.outstanding ?? paymentModal.amount ?? 0)
                       : (paymentModal.amount || 0),
                   )}
-                  {paymentModal.mode === 'invoice' && paymentModal.invoice_id != null && (
+                  {paymentModal.invoice_id != null &&
+                    (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') && (
                     <span className="block text-xs text-gray-400 mt-0.5">
                       Invoice #{paymentModal.invoice_id}
+                      {paymentModal.mode === 'advance' ? ' (advance draft)' : ''}
                     </span>
                   )}
                   {paymentModal.mode === 'rejoin' && (
@@ -1567,7 +1711,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               <button
                 type="button"
                 onClick={closePaymentModal}
-                disabled={apSubmitting}
+                disabled={apSubmitting || advanceDraftLoading}
                 className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1576,7 +1720,61 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
               </button>
             </div>
 
-            {/* Form */}
+            {fiuuEnabled &&
+            (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') ? (
+              <div className="px-6 pt-4 flex flex-wrap gap-2 border-b border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setPaymentEntryMode('manual')}
+                  disabled={advanceDraftLoading}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md ${
+                    paymentEntryMode === 'manual'
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Manual payment
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void selectFiuuPaymentEntry();
+                  }}
+                  disabled={advanceDraftLoading}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md disabled:opacity-60 ${
+                    paymentEntryMode === 'fiuu'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                  }`}
+                >
+                  {advanceDraftLoading ? 'Preparing FIUU…' : 'Pay via FIUU'}
+                </button>
+              </div>
+            ) : null}
+
+            {advanceDraftLoading ? (
+              <div className="p-6 text-sm text-gray-600">
+                Creating unpaid advance invoice for FIUU…
+              </div>
+            ) : fiuuEnabled &&
+              (paymentModal.mode === 'invoice' || paymentModal.mode === 'advance') &&
+              paymentEntryMode === 'fiuu' &&
+              paymentModal.invoice_id != null ? (
+              <div className="p-6">
+                <FiuuPayOnlinePanel
+                  invoice={{
+                    invoice_id: paymentModal.invoice_id,
+                    amount: paymentModal.outstanding ?? paymentModal.amount,
+                    installmentinvoiceprofiles_id: profileId,
+                  }}
+                  studentId={data?.profile?.student_id}
+                  defaultEmail={data?.profile?.student_email || ''}
+                  onPaid={handleFiuuPaymentSuccess}
+                  onLinkSent={handleFiuuLinkSent}
+                  onCancel={() => setPaymentEntryMode('manual')}
+                />
+              </div>
+            ) : (
             <form onSubmit={submitPaymentModal} className="p-6 space-y-6">
               <div className="space-y-4">
                 {/* Payment Type + Payment Method */}
@@ -1593,10 +1791,14 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                       className={`input-field text-sm ${apFormErrors.payment_type ? 'border-red-500' : ''}`}
                       required
                     >
-                      {paymentModal.mode === 'invoice' || paymentModal.mode === 'rejoin' ? (
+                      {paymentModal.mode === 'invoice' ||
+                      paymentModal.mode === 'rejoin' ||
+                      (paymentModal.mode === 'advance' && paymentModal.invoice_id != null) ? (
                         <>
                           <option value="Full Payment">Full Payment</option>
-                          {paymentModal.mode === 'invoice' && (
+                          {(paymentModal.mode === 'invoice' ||
+                            (paymentModal.mode === 'advance' &&
+                              paymentModal.invoice_id != null)) && (
                             <option value="Partial Payment">Partial Payment</option>
                           )}
                         </>
@@ -1935,6 +2137,7 @@ const InstallmentPlanDetails = ({ profileId, showStudentName = true, embedded = 
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>,
         document.body

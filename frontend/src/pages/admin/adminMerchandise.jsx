@@ -27,9 +27,12 @@ import RequestActionsMenu from '../../components/merchandise/RequestActionsMenu'
 import MerchandiseRequestStatusModules from '../../components/merchandise/MerchandiseRequestStatusModules';
 import ReturnStockModal from '../../components/merchandise/ReturnStockModal';
 import ManualDeductStockModal from '../../components/merchandise/ManualDeductStockModal';
+import BranchInventoryCategoryTabs from '../../components/merchandise/BranchInventoryCategoryTabs';
 import { useConfirmDelivery } from '../../contexts/confirmDelivery';
 import {
   isMerchandisePackageIncluded,
+  BRANCH_INVENTORY_CATEGORY_TABS,
+  filterTypesByInventoryCategoryTab,
 } from '../../utils/merchandisePackageInclusion';
 import FixedTablePagination, {
   TablePaginationSummary,
@@ -160,6 +163,10 @@ const AdminMerchandise = () => {
   const [openMenuId, setOpenMenuId] = useState(null); // Track which merchandise type's menu is open
   const [menuPosition, setMenuPosition] = useState({ top: 0, right: 0 });
   const [activeTab, setActiveTab] = useState('inventory'); // 'inventory' | 'requests' | 'pending' | 'logs'
+  /** Merchandise vs Supplies on inventory card grid. */
+  const [branchInventoryTab, setBranchInventoryTab] = useState(
+    BRANCH_INVENTORY_CATEGORY_TABS.MERCHANDISE
+  );
   const [requestStatusModule, setRequestStatusModule] = useState(DEFAULT_REQUEST_STATUS_MODULE);
   /** Page number per status module so switching tabs keeps each module's page. */
   const [requestModulePageByStatus, setRequestModulePageByStatus] = useState({});
@@ -1492,6 +1499,12 @@ const AdminMerchandise = () => {
     // Convert to array and sort alphabetically
     return Array.from(typeMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   };
+
+  const uniqueMerchandiseTypes = getUniqueMerchandiseTypes();
+  const visibleMerchandiseTypes = filterTypesByInventoryCategoryTab(
+    uniqueMerchandiseTypes,
+    branchInventoryTab
+  );
 
   const getStatusBadge = (status) => {
     const statusStyles = {
@@ -2939,10 +2952,14 @@ const AdminMerchandise = () => {
       {/* Tab Content */}
       {activeTab === 'inventory' ? (
         <>
-      {/* Merchandise Types List - Card Grid */}
-      {getUniqueMerchandiseTypes().length > 0 ? (
+      <BranchInventoryCategoryTabs
+        value={branchInventoryTab}
+        onChange={setBranchInventoryTab}
+      />
+      {/* Merchandise / Supplies Types List - Card Grid */}
+      {visibleMerchandiseTypes.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {getUniqueMerchandiseTypes().map((merchType) => (
+          {visibleMerchandiseTypes.map((merchType) => (
             <div
               key={merchType.name}
               className="relative bg-white rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200 border border-gray-200"
@@ -2997,7 +3014,9 @@ const AdminMerchandise = () => {
       ) : (
         <div className="bg-white rounded-lg shadow p-12 text-center">
           <p className="text-gray-500">
-            No merchandise types found for this branch.
+            {branchInventoryTab === BRANCH_INVENTORY_CATEGORY_TABS.SUPPLIES
+              ? 'No supplies (not in package) found for this branch.'
+              : 'No merchandise types found for this branch.'}
           </p>
         </div>
       )}

@@ -7,7 +7,7 @@ Shared UI for finance payment logs and related flows.
 | File | Purpose |
 |------|---------|
 | `UnappliedArPaymentLogStatus.jsx` | Status column for unapplied package AR rows in Payment Logs. |
-| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment and AR Create Step 2. Send link / Open pay page, tip/discount, advanced expiry/preview. |
+| `FiuuPayOnlinePanel.jsx` | FIUU tab for invoice Record Payment (Invoice pages + installment **Pay Now** / **Record Advance Payment** in `InstallmentPlanDetails`), and AR Create Step 2. Send link / Open pay page, tip/discount, advanced expiry/preview. |
 
 **Visibility:** Staff FIUU tabs are hidden unless `VITE_FIUU_PAYMENT_UI_ENABLED=true` in frontend env (see `frontend/src/utils/fiuuPayment.js`). Public `/pay/fiuu/:token` and API `/go` links still work for links already sent.
 

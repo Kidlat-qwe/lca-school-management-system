@@ -4,9 +4,10 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 
 ## Scope
 
-- **Admin / Superadmin** invoice balance via FIUU **QRPH** / Card (HPP).
+- **Admin / Superadmin** invoice balance via FIUU **QRPH** / Card (HPP), including installment **Pay Now** and **Record Advance Payment** (advance uses `POST .../advance-draft` then the same HPP/email link flow).
 - **Admin / Superadmin** Merchandise / Package **AR Create → Step 2**.
 - **Primary UX:** email **Pay now** → `/payments/fiuu/go/:token` → FIUU. Bill stays unpaid until webhook.
+- **Payment Logs:** on FIUU success (HPP or MIT), the invoice/AR payment is **Completed** and the invoice is **Paid**, but `approval_status` stays **Pending** until Finance verifies in Payment Logs → **Approved**. **Issued By** shows plain **FIUU**.
 - **Installment AutoPay (LCA AutoPay):**
   - Client opts in on `/go` (Terms modal; toggle defaults OFF).
   - **SMS or email OTP** verifies authorization before AutoPay is enabled (`FIUU_AUTOPAY_OTP_ENABLED`, default on).
@@ -24,6 +25,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 4. Enable **Tokenization** + **Recurring** on the MID (email `support@fiuu.com`). Without Recurring enabled, HPP may still return `extraP.token`, but MIT RecordType `T` fails with **Token not found**.
 5. Default Recurring URL is `https://pay.fiuu.com/RMS/API/Recurring/input_v7.php` (same host as HPP). Override with `FIUU_RECURRING_URL` only if FIUU instructs otherwise.
 6. Set `FIUU_AUTOPAY_MIT_ENABLED=true` only after Dev UAT of token save + MIT charge.
+7. Run `149_add_fiuu_token_billing_snapshot.sql` (or `node backend/scripts/applyFiuuTokenBillingSnapshotMigration.js`). MIT billing name/email/mobile must match tokenization; empty `bill_mobile` on HPP is a common cause of FIUU **Token not found** (`T02`).
 
 ## Order ID / CustID
 
@@ -31,7 +33,8 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 |---|---|
 | Invoice (HPP + MIT) | `PSMS-I-{invoice_id}-{attempt}` |
 | AR | `PSMS-AR-{ack_receipt_id}-{attempt}` |
-| CustID | `PSMS-S-{student_id}` |
+| CustID (HPP) | `PSMS-S-{student_id}` (merchant-generated for HPP only) |
+| CustID (MIT) | Empty unless FIUU returned `CustID` in token `extraP` (FIUU support guidance) |
 
 ## AutoPay / MIT rules
 
@@ -47,6 +50,8 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | Checksum | `md5(RecordType+MerchantID+SubMerchant+Token+OrderID+Currency+Amount+Verifykey)` |
 | Result | Async notify/callback → existing invoice apply path |
 | Failure | Create + email HPP pay link |
+| Billing match | MIT reuses `billing_name` / `billing_email` / `billing_mobile` snapshot from tokenization (FIUU T02 if mismatch) |
+| CustID on MIT | Leave empty unless FIUU returned CustID in `extraP` (merchant `PSMS-S-*` must not be sent) |
 
 ## Env (MIT)
 

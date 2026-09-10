@@ -5,9 +5,11 @@
 - **`PaymentLogUpdatedAtCell.jsx`** — Two-line **Created At** display (date line + time line, Asia/Manila). Shows when the payment was encoded (`paymenttbl.created_at`).
 - **`PaymentLogsViewTabs.jsx`** — Branch-scoped payment log tab navigation.
 - **`PaymentAttachmentViewerModal.jsx`** — View payment attachment images.
-- **`PaymentFinanceVerifyModal.jsx`** — Finance/Superfinance landscape payment review modal (verify, return, reject). Matches AR verify layout; includes reference number entry for verification.
+- **`PaymentFinanceVerifyModal.jsx`** — Finance/Superfinance landscape payment review modal (verify, return, reject). Matches AR verify layout; includes reference number entry for verification. FIUU HPP/MIT rows show **Issued/recorded by as FIUU** and start as **Pending Approval** until Finance verifies.
 
 Payment log tables include a **Created At** column (after **Payment Date**) showing when the payment row was first encoded in the system.
+
+**FIUU payments (HPP + MIT AutoPay):** invoice is marked **Paid** as soon as FIUU succeeds; Payment Logs `approval_status` stays **Pending** until Finance verifies → **Approved**. **Issued By** displays plain **FIUU** (`frontend/src/utils/paymentLogIssuedBy.js`).
 
 **Issue Date** = invoice date (`invoicestbl.issue_date`). **Payment Date** = client-paid date (`paymenttbl.issue_date`). Finance approve may update Payment Date only.
 

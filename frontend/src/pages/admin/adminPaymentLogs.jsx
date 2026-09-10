@@ -50,6 +50,7 @@ import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExpor
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
+import { formatPaymentLogIssuedBy } from '../../utils/paymentLogIssuedBy';
 
 /** Same breakdown logic as Record Payment (adminInvoice.jsx) — for invoice summary + validation */
 const getInvoiceBreakdownForReturnFix = (invoice) => {
@@ -1272,19 +1273,7 @@ const AdminPaymentLogs = () => {
     );
   };
 
-  const formatInvoiceIssuedBy = (payment) => {
-    const invoiceName = (payment?.invoice_issued_by_name || '').trim();
-    const invoiceEmail = (payment?.invoice_issued_by_email || '').trim();
-    const paymentName = (payment?.payment_created_by_name || '').trim();
-    const paymentEmail = (payment?.payment_created_by_email || '').trim();
-    if (invoiceName) return invoiceName;
-    if (invoiceEmail) return invoiceEmail;
-    if (paymentName) return paymentName;
-    if (paymentEmail) return paymentEmail;
-    if (payment?.created_by) return `User #${payment.created_by}`;
-    if (!payment?.student_id) return 'Walk-in / Acknowledgement Receipt';
-    return 'System';
-  };
+  const formatInvoiceIssuedBy = (payment) => formatPaymentLogIssuedBy(payment);
 
   const getUniquePaymentMethods = () => {
     const methods = [...new Set(payments.map(p => p.payment_method).filter(Boolean))];

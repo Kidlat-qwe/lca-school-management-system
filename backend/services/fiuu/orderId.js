@@ -68,9 +68,9 @@ export function formatFiuuDescription({
     refLabel,
     `PHP ${formatAmount(amountPhp)}`,
   ].filter(Boolean);
-  let desc = parts.join(' | ');
+  let desc = parts.join(' ');
   if (initiatorName) {
-    desc += ` | Init: ${initiatorName}`;
+    desc += ` Init: ${initiatorName}`;
   }
   return desc.slice(0, 500);
 }

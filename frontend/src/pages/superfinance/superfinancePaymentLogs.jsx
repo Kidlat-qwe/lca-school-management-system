@@ -51,6 +51,7 @@ import PaymentLogsExportDateRange from '../../components/export/PaymentLogsExpor
 import SortableHeader from '../../components/table/SortableHeader';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
 import { buildInvoiceNavigateStateFromRejectedPayment } from '../../utils/invoiceFocusNavigation';
+import { formatPaymentLogIssuedBy } from '../../utils/paymentLogIssuedBy';
 
 const SuperfinancePaymentLogs = () => {
   const location = useLocation();
@@ -533,19 +534,7 @@ const SuperfinancePaymentLogs = () => {
     return `₱${parseFloat(amount).toFixed(2)}`;
   };
 
-  const formatInvoiceIssuedBy = (payment) => {
-    const name = (payment.invoice_issued_by_name || '').trim();
-    const email = (payment.invoice_issued_by_email || '').trim();
-    if (name) return name;
-    if (email) return email;
-    const recorderName = (payment.payment_created_by_name || '').trim();
-    const recorderEmail = (payment.payment_created_by_email || '').trim();
-    if (recorderName) return recorderName;
-    if (recorderEmail) return recorderEmail;
-    if (payment?.created_by) return `User #${payment.created_by}`;
-    if (!payment?.student_id) return 'Walk-in / Acknowledgement Receipt';
-    return 'System';
-  };
+  const formatInvoiceIssuedBy = (payment) => formatPaymentLogIssuedBy(payment);
 
   const getStatusBadge = (status) => {
     const statusColors = {

@@ -182,9 +182,11 @@ export async function applyGatewayArPayment(client, params) {
             `INSERT INTO paymenttbl (
                invoice_id, student_id, branch_id, payment_method, payment_type,
                payable_amount, tip_amount, issue_date, status, reference_number, remarks,
-               created_by, payment_attachment_url, action_owner_user_id
+               created_by, payment_attachment_url, action_owner_user_id,
+               approval_status, approved_by, approved_at, finance_verified_reference_number
              )
-             VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, NULL, $11)
+             VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, NULL, $11,
+                     'Pending', NULL, NULL, NULL)
              RETURNING *`,
             [
               invoiceId,
@@ -195,7 +197,7 @@ export async function applyGatewayArPayment(client, params) {
               tipAmount,
               issueDate,
               reference_number || null,
-              `Merchandise payment via FIUU${fiuu_channel ? ` (${fiuu_channel})` : ''}`,
+              `Merchandise payment via FIUU${fiuu_channel ? ` (${fiuu_channel})` : ''} | Awaiting Finance verification`,
               createdBy,
               actionOwnerAck,
             ]
@@ -204,9 +206,11 @@ export async function applyGatewayArPayment(client, params) {
             `INSERT INTO paymenttbl (
                invoice_id, student_id, branch_id, payment_method, payment_type,
                payable_amount, tip_amount, issue_date, status, reference_number, remarks,
-               created_by, payment_attachment_url
+               created_by, payment_attachment_url,
+               approval_status, approved_by, approved_at, finance_verified_reference_number
              )
-             VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, NULL)
+             VALUES ($1, $2, $3, $4, 'Full Payment', $5, $6, $7::date, 'Completed', $8, $9, $10, NULL,
+                     'Pending', NULL, NULL, NULL)
              RETURNING *`,
             [
               invoiceId,
@@ -217,7 +221,7 @@ export async function applyGatewayArPayment(client, params) {
               tipAmount,
               issueDate,
               reference_number || null,
-              `Merchandise payment via FIUU${fiuu_channel ? ` (${fiuu_channel})` : ''}`,
+              `Merchandise payment via FIUU${fiuu_channel ? ` (${fiuu_channel})` : ''} | Awaiting Finance verification`,
               createdBy,
             ]
           );

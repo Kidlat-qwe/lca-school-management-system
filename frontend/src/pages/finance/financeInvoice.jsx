@@ -41,6 +41,7 @@ import {
   InvoiceListAmountCell,
   InvoiceListTotalAmountCell,
 } from '../../components/invoices/InvoiceListAmountCell';
+import InvoiceListDateCell from '../../components/invoices/InvoiceListDateCell';
 import { getInvoiceDisplayAmount } from '../../utils/invoiceListAmount';
 import InvoiceStatusMultiFilter from '../../components/invoices/InvoiceStatusMultiFilter';
 import { sortRows, toggleSortConfig } from '../../utils/tableSorting';
@@ -2136,29 +2137,28 @@ const FinanceInvoice = () => {
                     </td>
                     <InvoiceListAmountCell invoice={invoice} rejectedOverlay={rejectedOverlay} />
                     <InvoiceListTotalAmountCell invoice={invoice} rejectedOverlay={rejectedOverlay} />
-                    <td className="px-6 py-4 align-middle whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {invoice.issue_date
-                          ? formatDateManila(invoice.issue_date)
-                          : '-'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 align-middle whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {rejectedOverlay?.paymentDate
+                    <InvoiceListDateCell
+                      text={
+                        invoice.issue_date ? formatDateManila(invoice.issue_date) : '-'
+                      }
+                      style={{ width: '120px', minWidth: '120px', maxWidth: '120px' }}
+                    />
+                    <InvoiceListDateCell
+                      text={
+                        rejectedOverlay?.paymentDate
                           ? formatDateManila(rejectedOverlay.paymentDate)
                           : invoice.last_payment_date
                           ? formatDateManila(invoice.last_payment_date)
-                          : '—'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 align-middle whitespace-nowrap">
-                      <div className="text-sm text-gray-900">
-                        {invoice.due_date
-                          ? formatDateManila(invoice.due_date)
-                          : '-'}
-                      </div>
-                    </td>
+                          : '—'
+                      }
+                      style={{ width: '130px', minWidth: '130px', maxWidth: '130px' }}
+                    />
+                    <InvoiceListDateCell
+                      text={
+                        invoice.due_date ? formatDateManila(invoice.due_date) : '-'
+                      }
+                      style={{ width: '120px', minWidth: '120px', maxWidth: '120px' }}
+                    />
                     <td className="px-6 py-4 align-middle whitespace-nowrap" style={{ maxWidth: '160px' }}>
                       <div
                         className="text-sm text-gray-900 truncate"

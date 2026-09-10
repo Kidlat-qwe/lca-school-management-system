@@ -40,6 +40,7 @@ Blocks recording payment on a **later** installment phase when an **earlier** ph
 | `GET /invoices/:id` | Sets `prior_partial_balance_block` and `can_record_payment: false` when blocked |
 | `POST /payments` | Returns 400 with `prior_partial_balance_block` message |
 | `POST /installment-invoices/profiles/:id/advance-pay` | Same check for profile-local phases before `phase_index` |
+| `POST /installment-invoices/profiles/:id/advance-draft` | Same next-unbilled check; creates Unpaid advance invoice for FIUU without recording payment |
 
 Advance pay only accepts the **next unbilled** profile-local phase (no skipping ahead). `generated_count` is set to the paid phase index. See `utils/installmentPhaseBillingSync.js`.
 
@@ -209,7 +210,8 @@ Backfill (optional, AR history only): `scripts/backfillMerchandiseReleaseLogFrom
 
 Maps unapplied verified package AR rows to Payment Logs approval fields in `GET /payments/finance-unified`:
 
-- Finance/Superfinance/Superadmin verifier → `approval_status: Approved` with verifier name
+- **FIUU** payment method (HPP / AR Online) → always `approval_status: Pending` until Finance verifies in Payment Logs
+- Finance/Superfinance/Superadmin verifier (non-FIUU) → `approval_status: Approved` with verifier name
 - Admin verifier → `approval_status: Pending` (AR record stays Verified/Applied in `acknowledgement_receiptstbl`)
 
 Also gates whether `acknowledgementreceipts.js` auto-approves linked `paymenttbl` rows when an AR is verified.

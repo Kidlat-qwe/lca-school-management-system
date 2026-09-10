@@ -72,6 +72,80 @@ export function buildFiuuCustId(studentId) {
   return `PSMS-S-${id}`;
 }
 
+/** Strip pipe chars only — keep exact tokenization billing strings for MIT match. */
+export function sanitizeFiuuBillingField(value, maxLen) {
+  const cleaned = String(value ?? '')
+    .replace(/\|/g, ' ')
+    .trim();
+  return cleaned.slice(0, maxLen);
+}
+
+/**
+ * Best-effort billing contacts for HPP + token snapshot.
+ * Prefers student phone, then guardian phones (digits as stored / normalized lightly).
+ */
+export async function resolveFiuuBillingContacts(studentId, { client = null } = {}) {
+  const id = parseInt(studentId, 10);
+  if (!Number.isFinite(id) || id <= 0) {
+    return { billing_name: '', billing_email: '', billing_mobile: '' };
+  }
+  const q = client ? (text, params) => client.query(text, params) : query;
+  const student = await q(
+    `SELECT full_name, email, phone_number FROM userstbl WHERE user_id = $1 LIMIT 1`,
+    [id]
+  );
+  const row = student.rows[0] || {};
+  let mobile = String(row.phone_number || '').trim();
+  if (!mobile) {
+    const guardians = await q(
+      `SELECT guardian_phone_number
+       FROM guardianstbl
+       WHERE student_id = $1
+         AND guardian_phone_number IS NOT NULL
+         AND TRIM(guardian_phone_number) <> ''
+       ORDER BY guardian_id ASC
+       LIMIT 3`,
+      [id]
+    );
+    mobile = String(guardians.rows[0]?.guardian_phone_number || '').trim();
+  }
+  return {
+    billing_name: String(row.full_name || '').trim(),
+    billing_email: String(row.email || '').trim(),
+    billing_mobile: mobile,
+  };
+}
+
+/**
+ * Build tokenization billing snapshot from gateway HPP fields + optional OTP mobile.
+ */
+export function extractBillingSnapshotFromGateway(gatewayRow = {}) {
+  let form =
+    gatewayRow.raw_request && typeof gatewayRow.raw_request === 'object'
+      ? gatewayRow.raw_request
+      : {};
+  if (typeof gatewayRow.raw_request === 'string') {
+    try {
+      form = JSON.parse(gatewayRow.raw_request) || {};
+    } catch {
+      form = {};
+    }
+  }
+  const meta =
+    gatewayRow.metadata && typeof gatewayRow.metadata === 'object' ? gatewayRow.metadata : {};
+
+  let billing_name = String(form.bill_name || '').trim();
+  let billing_email = String(form.bill_email || '').trim();
+  let billing_mobile = String(form.bill_mobile || '').trim();
+
+  // SMS OTP contact is often the number entered on FIUU HPP when student phone was empty.
+  if (!billing_mobile && String(meta.autopay_otp_channel || '').toLowerCase() === 'sms') {
+    billing_mobile = String(meta.autopay_otp_contact || '').trim();
+  }
+
+  return { billing_name, billing_email, billing_mobile };
+}
+
 /**
  * Upsert active token for a student (revokes prior active tokens for that student).
  */
@@ -92,6 +166,9 @@ export async function saveFiuuPaymentToken({
   invoice_id = null,
   consent_at = null,
   raw_extrap = null,
+  billing_name = null,
+  billing_email = null,
+  billing_mobile = null,
   created_by = null,
   client = null,
 }) {
@@ -136,6 +213,9 @@ export async function saveFiuuPaymentToken({
              invoice_id = COALESCE($14, invoice_id),
              consent_at = COALESCE($15, consent_at),
              raw_extrap = COALESCE($16::jsonb, raw_extrap),
+             billing_name = COALESCE($17, billing_name),
+             billing_email = COALESCE($18, billing_email),
+             billing_mobile = COALESCE($19, billing_mobile),
              updated_at = CURRENT_TIMESTAMP
          WHERE fiuu_payment_token_id = $1
          RETURNING *`,
@@ -156,6 +236,9 @@ export async function saveFiuuPaymentToken({
           invoice_id,
           consent_at,
           raw_extrap ? JSON.stringify(raw_extrap) : null,
+          billing_name || null,
+          billing_email || null,
+          billing_mobile || null,
         ]
       );
       return updated.rows[0];
@@ -166,9 +249,9 @@ export async function saveFiuuPaymentToken({
          student_id, installmentinvoiceprofiles_id, branch_id,
          fiuu_token, fiuu_cust_id, card_brand, card_last4, exp_month, exp_year,
          channel, source_orderid, source_tran_id, gateway_payment_id, invoice_id,
-         status, consent_at, raw_extrap, created_by
+         status, consent_at, raw_extrap, billing_name, billing_email, billing_mobile, created_by
        ) VALUES (
-         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'active',$15,$16::jsonb,$17
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'active',$15,$16::jsonb,$17,$18,$19,$20
        )
        RETURNING *`,
       [
@@ -188,6 +271,9 @@ export async function saveFiuuPaymentToken({
         invoice_id,
         consent_at,
         raw_extrap ? JSON.stringify(raw_extrap) : null,
+        billing_name || null,
+        billing_email || null,
+        billing_mobile || null,
         created_by,
       ]
     );
@@ -243,6 +329,21 @@ export async function captureFiuuTokenFromWebhook({
   const consentAt =
     meta.save_card === true || meta.save_card === 'true' ? new Date() : new Date();
 
+  const snapshot = extractBillingSnapshotFromGateway(gatewayRow);
+  let billing_name = snapshot.billing_name;
+  let billing_email = snapshot.billing_email;
+  let billing_mobile = snapshot.billing_mobile;
+  if (!billing_name || !billing_email || !billing_mobile) {
+    try {
+      const contacts = await resolveFiuuBillingContacts(studentId, { client });
+      billing_name = billing_name || contacts.billing_name;
+      billing_email = billing_email || contacts.billing_email;
+      billing_mobile = billing_mobile || contacts.billing_mobile;
+    } catch (err) {
+      console.warn('[fiuu-token] billing contact fallback failed:', err?.message || err);
+    }
+  }
+
   try {
     const row = await saveFiuuPaymentToken({
       student_id: studentId,
@@ -262,11 +363,14 @@ export async function captureFiuuTokenFromWebhook({
       invoice_id: gatewayRow.invoice_id || null,
       consent_at: consentAt,
       raw_extrap: extracted.extraP,
+      billing_name: billing_name || null,
+      billing_email: billing_email || null,
+      billing_mobile: billing_mobile || null,
       created_by: gatewayRow.created_by || null,
       client,
     });
     console.log(
-      `[fiuu-token] Saved token for student ${studentId} (id=${row.fiuu_payment_token_id}, last4=${row.card_last4 || 'n/a'})`
+      `[fiuu-token] Saved token for student ${studentId} (id=${row.fiuu_payment_token_id}, last4=${row.card_last4 || 'n/a'}, mobile=${row.billing_mobile ? 'set' : 'empty'})`
     );
 
     // Bind token to class-scoped auto-debit consent when client opted in on pay link.
@@ -312,6 +416,7 @@ export async function listFiuuPaymentTokensForStudent(studentId, { includeRevoke
     `SELECT fiuu_payment_token_id, student_id, installmentinvoiceprofiles_id, branch_id,
             fiuu_cust_id, card_brand, card_last4, exp_month, exp_year, channel,
             source_orderid, source_tran_id, invoice_id, status, consent_at,
+            billing_name, billing_email, billing_mobile,
             created_at, updated_at, revoked_at
      FROM fiuu_payment_tokenstbl
      WHERE student_id = $1

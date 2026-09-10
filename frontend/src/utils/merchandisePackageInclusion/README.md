@@ -14,3 +14,7 @@ category stay in sync).
 
 Manual deduct: `POST /merchandise/:id/manual-deduct` `{ quantity, remarks }` →
 writes `merchandise_release_logtbl` with `source = manual_deduct`.
+
+Branch inventory card grid uses **Merchandise** / **Supplies** sub-tabs
+(`BRANCH_INVENTORY_CATEGORY_TABS` + `filterTypesByInventoryCategoryTab`):
+Supplies = all types with `is_package_included = false`.

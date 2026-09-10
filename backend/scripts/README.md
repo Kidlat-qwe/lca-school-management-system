@@ -28,6 +28,18 @@ node backend/scripts/generateInstallmentInvoiceByEmail.js --force-due --generate
 
 # Multiple plans: pick one
 node backend/scripts/generateInstallmentInvoiceByEmail.js --profile-id=123 --force-due --generate
+
+# Retry MIT only (unpaid invoice)
+node backend/scripts/generateInstallmentInvoiceByEmail.js --mit-invoice-id=740 --profile-id=260
+```
+
+### `applyFiuuTokenBillingSnapshotMigration.js`
+
+Applies `149_add_fiuu_token_billing_snapshot.sql` and optionally backfills empty
+`billing_mobile` on active tokens (must match FIUU tokenization profile):
+
+```bash
+node backend/scripts/applyFiuuTokenBillingSnapshotMigration.js --billing-mobile=55218438
 ```
 
 ### `diagnoseAndFixClassPackageVisibility.js`
@@ -1174,6 +1186,42 @@ node scripts/repairMargauxNacarGeneratePhase2.js --production
 node scripts/repairMargauxNacarGeneratePhase2.js --production --apply --generate
 ```
 
+### `repairMargauxNacarPhase3DueUngenerate4.js`
+
+**Margaux Emilia Nacar** (`nepjuanillo@gmail.com`, user **657**) — profile **483**, class **154**.
+
+| Fix | Detail |
+|-----|--------|
+| Phase 3 advance (INV-**2425** / **2426**) | due **2026-10-05 → 2026-09-05** |
+| INV-**2494** (Phase 4) | **Cancelled** + detached (Not Generated) |
+| Profile | `generated_count` **4→3**; queue **2026-08-25 / 2026-09-01** |
+
+```bash
+node scripts/repairMargauxNacarPhase3DueUngenerate4.js --production
+node scripts/repairMargauxNacarPhase3DueUngenerate4.js --production --apply
+```
+
+### `repairLewisMedinaPhaseDatesEnrollment.js`
+
+**Lewis Marcus Lacorte Medina** (`daryllanne.medina@gmail.com`, user **8**) — profile **44**, class **25** SOMO Nursery.
+
+| Phase | Invoices | Issue / Due | Enrollment |
+|-------|----------|-------------|------------|
+| 1 | — | keep | **new** |
+| 2 | INV-217 | Mar 25 / Apr 5 | **re_enrolled** |
+| 3 | INV-620 | Apr 25 / May 5 | **re_enrolled** |
+| 4 | INV-1058 | May 25 / Jun 5 | **re_enrolled** |
+| 5 | INV-1339/1340/1910 | **Jun 25 / Jul 5** | **re_enrolled** |
+| 6 | INV-1911/1912 | **Jul 25 / Aug 5** | **re_enrolled** |
+| 7 | INV-2283 | **Aug 25 / Sep 5** Unpaid; clear 10% → **₱4,236** | **blank** (delete CS) |
+
+Also: profile `is_active=true`; queue **2026-09-25 / 2026-10-01**.
+
+```bash
+node scripts/repairLewisMedinaPhaseDatesEnrollment.js --production
+node scripts/repairLewisMedinaPhaseDatesEnrollment.js --production --apply
+```
+
 ### `repairBrixxCabotejaPendingAndPhase2.js`
 
 Same Margaux scenario for **Brixx Irving T. Caboteja** (`marjorietanala@gmail.com`, student **666**, profile **492**, class **149**): promote `pending_enrollment` → `new`, force queue **Jul 25 / Aug 01**, generate **Phase 2**, then queue **Aug 25 / Sep 01**.
@@ -1481,6 +1529,135 @@ Expected matrix: **Jun new** / Jul–Sep re-enrolled (May no longer `new`).
 ```bash
 node scripts/repairKaelHamdanMatrixJuneNew.js --production
 node scripts/repairKaelHamdanMatrixJuneNew.js --production --apply
+```
+
+### `repairKaelHamdanPhase4567DueDates.js`
+
+**Kael Devin Burayag Hamdan** (`myrna01@gmail.com`, user **524**) — profile **307**, class **91**. Correct Phase 4–7 due cadence after advance payments.
+
+| Phase | Invoice | Due before | Due after |
+|-------|---------|------------|-----------|
+| 4 | INV-754 | 2026-06-05 | **2026-07-05** |
+| 5 | INV-1216 | 2026-07-05 | **2026-08-05** |
+| 6 | INV-1889 | 2026-10-05 | **2026-09-05** |
+| 7 | INV-2392 | 2026-12-05 | **2026-10-05** |
+
+```bash
+node scripts/repairKaelHamdanPhase4567DueDates.js --production
+node scripts/repairKaelHamdanPhase4567DueDates.js --production --apply
+```
+
+### `repairKaelHamdanRemapPhases3to7Onto1to5.js`
+
+**Kael Devin Burayag Hamdan** (`myrna01@gmail.com`, user **524**) — profile **307**, class **91**. Remap paid phases **3–7 → 1–5** so the plan starts at Phase 1 (enrolled in phases 1–5 only).
+
+| Old → New | Invoice | Issue / Due after |
+|-----------|---------|-------------------|
+| 3 → **1** | INV-753 | **2026-04-06 / 2026-04-10** |
+| 4 → **2** | INV-754 | **2026-04-25 / 2026-05-05** |
+| 5 → **3** | INV-1216 | **2026-05-25 / 2026-06-05** |
+| 6 → **4** | INV-1889 | **2026-06-25 / 2026-07-05** |
+| 7 → **5** | INV-2392 | **2026-07-25 / 2026-08-05** |
+
+Also: profile `phase_start=1`, `total_phases=10`, `generated_count=5`, `first_billing_month=2026-04-01`; queue next gen **2026-08-25** / month **2026-09-01**; P1 `new`, P2–5 `re_enrolled`.
+
+```bash
+node scripts/repairKaelHamdanRemapPhases3to7Onto1to5.js --production
+node scripts/repairKaelHamdanRemapPhases3to7Onto1to5.js --production --apply
+```
+
+### `repairKaelHamdanGeneratePhase6.js`
+
+**Kael Devin Burayag Hamdan** (`myrna01@gmail.com`, user **524**) — profile **307**, class **91**. After remap to phases 1–5, generate missing **Phase 6**.
+
+| Field | Value |
+|-------|-------|
+| Issue / Due | **2026-08-25 / 2026-09-05** |
+| `generated_count` | **6** |
+| Queue after | **2026-09-25 / 2026-10-01** |
+
+```bash
+node scripts/repairKaelHamdanGeneratePhase6.js --production
+node scripts/repairKaelHamdanGeneratePhase6.js --production --apply --generate
+```
+
+### `repairJullaRojasPhase3UndropUngenerate4.js`
+
+**Julla Santos Rojas** (`lady.louelle.rojas@gmail.com`, user **590**) — profile **462**, class **83** KG 1-3PM.
+
+| Fix | Detail |
+|-----|--------|
+| Phase 3 enrollment | `dropped` → **re_enrolled** |
+| INV-**2478** | issue/due → **2026-08-25 / 2026-09-05**; clear 10% penalty → amount **₱5,275** |
+| INV-**2556** (Phase 4) | **Cancelled** + detached (Not Generated) |
+| Profile | `generated_count` **4→3**, `is_active` **true**; queue Sep 25 / Oct 1 |
+
+```bash
+node scripts/repairJullaRojasPhase3UndropUngenerate4.js --production
+node scripts/repairJullaRojasPhase3UndropUngenerate4.js --production --apply
+```
+
+### `repairLucioArdinaPhase7DueUngenerate8.js`
+
+**Lucio Kendrick Ardina** (`kiiimconcepcion@gmail.com`, user **34**) — profile **23**, class **42** SOMO Pre-Kinder.
+
+| Fix | Detail |
+|-----|--------|
+| Phase 7 advance (INV-**2436** / **2437**) | due **2027-02-05 → 2026-09-05** |
+| INV-**2633** (Phase 8) | **Cancelled** + detached (Not Generated) |
+| Profile | `generated_count` **8→7**; queue **2026-08-25 / 2026-09-01** |
+
+```bash
+node scripts/repairLucioArdinaPhase7DueUngenerate8.js --production
+node scripts/repairLucioArdinaPhase7DueUngenerate8.js --production --apply
+```
+
+### `repairAlexzandraielSimpasPhase34DueSwap.js`
+
+**Alexzandraiel Jeice M. Simpas** (`jealclane@gmail.com`, user **658**) — profile **484**. Phase 3/4 dues were reversed.
+
+| Phase | Invoices | Due before | Due after |
+|-------|----------|------------|-----------|
+| 3 | INV-2427 / 2428 | 2026-10-05 | **2026-09-05** |
+| 4 | INV-2524 / 2909 | 2026-09-05 | **2026-10-05** |
+
+```bash
+node scripts/repairAlexzandraielSimpasPhase34DueSwap.js --production
+node scripts/repairAlexzandraielSimpasPhase34DueSwap.js --production --apply
+```
+
+### `repairKendraDinoyMatrixMayNew.js`
+
+**Kendra Rafferty Dinoy** (`keel.arcee@gmail.com`, user **536**) — class **92** VMM Playgroup SS 11:00, profile **325**. Late-start Phase 2 enrollments were already correct in Student History, but month matrix was shifted +1 because `phase_start` stayed **1** (hidden Phase 1 still anchored billing).
+
+| Field | Before | After |
+|-------|--------|-------|
+| Profile `phase_start` / `total_phases` | 1 / 10 | **2 / 9** (absolute 2–10) |
+| INV **866** remarks | `PHASE_START:1` | **`PHASE_START:2`** |
+| P2–P6 `enrolled_at` | mixed | month anchors May→Sep |
+
+Expected matrix: **May new** / **Jun re-enrolled** / **Jul dropped** / **Aug rejoin** / **Sep re-enrolled**.
+
+```bash
+node scripts/repairKendraDinoyMatrixMayNew.js --production
+node scripts/repairKendraDinoyMatrixMayNew.js --production --apply
+```
+
+### `repairDanielHicbanNurseryPhases.js`
+
+**Daniel Sungcang Hicban** (`sungcangvivianvillamater@gmail.com`, user **76**) — class **27** SOMO Nursery MWF 1PM, profile **60**.
+
+| Fix | Detail |
+|-----|--------|
+| Enrollment | P2–P3 `new` → **re_enrolled**; P4 `rejoin` → **re_enrolled**; remove false P4 drop |
+| Phase 5 balance | INV-1658→1942 penalty stack cleared → Amount **₱5,000** / Paid **₱4,500** / Balance **₱500** |
+| Phase 6–7 | Cancel INV-**2208** + **2609**; remove P6 drop enrollment; `generated_count` **7→5** |
+
+Expected matrix: **Mar new** / **Apr–Jun re-enrolled** / **Jul dropped**.
+
+```bash
+node scripts/repairDanielHicbanNurseryPhases.js --production
+node scripts/repairDanielHicbanNurseryPhases.js --production --apply
 ```
 
 ### `repairJosephGonzalezPhase4Balance3472.js`

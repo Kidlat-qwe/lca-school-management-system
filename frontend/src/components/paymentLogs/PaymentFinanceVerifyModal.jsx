@@ -7,6 +7,7 @@ import {
 } from '../../utils/paymentLogTableAmounts';
 import { isUnappliedArPaymentLogRow } from '../../utils/unappliedArPaymentLog';
 import { isCashPaymentMethod } from '../../constants/paymentFormLabels';
+import { isFiuuPaymentLogMethod } from '../../utils/paymentLogIssuedBy';
 
 const formatCurrency = (value) =>
   `₱${Number(value || 0).toLocaleString('en-US', {
@@ -21,6 +22,11 @@ const MODAL_TITLES = {
 };
 
 function formatRecordedByLabel(payment) {
+  if (isFiuuPaymentLogMethod(payment?.payment_method)) {
+    const dateRaw = payment?.issue_date || payment?.payment_date;
+    const dateLabel = dateRaw ? formatDateManila(dateRaw) : '';
+    return dateLabel ? `FIUU · ${dateLabel}` : 'FIUU';
+  }
   const name = (
     payment?.payment_created_by_name ||
     payment?.invoice_issued_by_name ||

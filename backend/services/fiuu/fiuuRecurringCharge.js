@@ -20,18 +20,37 @@ import { buildRecurringChecksum, formatFiuuAmount } from './signature.js';
 import { insertGatewayPayment, updateGatewayPaymentStatus } from './gatewayPaymentRepository.js';
 import { getActiveAutodebitConsentForProfile } from './fiuuAutodebitConsent.js';
 import {
-  buildFiuuCustId,
   getActiveFiuuPaymentTokenSecretForStudent,
   getFiuuPaymentTokenSecretById,
+  resolveFiuuBillingContacts,
+  sanitizeFiuuBillingField,
 } from './fiuuTokenService.js';
 const RECORD_TYPE_TOKEN = 'T';
 
 function sanitizePipeField(value, maxLen) {
-  const cleaned = String(value ?? '')
-    .replace(/\|/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return cleaned.slice(0, maxLen);
+  return sanitizeFiuuBillingField(value, maxLen);
+}
+
+/**
+ * FIUU: Recurring CustID must be empty unless FIUU returned CustID on the token
+ * (do not send merchant-invented PSMS-S-* values — causes T02 Token not found).
+ */
+function resolveRecurringCustIdFromToken(tokenRow) {
+  let extraP = tokenRow?.raw_extrap;
+  if (typeof extraP === 'string') {
+    try {
+      extraP = JSON.parse(extraP);
+    } catch {
+      extraP = null;
+    }
+  }
+  if (extraP && typeof extraP === 'object' && !Array.isArray(extraP)) {
+    const fromExtra = String(
+      extraP.CustID ?? extraP.custID ?? extraP.custId ?? ''
+    ).trim();
+    if (fromExtra) return fromExtra;
+  }
+  return '';
 }
 
 function buildRecurringPipeLine({
@@ -241,16 +260,30 @@ export async function tryAutopayInstallmentInvoice({ invoiceId, profileId, stude
     const currency = getFiuuCurrency();
     const amount = formatFiuuAmount(amountNum);
     const orderid = buildInvoiceOrderId(invId);
-    const customerId =
-      String(tokenRow.fiuu_cust_id || '').trim() || buildFiuuCustId(studId);
+    // FIUU support: leave CustID empty unless it was returned by FIUU on the token.
+    const customerId = resolveRecurringCustIdFromToken(tokenRow);
 
-    const billingName = sanitizePipeField(contact.full_name || 'Student', 50) || 'Student';
-    const billingEmail = sanitizePipeField(contact.email || '', 100);
-    const billingMobile = sanitizePipeField(
-      String(contact.phone_number || '').replace(/[^\d+]/g, ''),
+    // FIUU requires MIT billing fields to match tokenization profile exactly.
+    // Prefer snapshot captured at token save; fall back to current student contacts.
+    const snapName = String(tokenRow.billing_name || '').trim();
+    const snapEmail = String(tokenRow.billing_email || '').trim();
+    const snapMobile = String(tokenRow.billing_mobile || '').trim();
+    let billingName = sanitizePipeField(snapName || contact.full_name || 'Student', 50) || 'Student';
+    let billingEmail = sanitizePipeField(snapEmail || contact.email || '', 100);
+    let billingMobile = sanitizePipeField(
+      snapMobile || String(contact.phone_number || '').trim(),
       20
     );
-    if (!billingEmail && !billingMobile && !customerId) {
+    if (!billingEmail || !billingMobile) {
+      try {
+        const contacts = await resolveFiuuBillingContacts(studId);
+        if (!billingEmail) billingEmail = sanitizePipeField(contacts.billing_email || '', 100);
+        if (!billingMobile) billingMobile = sanitizePipeField(contacts.billing_mobile || '', 20);
+      } catch (err) {
+        console.warn('[fiuu-mit] billing contact fallback failed:', err?.message || err);
+      }
+    }
+    if (!billingEmail && !billingMobile) {
       const fallback = await sendFallbackPayLink({
         invoiceId: invId,
         studentId: studId,

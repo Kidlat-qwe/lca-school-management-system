@@ -7,7 +7,6 @@ import { getPriorPartialBalanceBlockers } from '../../lib/installmentPaymentElig
 import { paymenttblHasActionOwnerUserIdColumn } from '../../utils/paymentSchema.js';
 import { syncProgramPaymentStatusForInvoice } from '../../utils/programPaymentStatusService.js';
 import { syncInstallmentEnrollmentForPaidInvoice } from '../../utils/installmentEnrollmentSync.js';
-import { syncArVerifiedFromPaymentApproval } from '../../lib/arPaymentVerificationSync.js';
 import { tryIssuePackageMerchandiseOnFirstPayment } from '../../lib/merchandiseReleaseLog.js';
 import {
   ensurePendingEnrollmentAfterDownpaymentPaid,
@@ -193,7 +192,7 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
   const remarkParts = [
     remarks,
     fiuu_channel ? `FIUU channel: ${fiuu_channel}` : null,
-    'Auto-verified via FIUU gateway',
+    'Awaiting Finance verification (FIUU gateway)',
   ];
   if (discountApplied > 0) {
     remarkParts.push(
@@ -209,20 +208,21 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
   const refNum = reference_number != null && String(reference_number).trim() !== ''
     ? String(reference_number).trim()
     : null;
+  // Invoice is Paid on FIUU success; Payment Logs stay Pending until Finance verifies.
   const insertSql = hasActionOwnerCol
     ? `INSERT INTO paymenttbl (
          invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, discount_amount, tip_amount, issue_date, status,
          reference_number, remarks, created_by, action_owner_user_id,
          approval_status, approved_by, approved_at, finance_verified_reference_number
-       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,$12,'Approved',$11,CURRENT_TIMESTAMP,$13)
+       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,$12,'Pending',NULL,NULL,NULL)
        RETURNING *`
     : `INSERT INTO paymenttbl (
          invoice_id, student_id, branch_id, payment_method, payment_type,
          payable_amount, discount_amount, tip_amount, issue_date, status,
          reference_number, remarks, created_by,
          approval_status, approved_by, approved_at, finance_verified_reference_number
-       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,'Approved',$11,CURRENT_TIMESTAMP,$12)
+       ) VALUES ($1,$2,$3,$4,'Full Payment',$5,$6,$7,$8::date,'Completed',$9,$10,$11,'Pending',NULL,NULL,NULL)
        RETURNING *`;
 
   const insertParams = hasActionOwnerCol
@@ -239,7 +239,6 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
         remarkText || null,
         created_by,
         actionOwnerUserId,
-        refNum,
       ]
     : [
         invoice_id,
@@ -253,7 +252,6 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
         refNum,
         remarkText || null,
         created_by,
-        refNum,
       ];
 
   const paymentResult = await client.query(insertSql, insertParams);
@@ -548,11 +546,6 @@ export async function applyGatewayInvoiceFullPayment(client, params) {
   });
 
   await syncProgramPaymentStatusForInvoice(client, invoice_id);
-
-  await syncArVerifiedFromPaymentApproval(client, {
-    paymentIds: [Number(newPayment.payment_id)],
-    verifierUserId: created_by,
-  });
 
   return {
     payment_id: newPayment.payment_id,

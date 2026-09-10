@@ -8,7 +8,7 @@
 
   | File | Purpose |
   | ---- | ------- |
-  | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments`, or advance pay via `POST .../advance-pay`. **Partial pay** enrolls the phase as **`re_enrolled`** (attendance). If remaining is unpaid past final dropoff, the phase **auto-drops**; **Pay Now** settles remaining on that dropped phase, then enrollment restores to **`re_enrolled`**. **Rejoin** is blocked until partial-dropped remaining is settled; next phase continues as **`re_enrolled`**. Fully unpaid drops still use Rejoin for a later phase (Policy A). Dropped fully unpaid invoices are **not payable** on the Invoice page. Before opening payment, calls `GET /invoices/:id` and blocks with an alert if an earlier phase has unsettled partial-payment balance (`prior_partial_balance_block`). Reused inline by other dialogs. |
+  | `InstallmentPlanDetails.jsx`         | Fetches and renders one installment plan (plan card, optional downpayment card, phases table, totals). Supports **Pay Now** on the earliest actionable phase: existing unpaid invoice via `POST /payments` or **Pay via FIUU** (same `FiuuPayOnlinePanel` as Invoice pages when `VITE_FIUU_PAYMENT_UI_ENABLED` + server FIUU config). **Advance** supports the same Manual | Pay via FIUU tabs: FIUU calls `POST .../advance-draft` (creates Unpaid advance invoice + advances schedule) then opens `FiuuPayOnlinePanel`; Manual still uses `POST .../advance-pay`. **Partial pay** enrolls the phase as **`re_enrolled`** (attendance). If remaining is unpaid past final dropoff, the phase **auto-drops**; **Pay Now** settles remaining on that dropped phase, then enrollment restores to **`re_enrolled`**. **Rejoin** is blocked until partial-dropped remaining is settled; next phase continues as **`re_enrolled`**. Fully unpaid drops still use Rejoin for a later phase (Policy A). Dropped fully unpaid invoices are **not payable** on the Invoice page. Before opening payment, calls `GET /invoices/:id` and blocks with an alert if an earlier phase has unsettled partial-payment balance (`prior_partial_balance_block`). Reused inline by Student History and Installment Invoice Logs. |
   | `InstallmentInvoicePhasesModal.jsx`  | Modal shell around `InstallmentPlanDetails` for the "View Details" action on the Installment Invoice Logs pages. |
   | `StudentDropOffListPanel.jsx`        | Shared table + self-fetching panel for students due to auto-drop within 7 days (`GET /installment-invoices/upcoming-delinquency-drops`). Used by the Branch Admin urgent modal and the Admin/Superadmin Installment Invoice **Student drop off list** tab. Superadmin can scope by global branch filter or show all branches (Branch column). |
 
@@ -81,6 +81,10 @@
     creates the phase invoice, records a partial payment, and opens a balance
     continuation invoice for the remainder; then the same receipt summary opens
     for the new paid invoice.
+  - `POST /api/sms/installment-invoices/profiles/:id/advance-draft` — create an
+    **Unpaid** advance invoice (no payment row) for FIUU Pay now / email link;
+    advances `generated_count` / schedule like advance-pay; enrollment applies
+    when the invoice is paid via FIUU webhook or later manual payment.
 
   ### Role wiring
 

@@ -62,6 +62,12 @@ RHET Inventory-style status chips for Merchandise → **My Requests** /
 **PackageInclusionToggle** / **ManualDeductStockModal** — type flag Included vs
 Not included in package; not-included stock uses Manual deduct + required remarks.
 
+## BranchInventoryCategoryTabs
+
+Sub-tabs on the branch merchandise card grid (Superadmin after **View Stocks**,
+Admin → Inventory): **Merchandise** (package-included types) and **Supplies**
+(not-in-package types). Filter via `filterTypesByInventoryCategoryTab`.
+
 Shows live counts and filters the request table. Legacy `Approved` counts as Delivered.
 Each module has its own pagination (10 requests per page via `FixedTablePagination`).
 
