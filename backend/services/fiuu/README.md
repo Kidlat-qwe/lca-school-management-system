@@ -14,6 +14,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
     - SMS: parent **enters mobile** → OTP → enter code on `/go`.
     - Email: parent **enters email** → OTP in email → enter code on `/go` (same UX as SMS).
   - Consent + token bound to **one** installment profile / class.
+  - AutoPay HPP channel defaults to **`creditAN`** (FIUU Support guidance for debit-friendly Card / tokenization). Override with `FIUU_AUTOPAY_CHANNEL=CREDIT` to use classic CREDIT.
   - When `FIUU_AUTOPAY_MIT_ENABLED=true`, the installment invoice scheduler charges the saved token via FIUU Recurring API (MIT) after generating each due invoice for that profile.
   - MIT failure → CMS emails a normal Pay now link as fallback.
 
@@ -44,7 +45,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | Optional | Default is pay-this-invoice-only |
 | Scope | One installment profile / class |
 | Dual consent | Client accepts Terms on pay link |
-| Channel | Opt-in prefers `CREDIT` for tokenization |
+| Channel | AutoPay HPP uses `FIUU_AUTOPAY_CHANNEL` (default `creditAN`; set `CREDIT` to revert) |
 | Charge trigger | After `processDueInstallmentInvoices` / catch-up generate |
 | API | Recurring v7 RecordType `T` → `FIUU_RECURRING_URL` |
 | Checksum | `md5(RecordType+MerchantID+SubMerchant+Token+OrderID+Currency+Amount+Verifykey)` |
@@ -58,6 +59,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | Variable | Purpose |
 |---|---|
 | `FIUU_AUTOPAY_MIT_ENABLED` | `true` to charge on invoice generation |
+| `FIUU_AUTOPAY_CHANNEL` | AutoPay HPP channel (`creditAN` default; `CREDIT` to revert) |
 | `FIUU_AUTOPAY_OTP_ENABLED` | `false` to skip SMS/email OTP on AutoPay enrollment (default on) |
 | `FIUU_RECURRING_URL` | Optional override of Recurring `input_v7.php` |
 | `FIUU_SUB_MERCHANT_ID` | Optional; usually empty |

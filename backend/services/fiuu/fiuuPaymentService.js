@@ -9,6 +9,7 @@ import {
   getFiuuReturnUrl,
   isFiuuConfigured,
   isFiuuAutopayOtpEnabled,
+  getFiuuAutopayChannel,
   resolveFiuuChannelPath,
 } from './config.js';
 import {
@@ -176,7 +177,7 @@ export async function createFiuuInvoicePayment({
   const orderid = buildInvoiceOrderId(invoice_id);
   const amount = formatFiuuAmount(chargeAmt);
   const currency = getFiuuCurrency();
-  // Default QRPH; if client enables auto-debit on /go we switch form to CREDIT for tokenization.
+  // Default QRPH; if client enables auto-debit on /go we switch form to AutoPay card channel (creditAN / CREDIT).
   const fiuuChannel = channel || getFiuuDefaultChannel();
   const refLabel = invoice.invoice_description || `INV-${invoice_id}`;
   const description = formatFiuuDescription({
@@ -427,16 +428,18 @@ export async function applyParentAutodebitDecisionOnPayToken(
   if (!formFields || typeof formFields !== 'object') formFields = {};
   formFields = { ...formFields };
 
-  // Enabling auto-debit needs Card (CREDIT) so FIUU can return a token.
+  // Enabling auto-debit needs Card channel so FIUU can return a token.
+  // FIUU Support: use creditAN (not CREDIT) for debit-friendly Card / tokenization tests.
   // Also ensure billing mobile is present — empty bill_mobile causes MIT "Token not found"
   // when FIUU stores a phone on the tokenization profile.
   if (accepted) {
     const amount = formFields.amount;
     const orderid = formFields.orderid || row.orderid;
     const currency = formFields.currency || row.currency || getFiuuCurrency();
-    formFields.channel = 'CREDIT';
+    const autopayChannel = getFiuuAutopayChannel();
+    formFields.channel = autopayChannel;
     formFields.vcode = buildPaymentVcode({ amount, orderid, currency });
-    meta.channel = 'CREDIT';
+    meta.channel = autopayChannel;
 
     if (!String(formFields.bill_mobile || '').trim() && row.student_id) {
       try {

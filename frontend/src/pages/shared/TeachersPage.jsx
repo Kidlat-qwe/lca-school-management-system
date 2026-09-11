@@ -49,6 +49,9 @@ const TeachersPage = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
 
+  /** 'teachers' = Personnel-like directory; 'turnover' = assigned classes + turnover actions */
+  const [activeTab, setActiveTab] = useState('teachers');
+
   const branchQuery = useMemo(() => {
     if (!isSuperadmin) return null;
     if (globalBranchId != null && globalBranchId !== '' && Number.isFinite(Number(globalBranchId))) {
@@ -90,7 +93,14 @@ const TeachersPage = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, branchQuery, programId]);
+  }, [debouncedSearch, branchQuery, programId, activeTab]);
+
+  // Program filter only applies on Turnover tab — clear when leaving.
+  useEffect(() => {
+    if (activeTab !== 'turnover' && programId) {
+      setProgramId('');
+    }
+  }, [activeTab, programId]);
 
   useEffect(() => {
     const loadPrograms = async () => {
@@ -386,9 +396,44 @@ const TeachersPage = () => {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Teachers</h1>
           <p className="text-sm text-gray-600 mt-1">
-            View assigned classes and turn over classes when a teacher resigns or changes schedule.
+            {activeTab === 'turnover'
+              ? 'View assigned classes and turn over classes when a teacher resigns or changes schedule.'
+              : 'Browse teacher accounts by name, email, phone, and branch.'}
           </p>
         </div>
+      </div>
+
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex flex-wrap gap-x-8 gap-y-1" aria-label="Teachers sections">
+          <button
+            type="button"
+            onClick={() => {
+              setOpenMenuId(null);
+              setActiveTab('teachers');
+            }}
+            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'teachers'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Teachers
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpenMenuId(null);
+              setActiveTab('turnover');
+            }}
+            className={`whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'turnover'
+                ? 'border-[#F7C844] text-gray-900'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Turnover class
+          </button>
+        </nav>
       </div>
 
       <div className="bg-white rounded-lg shadow p-4">
@@ -406,24 +451,26 @@ const TeachersPage = () => {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
           </div>
-          <div className="sm:w-56 shrink-0">
-            <label htmlFor="teacher-program-filter" className="sr-only">
-              Filter by program
-            </label>
-            <select
-              id="teacher-program-filter"
-              value={programId}
-              onChange={(e) => setProgramId(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            >
-              <option value="">All programs</option>
-              {programs.map((p) => (
-                <option key={p.program_id} value={p.program_id}>
-                  {p.program_name || `Program ${p.program_id}`}
-                </option>
-              ))}
-            </select>
-          </div>
+          {activeTab === 'turnover' ? (
+            <div className="sm:w-56 shrink-0">
+              <label htmlFor="teacher-program-filter" className="sr-only">
+                Filter by program
+              </label>
+              <select
+                id="teacher-program-filter"
+                value={programId}
+                onChange={(e) => setProgramId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              >
+                <option value="">All programs</option>
+                {programs.map((p) => (
+                  <option key={p.program_id} value={p.program_id}>
+                    {p.program_name || `Program ${p.program_id}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -431,6 +478,139 @@ const TeachersPage = () => {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">{error}</div>
       ) : null}
 
+      {activeTab === 'teachers' ? (
+        <div className="bg-white rounded-lg shadow">
+          {pagination.total > 0 ? (
+            <TablePaginationSummary
+              page={page}
+              totalItems={pagination.total}
+              itemsPerPage={limit}
+              itemLabel="teachers"
+              className="px-4 pt-4 pb-2"
+            />
+          ) : null}
+
+          <div
+            className="overflow-x-auto rounded-lg"
+            style={{
+              scrollbarWidth: 'thin',
+              scrollbarColor: '#cbd5e0 #f7fafc',
+              WebkitOverflowScrolling: 'touch',
+            }}
+          >
+            <table
+              className="divide-y divide-gray-200"
+              style={{ width: '100%', minWidth: '720px', tableLayout: 'fixed' }}
+            >
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Name
+                  </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Email
+                  </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Phone
+                  </th>
+                  {isSuperadmin ? (
+                    <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Branch
+                    </th>
+                  ) : null}
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Role
+                  </th>
+                  <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {loading ? (
+                  <tr>
+                    <td
+                      colSpan={isSuperadmin ? 6 : 5}
+                      className="px-4 py-10 text-center text-sm text-gray-600"
+                    >
+                      Loading teachers...
+                    </td>
+                  </tr>
+                ) : teachers.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={isSuperadmin ? 6 : 5}
+                      className="px-4 py-10 text-center text-sm text-gray-500"
+                    >
+                      No teachers found.
+                    </td>
+                  </tr>
+                ) : (
+                  teachers.map((teacher) => (
+                    <tr key={teacher.user_id} className="hover:bg-gray-50">
+                      <td className="px-3 py-4">
+                        <div className="flex items-center min-w-0">
+                          <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-primary-600 font-semibold text-xs">
+                              {teacher.full_name?.charAt(0).toUpperCase() || '-'}
+                            </span>
+                          </div>
+                          <div className="ml-2 min-w-0 flex-1">
+                            <div
+                              className="text-sm font-medium text-gray-900 truncate"
+                              title={teacher.full_name || '-'}
+                            >
+                              {teacher.full_name || '-'}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-4">
+                        <div className="text-sm text-gray-900 truncate" title={teacher.email || '-'}>
+                          {teacher.email || '-'}
+                        </div>
+                      </td>
+                      <td className="px-3 py-4">
+                        <div className="text-sm text-gray-900 truncate">
+                          {teacher.phone_number || '-'}
+                        </div>
+                      </td>
+                      {isSuperadmin ? (
+                        <td className="px-3 py-4">
+                          <div className="text-sm text-gray-900 truncate">
+                            {teacher.branch_label || '—'}
+                          </div>
+                        </td>
+                      ) : null}
+                      <td className="px-3 py-4">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          Teacher
+                        </span>
+                      </td>
+                      <td className="px-3 py-4">
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Active
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {pagination.totalPages > 1 ? (
+            <FixedTablePagination
+              page={page}
+              totalPages={pagination.totalPages}
+              totalItems={pagination.total}
+              itemsPerPage={limit}
+              itemLabel="teachers"
+              onPageChange={setPage}
+            />
+          ) : null}
+        </div>
+      ) : (
       <div className="bg-white rounded-lg shadow">
         {pagination.total > 0 ? (
           <TablePaginationSummary
@@ -564,8 +744,9 @@ const TeachersPage = () => {
           />
         ) : null}
       </div>
+      )}
 
-      {openMenuId != null &&
+      {activeTab === 'turnover' && openMenuId != null &&
         createPortal(
           <>
             <div className="fixed inset-0 z-40 teacher-action-overlay" onClick={() => setOpenMenuId(null)} />

@@ -124,3 +124,12 @@ export function isFiuuAutopayMitEnabled() {
 export function isFiuuAutopayOtpEnabled() {
   return trim(process.env.FIUU_AUTOPAY_OTP_ENABLED) !== 'false';
 }
+
+/**
+ * HPP channel when parent enables LCA AutoPay (tokenization).
+ * FIUU Support asked Dev to use `creditAN` (debit-friendly Card channel) instead of `CREDIT`.
+ * Override with FIUU_AUTOPAY_CHANNEL=CREDIT to revert.
+ */
+export function getFiuuAutopayChannel() {
+  return trim(process.env.FIUU_AUTOPAY_CHANNEL) || 'creditAN';
+}
