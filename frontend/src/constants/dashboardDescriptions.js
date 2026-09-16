@@ -294,7 +294,7 @@ export const MONTHLY_ENROLLMENT_DASHBOARD = {
     `Total re-enrollment rate for ${year}: ${retainedSum.toLocaleString()} ÷ ${priorMonthSum.toLocaleString()} × 100. Numerator = sum of purple re-enrolled cells (same as the Re-enrollment KPI). Denominator = sum of prior-month new, re-enrolled, rejoin, and upsell cells.`,
   matrixTitleTooltip: (year) =>
     `Columns are Jan through Dec ${year}. Each cell is the billing month the phase covers — not the payment date.\n\n` +
-    'Re-enrollment rate row: Numerator = re-enrolled + Active (✓) + completed (including standalone) in this month column. Denominator = prior-month cells labeled new, re-enrolled, rejoin, or upsell, plus completed only with a prior new/re-enrolled/rejoin. ' +
+    'Re-enrollment rate row: Numerator = re-enrolled + Active (✓) in this month column (completed excluded — use the Completed KPI). Denominator = prior-month cells labeled new, re-enrolled, rejoin, or upsell, plus completed only with a prior new/re-enrolled/rejoin. ' +
     `January compares to December ${Number(year) - 1} when viewing a calendar year. ` +
     'Reserved cells show paid reservation fee before enrollment. Hover a "new" cell for Previous reserved when enrollment followed a reservation.\n\n' +
     'Installment: invoice generated on the 25th of each month; due on the 5th of the following month. ' +

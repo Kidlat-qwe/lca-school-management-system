@@ -1205,6 +1205,15 @@ const applyPhaseMatrixTerminalCompletedLabel = (student, phases, normalizeStatus
 
   const classPhases = Math.max(1, parseInt(student.class_number_of_phase, 10) || 1);
   let maxFullPayEnrolledPhase = 0;
+  let earliestDbNewPhase = Number.POSITIVE_INFINITY;
+
+  for (const p of phases) {
+    const cell = student.phases?.[p.key];
+    if (!cell || cell.mark !== '1') continue;
+    if (String(cell.status || '').toLowerCase() === 'new') {
+      earliestDbNewPhase = Math.min(earliestDbNewPhase, p.key);
+    }
+  }
 
   for (const p of phases) {
     const cell = student.phases?.[p.key];
@@ -1219,7 +1228,20 @@ const applyPhaseMatrixTerminalCompletedLabel = (student, phases, normalizeStatus
     } else if (cell.status === 'pending_enrollment') {
       cell.label = normalizeStatusLabel('pending_enrollment');
     } else if (cell.status === 'new' && p.key !== firstEnrolledPhase) {
-      cell.label = normalizeStatusLabel('re_enrolled');
+      // Later plan start after an earlier completed short plan must stay "new".
+      const hadPriorCompleted = phases.some((prior) => {
+        if (!(prior.key < p.key)) return false;
+        const priorCell = student.phases?.[prior.key];
+        if (!priorCell || priorCell.mark !== '1') return false;
+        return (
+          String(priorCell.status || '').toLowerCase() === 'completed' ||
+          String(priorCell.label || '').toLowerCase() === 'completed'
+        );
+      });
+      const isEarliestDbNew = Number.isFinite(earliestDbNewPhase) && p.key === earliestDbNewPhase;
+      cell.label = normalizeStatusLabel(
+        hadPriorCompleted || isEarliestDbNew ? 'new' : 're_enrolled'
+      );
     } else if (cell.status === 're_enrolled') {
       cell.label = normalizeStatusLabel('re_enrolled');
     }
@@ -1357,8 +1379,8 @@ const resolveMatrixTrackPhaseCountForCompletionKpi = (student, cell = null) => {
 
 /**
  * Visible matrix labels that count as prior enrollment history for a later
- * completed cell (numerator and denominator both use this). Upsell alone
- * does not qualify a later completed cell.
+ * completed cell (denominator / Total Active gates). Upsell alone does not
+ * qualify a later completed cell.
  */
 const isPriorActiveEnrollmentLabel = (label) => {
   const normalizedLabel = String(label || '').trim().toLowerCase();
@@ -1452,9 +1474,8 @@ const matrixLabelCountsTowardReEnrollmentKpi = (label, _student = null, _cell = 
  * - Always count visible re-enrolled cells.
  * - Count Active (✓) lifecycle cells as retained (same as re-enrolled for the rate).
  * - Never count Inactive (X).
- * - Always count visible completed cells (including standalone completed with no prior
- *   new / re-enrolled / rejoin). Total Active Students uses multi-phase completed only
- *   (no prior-history gate).
+ * - Never count completed (including standalone 1-phase). Completed belongs on the
+ *   Completed KPI card / Total Active rules, not the re-enrollment rate.
  */
 const matrixCellCountsTowardReEnrollmentRate = (
   cell,
@@ -1471,10 +1492,6 @@ const matrixCellCountsTowardReEnrollmentRate = (
   if (cell.mark !== '1') return false;
 
   if (isVisibleReEnrolledLabel(cell.label)) return true;
-
-  if (isVisibleCompletedLabel(cell.label)) {
-    return true;
-  }
 
   return false;
 };
@@ -1509,7 +1526,8 @@ const matrixLabelCountsTowardRateDenominator = (label, cell = null) => {
  * - completed counts only when that same prior-month completed cell already had an
  *   earlier new, re-enrolled, or rejoin cell on the same student row.
  * - Pending enrollment, reserved, dropped, and standalone completed are excluded.
- * Note: numerator always counts completed; denominator still requires prior history.
+ * Note: rate numerator never counts completed; denominator still requires prior history
+ * for any completed cell that is included.
  */
 const matrixCellCountsTowardRateDenominator = (
   cell,
@@ -1572,7 +1590,7 @@ const countMatrixPriorPeriodEnrolledStudents = (
 
 /**
  * Re-enrollment rate header numerator:
- * visible re-enrolled + Active (✓) + all visible completed (including standalone).
+ * visible re-enrolled + Active (✓). Completed is excluded (see Completed KPI).
  */
 const countMatrixRateHeaderNumerator = (students, currentKey, periodCellsAccessor) => {
   let count = 0;
@@ -1617,13 +1635,12 @@ const countMatrixRateHeaderNumeratorBreakdown = (students, currentKey, periodCel
 
     if (isVisibleActiveLifecycleCell(cell)) {
       breakdown.active += 1;
-    } else if (isVisibleCompletedLabel(cell.label)) {
-      breakdown.completed += 1;
     } else {
       breakdown.re_enrolled += 1;
     }
   }
-  breakdown.total = breakdown.re_enrolled + breakdown.completed + breakdown.active;
+  // completed stays 0 — excluded from rate numerator by design
+  breakdown.total = breakdown.re_enrolled + breakdown.active;
   return breakdown;
 };
 
@@ -1690,8 +1707,8 @@ export const countMonthMatrixRateHeaderDenominator = (
 
 /**
  * Re-enrollment rate per display month (spreadsheet logic):
- * - Numerator: visible re-enrolled cells, Active (✓) lifecycle cells, and all visible
- *   completed cells (including standalone completed with no prior new/re-enrolled/rejoin).
+ * - Numerator: visible re-enrolled cells + Active (✓) lifecycle cells only.
+ *   Completed (including standalone 1-phase) is excluded — use the Completed KPI.
  * - Inactive (X) is excluded from the numerator.
  * - Denominator: prior-month cells labeled new, re-enrolled, rejoin, or upsell, plus
  *   completed cells that already had a prior new/re-enrolled/rejoin cell.
@@ -1795,7 +1812,7 @@ export const computeReEnrollmentMonthStats = (displayMonths, students, options =
 
 /**
  * Re-enrollment rate per phase (same KPI rules as monthly matrix, by phase):
- * - Numerator: visible re-enrolled, Active (✓), and all visible completed (including standalone).
+ * - Numerator: visible re-enrolled + Active (✓) only (completed excluded).
  * - Denominator: prior-phase cells labeled new, re-enrolled, rejoin, or upsell, plus
  *   completed cells with a prior new/re-enrolled/rejoin cell.
  * - Inactive, reserved/dropped/pending are excluded; standalone completed is excluded from denominator only.
@@ -3075,9 +3092,9 @@ export const loadStudentPhaseEnrollmentMatrix = async (queryFn, options = {}) =>
   const kpiTotals = aggregatePhaseMatrixKpiTotals(visibleStudents, phases);
   const reEnrollmentStats = computeReEnrollmentPhaseStats(phases, visibleStudents);
 
-  // kpi_totals.re_enrollment_count = Re-enrollment KPI (excludes single-phase completed).
+  // kpi_totals.re_enrollment_count = Re-enrollment KPI (visible re-enrolled labels).
   // phase_stats / total_re_enrolled_count = rate-header numerators
-  // (re-enrolled + Active + all visible completed).
+  // (re-enrolled + Active; completed excluded).
   return {
     phases,
     students: visibleStudents,
@@ -5342,7 +5359,9 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     const existing = student.months[monthKey];
     // Billing-month cells win over enrolled_at calendar month (installment phase-offset model).
-    if (existing?.mark === '1') continue;
+    // Dropped cells use mark "-" — still must not be overwritten by calendar rejoin
+    // (same-day drop+rejoin enroll timestamps would otherwise paint August as rejoin).
+    if (existing?.mark === '1' || isDroppedMonthMatrixCell(existing)) continue;
 
     student.months[monthKey] = {
       mark: '1',
@@ -5706,6 +5725,10 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   // Display-only:
   // - "new" only on first enrolled month; later DB "new" → "re-enrolled"
+  // - Exception: after a completed short plan, a later package may correctly store
+  //   status "new" on its start phase. Prefer the earliest phase_number still
+  //   marked "new" in DB (works when the prior completed month is outside the
+  //   loaded year window, e.g. Nov completed → Mar new).
   for (const student of students) {
     const firstEverKey = toManilaMonthKey(student.first_enrolled_at);
     const firstBillingKey = student.first_enrolled_month_key || null;
@@ -5719,10 +5742,27 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
     if (!firstEnrolledKey) continue;
 
+    let earliestNewPhase = Number.POSITIVE_INFINITY;
+    for (const m of months) {
+      const cell = student.months?.[m.key];
+      if (!cell || cell.mark !== '1') continue;
+      if (String(cell.status || '').toLowerCase() !== 'new') continue;
+      const phaseNum = parseInt(cell.phase_number, 10);
+      if (Number.isFinite(phaseNum) && phaseNum > 0) {
+        earliestNewPhase = Math.min(earliestNewPhase, phaseNum);
+      }
+    }
+
     for (const m of months) {
       const cell = student.months?.[m.key];
       if (!cell || cell.mark !== '1') continue;
       const isFirstEnrolledMonth = m.key === firstEnrolledKey;
+      const phaseNum = parseInt(cell.phase_number, 10);
+      const isEarliestDbNewPhase =
+        Number.isFinite(phaseNum) &&
+        Number.isFinite(earliestNewPhase) &&
+        phaseNum === earliestNewPhase;
+
       if (cell.status === 'upsell' && isFirstEnrolledMonth) {
         cell.label = 'upsell';
       } else if (cell.status === 'rejoin' || cell.calendar_rejoin) {
@@ -5733,8 +5773,21 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
         !['upsell', 'rejoin', 'completed'].includes(cell.status)
       ) {
         cell.label = 'new';
+      } else if (cell.status === 'new' && (isFirstEnrolledMonth || isEarliestDbNewPhase)) {
+        cell.label = 'new';
       } else if (cell.status === 'new' && !isFirstEnrolledMonth) {
-        cell.label = 're-enrolled';
+        // New installment package after an earlier completed short plan on the
+        // same class (e.g. Nov completed → Mar "new") must not become re-enrolled.
+        const hadPriorCompleted = months.some((prior) => {
+          if (!(prior.key < m.key)) return false;
+          const priorCell = student.months?.[prior.key];
+          if (!priorCell || priorCell.mark !== '1') return false;
+          return (
+            String(priorCell.status || '').toLowerCase() === 'completed' ||
+            String(priorCell.label || '').toLowerCase() === 'completed'
+          );
+        });
+        cell.label = hadPriorCompleted ? 'new' : 're-enrolled';
       } else if (cell.status === 're_enrolled' || cell.calendar_continuation) {
         cell.label = 're-enrolled';
       }
@@ -5859,7 +5912,7 @@ export const loadStudentMonthEnrollmentMatrix = async (queryFn, options = {}) =>
 
   // kpi_totals.re_enrollment_count = Re-enrollment KPI card (visible re-enrolled labels).
   // month_stats / total_re_enrolled_count = rate numerator
-  // (re-enrolled + Active + all visible completed; Inactive excluded).
+  // (re-enrolled + Active; completed and Inactive excluded).
   return {
     months,
     students: visibleStudents,
@@ -6067,7 +6120,7 @@ export const loadMonthMatrixOperationalStatsForMonth = async (queryFn, options =
     month_key: monthKey,
     ...statusCounts,
     /**
-     * Rate retained numerator: re-enrolled + Active + all visible completed.
+     * Rate retained numerator: re-enrolled + Active (✓). Completed excluded.
      * KPI re_enrollment_count remains visible re-enrolled labels only.
      */
     re_enrollment_count: statusCounts.re_enrollment_count,

@@ -1724,6 +1724,38 @@ node scripts/repairJohnzelDeJesusEnrollmentMayJunJul.js --production
 node scripts/repairJohnzelDeJesusEnrollmentMayJunJul.js --production --apply
 ```
 
+### `repairElijahDeJesusPhase7RejoinLabel.js`
+
+**Elijah Mikael A. De Jesus** (`aquinomarielle221@gmail.com`, user **275**) — Plan 2 profile **412**, class **53** VMP Nursery 11:00 AM.
+
+Phase 6 (CS **2468**) is delinquency-dropped; Phase 7 (CS **2469**, INV-**2665** Paid) was incorrectly labeled `re_enrolled`. First comeback after drop must be **`rejoin`**.
+
+| Fix | Result |
+|-----|--------|
+| CS **2469** | `re_enrolled` → **`rejoin`** |
+| Phase 6 | stays **dropped** |
+
+```bash
+node scripts/repairElijahDeJesusPhase7RejoinLabel.js --production
+node scripts/repairElijahDeJesusPhase7RejoinLabel.js --production --apply
+```
+
+### `repairElijahDeJesusAugustDropped.js`
+
+Same student — August Month Re-enrollment showed **rejoin** instead of **dropped**.
+
+Phase 6 (CS **2468**) is already `dropped`; Phase 7 (CS **2469**) `rejoin` shared the same `enrolled_at` (**2026-08-31**), so the calendar-rejoin overlay painted August. Shift Phase 7 enroll to **2026-09-02**. Also requires `enrollmentRateMetrics` so calendar rejoin does not overwrite dropped cells.
+
+| Month | Expected |
+|-------|----------|
+| Aug | **dropped** |
+| Sep | **rejoin** |
+
+```bash
+node scripts/repairElijahDeJesusAugustDropped.js --production
+node scripts/repairElijahDeJesusAugustDropped.js --production --apply
+```
+
 ### `repairSkylerVillanuevaUpsellSeptember.js`
 
 **Skyler Dawson Legerin Villanueva** (`shannenlegerin@gmail.com`, user **254**) — Pre-K class **161** (start **2026-09-03**), profile **526**.
@@ -1733,6 +1765,36 @@ Nursery completed April; Pre-K Phase 1 is already **`upsell`**, but `enrolled_at
 ```bash
 node scripts/repairSkylerVillanuevaUpsellSeptember.js --production
 node scripts/repairSkylerVillanuevaUpsellSeptember.js --production --apply
+```
+
+### `repairMiguelBulaongPhase5PenaltyUndrop.js`
+
+**Miguel Achilles Bulaong** (`gbulaong1994@icloud.com`, user **522**) — VMM Playgroup TTh 1:00 PM, profile **305**, class **94**.
+
+Phase 5 **INV-2216** / **INV-2442**: ₱5,146 paid (**PAY-2006**) but **₱514.60** late penalty left **Partially Paid**; CS **2255** **dropped**. Waive penalty, delete balance leaf, mark Phase 5 **Paid**, **re_enrolled**; clear penalty on Phase 6 **INV-2620**.
+
+```bash
+node scripts/repairMiguelBulaongPhase5PenaltyUndrop.js --production
+node scripts/repairMiguelBulaongPhase5PenaltyUndrop.js --production --apply
+```
+
+### `repairRyleighSabalsaMatrixEnrollment.js`
+
+**Ryleigh Maeve Sabalsa** (`sabalsamelodie@gmail.com`, user **229**) — Vista Mall Malolos.
+
+| Track | Fix |
+|-------|-----|
+| Nursery class **71** Plan 2 (CS **486** Phase 5) | `completed` + `enrolled_at` → **2025-11-24** (matrix **Nov 2025 completed**) |
+| Nursery Plan 3 (profile **293** `phase_start` **9→5**, CS **536** / **911**) | Phase 9 **`new`** · Phase 10 **`completed`** → matrix **Mar new / Apr completed** (phase-offset from Nov) |
+| Pre-K class **171** (CS **2271** Phase 1) | Keep **`upsell`**; `enrolled_at` → **2026-09-03** |
+
+Depends on `enrollmentRateMetrics` rule: DB `new` after a prior **completed** cell on the same track keeps label **new** (not re-enrolled).
+
+Dry-run applies inside a transaction, prints projected matrices, then **ROLLBACK**.
+
+```bash
+node scripts/repairRyleighSabalsaMatrixEnrollment.js --production
+node scripts/repairRyleighSabalsaMatrixEnrollment.js --production --apply
 ```
 
 ### `repairKirstenMahinayPhaseEnrollmentAndPayments.js`

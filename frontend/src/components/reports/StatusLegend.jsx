@@ -7,7 +7,7 @@ const TAB_PROGRAM_ENROLLMENT_STATUS = 'program_enrollment_status';
 
 const STUDENT_STATUS_LEGEND_TOOLTIPS = {
   active:
-    'Student has at least one Month Re-enrollment matrix cell labeled new, re-enrolled, completed (rate numerator), or rejoin for the selected billing month — same rules as Monthly Operational Dashboard total active students.\n\nThis report lists unique students (one row each). The dashboard KPI sums matrix cells, so one student in two classes may count twice on the dashboard but once here.',
+    'Student has at least one Month Re-enrollment matrix cell labeled new, re-enrolled, completed (multi-phase Total Active), or rejoin for the selected billing month — same rules as Monthly Operational Dashboard total active students.\n\nThis report lists unique students (one row each). The dashboard KPI sums matrix cells, so one student in two classes may count twice on the dashboard but once here.',
   inactive:
     'No qualifying matrix cell for that billing month. Includes upsell, reserved, dropped, or students with no enrollment track in the matrix for that month.',
 };

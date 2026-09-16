@@ -1661,8 +1661,9 @@ router.get(
       const phaseMatrixKpi = student_phase_enrollment_matrix?.kpi_totals ?? null;
       const matrixKpiSource = monthMatrixKpi || phaseMatrixKpi;
       const dashboardNewEnrollees = monthMatrixKpi?.new_enrollees_count ?? newEnrolleesCount;
-      // Prefer matrix KPI totals (re-enrolled + multi-phase completed). Do not use
-      // total_re_enrolled_count — that is the rate-header numerator (includes single-phase completed).
+      // Prefer matrix KPI totals (purple re-enrolled cells). Do not use
+      // total_re_enrolled_count alone as a substitute for the Re-enrollment KPI card —
+      // that field is the rate-header numerator (re-enrolled + Active; completed excluded).
       const dashboardReEnrollment =
         monthMatrixKpi?.re_enrollment_count ??
         student_month_enrollment_matrix?.total_re_enrolled_count ??
