@@ -1,8 +1,9 @@
 /**
- * Maps onboarding email steps to Settings → Templates keys and builds variables.
+ * Maps onboarding email to Settings → Templates keys and builds variables.
  */
 import {
   logTemplateRenderWarning,
+  loadEffectiveTemplate,
   renderMessagingTemplate,
 } from '../templateRenderService.js';
 import { groupChatFallbackText } from './branchGroupChat.js';
@@ -18,11 +19,33 @@ import {
 
 export const EMAIL_ID_TO_TEMPLATE_KEY = Object.freeze({
   onboarding: FIRST_ENROLLMENT_TEMPLATE_KEYS.onboarding,
+  // Legacy IDs (no longer sent)
   class_schedule: FIRST_ENROLLMENT_TEMPLATE_KEYS.class_schedule,
   things_to_prepare: FIRST_ENROLLMENT_TEMPLATE_KEYS.things_to_prepare,
   important_reminders: FIRST_ENROLLMENT_TEMPLATE_KEYS.important_reminders,
   stay_connected: FIRST_ENROLLMENT_TEMPLATE_KEYS.stay_connected,
 });
+
+/**
+ * True when a stored Settings body is still the old welcome-only template
+ * (missing the combined sections).
+ */
+export function isStaleShortOnboardingBody(body) {
+  const text = String(body || '');
+  if (!text.trim()) return true;
+  // Prefer placeholder check on unrendered template bodies.
+  if (text.includes('{classStartDate}') || text.includes('{classSchedule}')) {
+    if (text.includes('{facebookUrl}') || text.includes('{groupChatLine}')) {
+      return false;
+    }
+  }
+  // Rendered bodies: look for section headings.
+  const hasSchedule = /FIRST DAY OF SCHOOL/i.test(text);
+  const hasPrepare = /THINGS TO PREPARE/i.test(text) || /Extra set of clothes/i.test(text);
+  const hasReminders = /IMPORTANT REMINDERS/i.test(text);
+  const hasStay = /STAY CONNECTED/i.test(text);
+  return !(hasSchedule && hasPrepare && hasReminders && hasStay);
+}
 
 export function buildFirstEnrollmentTemplateVariables(emailId, context = {}) {
   const year = context.academicYear || academicYearLabel();
@@ -33,21 +56,30 @@ export function buildFirstEnrollmentTemplateVariables(emailId, context = {}) {
     ? `Group Chat: ${groupChatLabel} (${groupChatUrl})`
     : groupChatFallbackText();
 
+  const combined = {
+    academicYear: year,
+    arAttachmentNote: context.includeArAttachmentNote
+      ? '\n\nYour acknowledgement receipt is attached to this email as a PDF for your records.'
+      : '',
+    classStartDate: context.classStartDateDisplay || 'To be announced',
+    classSchedule:
+      context.classScheduleText ||
+      'Please contact your branch for your class schedule.',
+    branchName: context.branchName || '',
+    facebookUrl,
+    groupChatLine,
+    groupChatLabel,
+    groupChatUrl: groupChatUrl || '',
+  };
+
   switch (emailId) {
     case 'onboarding':
-      return {
-        academicYear: year,
-        arAttachmentNote: context.includeArAttachmentNote
-          ? '\n\nYour acknowledgement receipt is attached to this email as a PDF for your records.'
-          : '',
-      };
+      return combined;
     case 'class_schedule':
       return {
-        classStartDate: context.classStartDateDisplay || 'To be announced',
-        classSchedule:
-          context.classScheduleText ||
-          'Please contact your branch for your class schedule.',
-        branchName: context.branchName || '',
+        classStartDate: combined.classStartDate,
+        classSchedule: combined.classSchedule,
+        branchName: combined.branchName,
       };
     case 'things_to_prepare':
       return {};
@@ -78,6 +110,31 @@ export async function resolveSequenceEmailContent({
   const templateKey = EMAIL_ID_TO_TEMPLATE_KEY[emailId];
   if (templateKey) {
     try {
+      // Detect stale welcome-only Settings body before variable substitution.
+      if (emailId === 'onboarding') {
+        const tpl = await loadEffectiveTemplate(client, templateKey, branchId);
+        if (!tpl.enabled) {
+          return {
+            skipped: true,
+            enabled: false,
+            subject: '',
+            html: '',
+            plainText: '',
+            source: 'settings_disabled',
+          };
+        }
+        if (isStaleShortOnboardingBody(tpl.body)) {
+          const legacy = buildSequenceEmail('onboarding', context);
+          return {
+            enabled: true,
+            subject: tpl.subject || legacy.subject,
+            html: legacy.html,
+            plainText: legacy.plainText,
+            source: 'fallback_combined_upgrade',
+          };
+        }
+      }
+
       const rendered = await renderMessagingTemplate({
         client,
         templateKey,
@@ -94,6 +151,7 @@ export async function resolveSequenceEmailContent({
           source: 'settings_disabled',
         };
       }
+
       if (rendered.subject && rendered.body) {
         return {
           enabled: true,

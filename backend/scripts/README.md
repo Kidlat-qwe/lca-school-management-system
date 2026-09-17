@@ -1756,6 +1756,22 @@ node scripts/repairElijahDeJesusAugustDropped.js --production
 node scripts/repairElijahDeJesusAugustDropped.js --production --apply
 ```
 
+### `repairTheoRedullaSeptemberNew.js`
+
+**Theo Redulla** (`fbredulla@yahoo.com`, user **694**) — full payment on class **94** VMM Playgroup 1:00 PM (INV-**2904**). Class started **April**, so matrix showed **Apr new**; paid/joined in **September**.
+
+| Fix | Result |
+|-----|--------|
+| Delete CS **2699–2703** (Phases 1–5) | Apr–Aug blank |
+| CS **2704** Phase 6 | **`new`** → matrix **Sep new** |
+| Phases 7–9 / 10 | re_enrolled / completed |
+| INV-**2904** remarks | `PHASE_START:6` `PHASE_END:10` |
+
+```bash
+node scripts/repairTheoRedullaSeptemberNew.js --production
+node scripts/repairTheoRedullaSeptemberNew.js --production --apply
+```
+
 ### `repairSkylerVillanuevaUpsellSeptember.js`
 
 **Skyler Dawson Legerin Villanueva** (`shannenlegerin@gmail.com`, user **254**) — Pre-K class **161** (start **2026-09-03**), profile **526**.

@@ -1,6 +1,6 @@
 /**
- * Clear first-enrollment onboarding idempotency logs and send the
- * five-email onboarding sequence (for format verification).
+ * Clear first-enrollment welcome idempotency logs and send the
+ * combined welcome email (for format verification).
  *
  *   node backend/scripts/sendTestFirstEnrollmentWelcomeEmail.js
  *   node backend/scripts/sendTestFirstEnrollmentWelcomeEmail.js --email=someone@example.com
@@ -38,53 +38,31 @@ function resolveTargetEmail(argv) {
 const forceSequence = process.argv.includes('--force-sequence');
 const targetEmail = resolveTargetEmail(process.argv);
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function stepDelayMs() {
-  const raw = Number(process.env.FIRST_ENROLLMENT_SEQUENCE_STEP_DELAY_MS);
-  if (Number.isFinite(raw) && raw >= 0) return raw;
-  return forceSequence ? 2000 : 45000;
-}
-
 async function clearWelcomeLogs(studentId) {
   return clearOnboardingEmailLogsForStudents([studentId]);
 }
 
-async function sendPreviewSequence(recipients, context = {}) {
-  const results = [];
-  const delay = stepDelayMs();
-
-  for (let i = 0; i < SEQUENCE_EMAIL_IDS.length; i += 1) {
-    const emailId = SEQUENCE_EMAIL_IDS[i];
-    if (i > 0 && delay > 0) {
-      await sleep(delay);
-    }
-
-    const content = await resolveSequenceEmailContent({ emailId, context });
-    if (content.skipped || !content.enabled) {
-      console.log(`Preview "${emailId}": skipped (${content.source || 'disabled'})`);
-      results.push({ emailId, subject: content.subject, summary: { sent: 0, attempted: 0, skipped: true } });
-      continue;
-    }
-    const summary = await sendSystemNotificationEmailToEach({
-      recipients,
-      subject: content.subject,
-      html: content.html,
-      attachments: [],
-    });
-    results.push({ emailId, subject: content.subject, summary });
-    console.log(`Preview "${emailId}": ${summary.sent}/${summary.attempted} sent`);
+async function sendPreviewCombined(recipients, context = {}) {
+  const emailId = SEQUENCE_EMAIL_IDS[0] || 'onboarding';
+  const content = await resolveSequenceEmailContent({ emailId, context });
+  if (content.skipped || !content.enabled) {
+    console.log(`Preview "${emailId}": skipped (${content.source || 'disabled'})`);
+    return [{ emailId, subject: content.subject, summary: { sent: 0, attempted: 0, skipped: true } }];
   }
-
-  return results;
+  const summary = await sendSystemNotificationEmailToEach({
+    recipients,
+    subject: content.subject,
+    html: content.html,
+    attachments: [],
+  });
+  console.log(`Preview "${emailId}": ${summary.sent}/${summary.attempted} sent (${content.source})`);
+  return [{ emailId, subject: content.subject, summary }];
 }
 
 async function main() {
-  console.log('Onboarding email preview (email 1):\n');
+  console.log('Combined welcome email preview:\n');
   console.log(buildOnboardingPlainText());
-  console.log(`\nFull sequence: ${SEQUENCE_EMAIL_IDS.join(' → ')}\n---\n`);
+  console.log(`\nSend list: ${SEQUENCE_EMAIL_IDS.join(', ')}\n---\n`);
 
   if (!isEmailConfigured()) {
     throw new Error('Email is not configured in backend/.env');
@@ -100,8 +78,8 @@ async function main() {
   );
 
   if (studentRes.rows.length === 0) {
-    console.warn(`No Student user found for ${targetEmail}; sending preview sequence only.`);
-    await sendPreviewSequence(normalizeNotificationRecipients([targetEmail]));
+    console.warn(`No Student user found for ${targetEmail}; sending preview only.`);
+    await sendPreviewCombined(normalizeNotificationRecipients([targetEmail]));
     return;
   }
 
@@ -129,7 +107,7 @@ async function main() {
       enrollmentStatus: 'new',
       classstudentId,
     });
-    console.log('Sequence send result:', JSON.stringify(result, null, 2));
+    console.log('Send result:', JSON.stringify(result, null, 2));
     return;
   }
 

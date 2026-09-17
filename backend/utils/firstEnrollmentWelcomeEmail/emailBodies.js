@@ -1,5 +1,5 @@
 /**
- * Plain-text + HTML bodies for first-enrollment onboarding email sequence.
+ * Plain-text + HTML bodies for first-enrollment welcome email (single combined send).
  */
 import { escapeHtml, plainTextToEmailHtml, wrapBrandedEmailHtml } from '../templateRenderService.js';
 import { groupChatFallbackText } from './branchGroupChat.js';
@@ -12,6 +12,7 @@ export const ONBOARDING_EMAIL = {
   legacyLogType: 'first_enrollment_welcome_email',
 };
 
+/** @deprecated Former follow-up emails — now included in the combined onboarding email. */
 export const FOLLOW_UP_EMAILS = [
   {
     id: 'class_schedule',
@@ -43,10 +44,22 @@ export function facebookPageUrl() {
 }
 
 /**
- * Email 1 — Onboarding (official enrollment welcome).
+ * Single combined welcome email (welcome + schedule + prepare + reminders + stay connected).
  */
-export function buildOnboardingPlainText({ academicYear, includeArAttachmentNote = false } = {}) {
+export function buildOnboardingPlainText({
+  academicYear,
+  includeArAttachmentNote = false,
+  classStartDateDisplay = 'To be announced',
+  classScheduleText = 'Please contact your branch for your class schedule.',
+  facebookUrl = facebookPageUrl(),
+  groupChatUrl = null,
+  groupChatLabel = 'Group Chat',
+} = {}) {
   const year = academicYear || academicYearLabel();
+  const groupChatLine = groupChatUrl
+    ? `Group Chat: ${groupChatLabel} (${groupChatUrl})`
+    : `Group Chat: ${groupChatFallbackText()}`;
+
   const lines = [
     'Congratulations!',
     '',
@@ -66,7 +79,69 @@ export function buildOnboardingPlainText({ academicYear, includeArAttachmentNote
     );
   }
 
-  lines.push('', 'Best Regards,', 'Little Champions Academy Inc.', 'Play . Learn . Succeed');
+  lines.push(
+    '',
+    '────────────────────────',
+    '',
+    'FIRST DAY OF SCHOOL',
+    '',
+    `Date: ${classStartDateDisplay}`,
+    '',
+    `Class Schedule: ${classScheduleText}`,
+    '',
+    'Important: Please arrive at least 10 minutes before your scheduled class time to allow your child sufficient time to settle in and prepare for class.',
+    '',
+    'For dismissal, parents or authorized guardians are requested to arrive 10 minutes before the scheduled end of class to ensure a smooth and orderly pick-up.',
+    '',
+    '────────────────────────',
+    '',
+    'THINGS TO PREPARE FOR CLASS',
+    '',
+    'Please ensure that your child brings the following:',
+    '',
+    '1. Extra set of clothes',
+    '',
+    '2. Hygiene Kit (Wet wipes, alcohol, tissue, soap)',
+    '',
+    '3. Dry, healthy, and nutritious snack',
+    '',
+    '4. A refillable and sealed water bottle labeled with your child’s complete name',
+    '',
+    '────────────────────────',
+    '',
+    'IMPORTANT REMINDERS',
+    '',
+    '• Please ensure that your child arrives at least 10 minutes before the scheduled class time.',
+    '',
+    '• Please prepare all necessary school items before leaving home to avoid delays.',
+    '',
+    '• Kindly label all personal belongings with your child’s complete name.',
+    '',
+    '• Please ensure that your child is well-rested and prepared to participate in class.',
+    '',
+    '• Please regularly check the official class group chat for announcements, reminders, and other important information.',
+    '',
+    '• Kindly complete the required onboarding requirements before your child’s first day of school.',
+    '',
+    '────────────────────────',
+    '',
+    'STAY CONNECTED',
+    '',
+    'For the latest updates, you can also follow and message our official Facebook page and group chat:',
+    '',
+    `Facebook page link: Little Champions Academy Inc. (${facebookUrl})`,
+    '',
+    groupChatLine,
+    '',
+    'Once again, welcome to Little Champions Academy, Inc. We look forward to partnering with you throughout the academic year and supporting your child’s continued learning and development.',
+    '',
+    'Sincerely,',
+    '',
+    'Little Champions Academy, Inc.',
+    '',
+    'Play. Learn. Succeed.'
+  );
+
   return lines.join('\n');
 }
 
@@ -235,15 +310,10 @@ export function buildSequenceEmail(emailId, context = {}) {
     case 'onboarding':
       return {
         subject: ONBOARDING_EMAIL.subject,
-        html: buildOnboardingHtml({
-          academicYear: context.academicYear,
-          includeArAttachmentNote: context.includeArAttachmentNote,
-        }),
-        plainText: buildOnboardingPlainText({
-          academicYear: context.academicYear,
-          includeArAttachmentNote: context.includeArAttachmentNote,
-        }),
+        html: buildOnboardingHtml(context),
+        plainText: buildOnboardingPlainText(context),
       };
+    // Legacy IDs kept for preview/tests only — production sends `onboarding` alone.
     case 'class_schedule':
       return {
         subject: FOLLOW_UP_EMAILS[0].subject,
@@ -281,7 +351,5 @@ export function buildSequenceEmail(emailId, context = {}) {
   }
 }
 
-export const SEQUENCE_EMAIL_IDS = [
-  ONBOARDING_EMAIL.id,
-  ...FOLLOW_UP_EMAILS.map((e) => e.id),
-];
+/** Production send list: one combined welcome email. */
+export const SEQUENCE_EMAIL_IDS = [ONBOARDING_EMAIL.id];

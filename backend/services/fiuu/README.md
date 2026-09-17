@@ -103,7 +103,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 
 ## Dev UAT checklist (MIT)
 
-1. Parent pays installment via `/go` with AutoPay ON + Card save → token in `fiuu_payment_tokenstbl`, consent `active`.
+1. Parent opens `/go` with AutoPay **ON by default**, checks Terms checkbox (link opens Terms; reading is optional), then completes OTP + Card save → token in `fiuu_payment_tokenstbl`, consent `active`.
 2. Set `FIUU_AUTOPAY_MIT_ENABLED=true` and redeploy backend.
 3. Advance/generate next installment invoice (scheduler or admin trigger).
 4. Expect `gateway_paymentstbl` row with `metadata.mit=true`, Recurring API `accepted`, then webhook marks invoice Paid.

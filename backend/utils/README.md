@@ -20,7 +20,7 @@ Used by: `routes/merchandiserequests.js`, enrollment/invoice date coercion.
 
 ## `firstEnrollmentWelcomeEmail/`
 
-Five-email onboarding sequence when a student first becomes officially enrolled (`program_enrollment_status = new`). See [firstEnrollmentWelcomeEmail/README.md](./firstEnrollmentWelcomeEmail/README.md).
+Single combined welcome email when a student first becomes officially enrolled (`program_enrollment_status = new`). Includes welcome, class schedule, things to prepare, important reminders, and stay connected. See [firstEnrollmentWelcomeEmail/README.md](./firstEnrollmentWelcomeEmail/README.md).
 
 ## `acknowledgementReceiptStatus.js`
 

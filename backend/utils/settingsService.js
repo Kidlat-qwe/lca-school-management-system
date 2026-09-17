@@ -180,41 +180,41 @@ export const SETTINGS_DEFINITIONS = Object.freeze({
     },
   },
 
-  // --- First enrollment onboarding (5-email sequence for new students) ---
+  // --- First enrollment welcome (single combined email for new students) ---
   template_first_enrollment_onboarding: {
     key: 'template_first_enrollment_onboarding',
     type: 'json',
     category: 'templates',
     description:
-      'Email 1 of 5 — official welcome sent when a student is first enrolled (program status new).',
+      'Combined welcome email when a student is first enrolled (welcome, schedule, prepare, reminders, stay connected).',
     defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_onboarding,
   },
   template_first_enrollment_class_schedule: {
     key: 'template_first_enrollment_class_schedule',
     type: 'json',
     category: 'templates',
-    description: 'Email 2 of 5 — first day of school and weekly class schedule.',
+    description: 'Legacy — no longer sent separately (merged into welcome email).',
     defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_class_schedule,
   },
   template_first_enrollment_things_to_prepare: {
     key: 'template_first_enrollment_things_to_prepare',
     type: 'json',
     category: 'templates',
-    description: 'Email 3 of 5 — checklist of items to bring to class.',
+    description: 'Legacy — no longer sent separately (merged into welcome email).',
     defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_things_to_prepare,
   },
   template_first_enrollment_important_reminders: {
     key: 'template_first_enrollment_important_reminders',
     type: 'json',
     category: 'templates',
-    description: 'Email 4 of 5 — important reminders before the first day.',
+    description: 'Legacy — no longer sent separately (merged into welcome email).',
     defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_important_reminders,
   },
   template_first_enrollment_stay_connected: {
     key: 'template_first_enrollment_stay_connected',
     type: 'json',
     category: 'templates',
-    description: 'Email 5 of 5 — Facebook page and branch group chat links.',
+    description: 'Legacy — no longer sent separately (merged into welcome email).',
     defaultValue: FIRST_ENROLLMENT_TEMPLATE_DEFAULTS.template_first_enrollment_stay_connected,
   },
 

@@ -1,9 +1,12 @@
 /**
- * Stay Connected template variable labels for Settings → Templates (branch overrides).
+ * First enrollment template variables for Settings → Templates (branch overrides).
  * Mirrors backend branch group-chat resolution for editor hints only.
  */
 
-export const STAY_CONNECTED_TEMPLATE_KEY = 'template_first_enrollment_stay_connected';
+export const COMBINED_ONBOARDING_TEMPLATE_KEY = 'template_first_enrollment_onboarding';
+
+/** @deprecated Use COMBINED_ONBOARDING_TEMPLATE_KEY — Stay Connected is now part of the combined welcome. */
+export const STAY_CONNECTED_TEMPLATE_KEY = COMBINED_ONBOARDING_TEMPLATE_KEY;
 
 const GROUP_CHAT_VARIABLES = new Set(['{groupChatUrl}', '{groupChatLine}', '{groupChatLabel}']);
 

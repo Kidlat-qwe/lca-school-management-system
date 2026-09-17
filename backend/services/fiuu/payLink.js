@@ -325,7 +325,8 @@ export function buildFiuuAutoPostHtml(
     const priorDecision = String(payload.parent_autodebit_decision || '');
     const priorAccepted = priorDecision === 'accepted' && payload.parent_autodebit_opt_in;
     const priorOtpVerified = Boolean(payload.autopay_otp_verified);
-    const initialEnabled = priorAccepted ? 'true' : 'false';
+    // Default AutoPay ON; keep ON if parent already accepted.
+    const initialEnabled = priorDecision === 'declined' ? 'false' : 'true';
     const initialTermsAccepted = priorAccepted ? 'true' : 'false';
     const termsTitle = escapeHtmlAttr(terms?.title || 'LCA AutoPay Terms & Conditions');
     const termsBody = String(terms?.body || '')
@@ -340,7 +341,7 @@ export function buildFiuuAutoPostHtml(
       : [
           'Your card may be securely tokenized by FIUU after a successful first payment.',
           'LCA may automatically charge that card for tuition under your plan until settled or you cancel AutoPay.',
-          'AutoPay is optional — leave it off to pay each invoice with a payment link instead.',
+          'AutoPay is optional — turn it off to pay each invoice with a payment link instead.',
         ];
     const whatHappensHtml = whatHappensList
       .map((item) => `<li>${escapeHtmlAttr(item)}</li>`)
@@ -354,32 +355,49 @@ export function buildFiuuAutoPostHtml(
               <div style="margin-top:16px;text-align:left;">
                 <p style="margin:0 0 14px;font-size:13px;color:#334155;line-height:1.5;">
                   Optional <strong>LCA AutoPay</strong> is available for <strong>${classLabel}</strong>.
-                  It stays <strong>off</strong> unless you turn it on and accept the Terms.
+                  It is <strong>on</strong> by default. Confirm the Terms below, or turn it off to pay this invoice only.
                 </p>
 
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
-                            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;margin-bottom:14px;">
+                            background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;margin-bottom:12px;">
                   <div style="font-size:13px;color:#0f172a;line-height:1.4;padding-right:8px;">
                     <div style="font-weight:700;margin-bottom:4px;">Enable LCA AutoPay</div>
-                    <div style="font-size:12px;color:#64748b;">Default is off. Turning it on shows Terms first.</div>
+                    <div style="font-size:12px;color:#64748b;">Default is on. Confirm Terms below to continue with AutoPay.</div>
                   </div>
-                  <button type="button" id="autodebitToggle" role="switch" aria-checked="false"
+                  <button type="button" id="autodebitToggle" role="switch" aria-checked="true"
                     style="flex-shrink:0;width:52px;height:30px;border-radius:999px;border:0;cursor:pointer;
-                           background:#cbd5e1;position:relative;padding:0;">
+                           background:#16a34a;position:relative;padding:0;">
                     <span id="autodebitKnob"
-                      style="position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;
+                      style="position:absolute;top:3px;left:25px;width:24px;height:24px;border-radius:50%;
                              background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.2);transition:left 0.15s;"></span>
                   </button>
                 </div>
 
+                <label id="termsAgreeRow" for="termsAgreeCheckbox"
+                  style="display:flex;align-items:flex-start;gap:10px;margin:0 0 10px;padding:12px;
+                         background:#fff;border:1px solid #e2e8f0;border-radius:10px;cursor:pointer;">
+                  <input type="checkbox" id="termsAgreeCheckbox"
+                    style="margin-top:2px;width:16px;height:16px;flex-shrink:0;accent-color:#1e3a8a;cursor:pointer;" />
+                  <span style="font-size:13px;color:#334155;line-height:1.45;">
+                    I agree to the
+                    <a href="#" id="termsLink" style="color:#1e3a8a;font-weight:600;text-decoration:underline;">
+                      Terms and Conditions
+                    </a>
+                    for LCA AutoPay.
+                  </span>
+                </label>
+
                 <p id="autodebitStatus" style="margin:0 0 14px;font-size:12px;color:#64748b;">
-                  LCA AutoPay is <strong>off</strong>. You will pay this invoice only.
+                  LCA AutoPay is <strong>on</strong>. Check the Terms box to continue with AutoPay.
+                </p>
+                <p id="termsError" style="display:none;margin:0 0 12px;font-size:12px;color:#b91c1c;">
+                  Please check the box to confirm you agree to the Terms and Conditions.
                 </p>
 
                 <button type="button" id="continuePayBtn"
                   style="display:block;width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
                          font-weight:600;font-size:14px;padding:12px 16px;cursor:pointer;">
-                  Continue to payment
+                  Continue with LCA AutoPay
                 </button>
 
                 <form id="declineForm" method="POST" action="${action}" style="display:none;">
@@ -404,7 +422,7 @@ export function buildFiuuAutoPostHtml(
                   <div style="padding:16px 18px 10px;border-bottom:1px solid #f1f5f9;">
                     <div id="termsModalTitle" style="font-size:15px;font-weight:700;color:#0f172a;">${termsTitle}</div>
                     <p style="margin:6px 0 0;font-size:12px;color:#64748b;line-height:1.4;">
-                      Please read carefully before enabling LCA AutoPay.
+                      You can agree using the checkbox on the payment page without opening this window.
                     </p>
                   </div>
                   <div style="padding:14px 18px;overflow:auto;flex:1;">
@@ -420,12 +438,12 @@ export function buildFiuuAutoPostHtml(
                     <button type="button" id="termsAgreeBtn"
                       style="width:100%;background:#1e3a8a;color:#fff;border:0;border-radius:8px;
                              font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      I agree — enable LCA AutoPay
+                      I agree — check Terms box
                     </button>
                     <button type="button" id="termsCancelBtn"
                       style="width:100%;background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:8px;
                              font-weight:600;font-size:14px;padding:11px 14px;cursor:pointer;">
-                      Cancel — keep AutoPay off
+                      Close
                     </button>
                   </div>
                 </div>
@@ -440,6 +458,10 @@ export function buildFiuuAutoPostHtml(
                   var toggle = document.getElementById('autodebitToggle');
                   var knob = document.getElementById('autodebitKnob');
                   var status = document.getElementById('autodebitStatus');
+                  var termsError = document.getElementById('termsError');
+                  var termsRow = document.getElementById('termsAgreeRow');
+                  var termsCheckbox = document.getElementById('termsAgreeCheckbox');
+                  var termsLink = document.getElementById('termsLink');
                   var modal = document.getElementById('termsModal');
                   var continueBtn = document.getElementById('continuePayBtn');
                   var agreeBtn = document.getElementById('termsAgreeBtn');
@@ -454,9 +476,17 @@ export function buildFiuuAutoPostHtml(
                     toggle.setAttribute('aria-checked', enabled ? 'true' : 'false');
                     toggle.style.background = enabled ? '#16a34a' : '#cbd5e1';
                     knob.style.left = enabled ? '25px' : '3px';
+                    termsCheckbox.checked = !!termsAccepted;
+                    termsRow.style.display = enabled ? 'flex' : 'none';
+                    if (termsError) termsError.style.display = 'none';
+
                     if (enabled && termsAccepted) {
                       status.innerHTML = 'LCA AutoPay is <strong>on</strong> (Terms accepted).';
                       status.style.color = '#166534';
+                      continueBtn.textContent = 'Continue with LCA AutoPay';
+                    } else if (enabled) {
+                      status.innerHTML = 'LCA AutoPay is <strong>on</strong>. Check the Terms box to continue with AutoPay.';
+                      status.style.color = '#64748b';
                       continueBtn.textContent = 'Continue with LCA AutoPay';
                     } else {
                       status.innerHTML = 'LCA AutoPay is <strong>off</strong>. You will pay this invoice only.';
@@ -473,12 +503,21 @@ export function buildFiuuAutoPostHtml(
                   }
 
                   toggle.addEventListener('click', function () {
-                    if (enabled) {
-                      enabled = false;
+                    enabled = !enabled;
+                    if (!enabled) {
                       termsAccepted = false;
-                      paintToggle();
-                      return;
                     }
+                    paintToggle();
+                  });
+
+                  termsCheckbox.addEventListener('change', function () {
+                    termsAccepted = !!termsCheckbox.checked;
+                    paintToggle();
+                  });
+
+                  termsLink.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    e.stopPropagation();
                     openModal();
                   });
 
@@ -490,22 +529,20 @@ export function buildFiuuAutoPostHtml(
                   });
 
                   cancelBtn.addEventListener('click', function () {
-                    enabled = false;
-                    termsAccepted = false;
                     closeModal();
-                    paintToggle();
                   });
 
                   modal.addEventListener('click', function (e) {
                     if (e.target === modal) {
-                      enabled = false;
-                      termsAccepted = false;
                       closeModal();
-                      paintToggle();
                     }
                   });
 
                   continueBtn.addEventListener('click', function () {
+                    if (enabled && !termsAccepted) {
+                      if (termsError) termsError.style.display = 'block';
+                      return;
+                    }
                     if (enabled && termsAccepted) {
                       if (priorAccepted && priorOtpVerified && otpEnabled && readyPayForm) {
                         readyPayForm.submit();
@@ -528,7 +565,7 @@ export function buildFiuuAutoPostHtml(
     return buildBrandedPayPageHtml({
       title: 'LCA AutoPay option',
       heading: 'Before you pay',
-      message: 'LCA AutoPay stays off unless you turn it on and accept the Terms.',
+      message: 'LCA AutoPay is on by default. Confirm the Terms below, or turn it off to pay this invoice only.',
       bodyHtml,
       statusTone: 'neutral',
     });

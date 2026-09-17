@@ -2,7 +2,7 @@
  * Clear first-enrollment onboarding idempotency logs (no billing/class changes).
  *
  * Use after hard-delete if emails still skip with reason "already_sent", or to
- * re-test the 5-email sequence without wiping enrollment again.
+ * re-test the combined welcome email without wiping enrollment again.
  *
  *   node backend/scripts/clearFirstEnrollmentOnboardingLogs.js --email=student@example.com
  *   node backend/scripts/clearFirstEnrollmentOnboardingLogs.js --development --email=student@example.com

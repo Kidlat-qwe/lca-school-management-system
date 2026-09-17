@@ -1,12 +1,9 @@
 /**
- * First-enrollment onboarding email sequence for Little Champions Academy.
+ * First-enrollment welcome email for Little Champions Academy.
  *
  * Sends once when a student receives program_enrollment_status = 'new':
- *   1. Onboarding (official welcome + optional AR PDF)
- *   2. Class Schedule (CMS start date + weekly schedule)
- *   3. Things to Prepare
- *   4. Important Reminders
- *   5. Stay Connected (Facebook page)
+ * one combined email with Welcome, Class Schedule, Things to Prepare,
+ * Important Reminders, and Stay Connected (optional AR PDF attachment).
  *
  * Recipients: student email + primary guardian email (deduped).
  */
@@ -20,7 +17,6 @@ import {
 import { buildArPdfAttachmentForPaymentConfirmation } from '../paymentArPdfAttachment.js';
 import {
   academicYearLabel,
-  buildSequenceEmail,
   facebookPageUrl,
   ONBOARDING_EMAIL,
   SEQUENCE_EMAIL_IDS,
@@ -37,20 +33,10 @@ const LOG_ENTITY_SEQUENCE = 'first_enrollment_onboarding_sequence';
 const LOG_ENTITY_LEGACY = ONBOARDING_EMAIL.legacyLogType;
 
 const DEFAULT_QUEUE_DELAY_MS = 3000;
-const DEFAULT_STEP_DELAY_MS = 45000;
 
 function queueDelayMs() {
   const raw = Number(process.env.FIRST_ENROLLMENT_WELCOME_EMAIL_DELAY_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_QUEUE_DELAY_MS;
-}
-
-function stepDelayMs() {
-  const raw = Number(process.env.FIRST_ENROLLMENT_SEQUENCE_STEP_DELAY_MS);
-  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_STEP_DELAY_MS;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function toEmailAttachments(pdfResult) {
@@ -103,7 +89,7 @@ async function alreadySentOnboardingSequence(studentId) {
 }
 
 /**
- * Remove onboarding idempotency logs so the 5-email sequence can send again.
+ * Remove onboarding idempotency logs so the welcome email can send again.
  * Used by hard-delete wipe scripts and manual test resets.
  */
 export async function clearOnboardingEmailLogsForStudents(studentIds = []) {
@@ -137,10 +123,11 @@ async function markOnboardingSequenceSent(studentId, recipients, results, meta =
       [
         studentId,
         LOG_ENTITY_SEQUENCE,
-        `First enrollment onboarding sequence (${results.length} emails) sent to ${recipients.join(', ')}`,
+        `First enrollment welcome email sent to ${recipients.join(', ')}`,
         JSON.stringify({
           student_id: Number(studentId),
           recipients,
+          combined: true,
           emails: results.map((r) => ({
             id: r.id,
             subject: r.subject,
@@ -312,7 +299,7 @@ async function sendSequenceEmail({
 }
 
 /**
- * Send the full first-enrollment onboarding sequence.
+ * Send the first-enrollment combined welcome email.
  */
 export async function maybeSendFirstEnrollmentWelcomeEmail({
   studentId,
@@ -369,6 +356,7 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
   });
   const sharedContext = {
     academicYear: year,
+    includeArAttachmentNote: arBundle.arPdfAttached,
     classStartDateDisplay: classContext?.classStartDateDisplay || 'To be announced',
     classScheduleText: classContext?.classScheduleText || 'Please contact your branch for your class schedule.',
     branchName: classContext?.branchName || '',
@@ -379,26 +367,13 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
   };
 
   const results = [];
-  const stepDelay = stepDelayMs();
 
-  for (let i = 0; i < SEQUENCE_EMAIL_IDS.length; i += 1) {
-    const emailId = SEQUENCE_EMAIL_IDS[i];
-    if (i > 0 && stepDelay > 0) {
-      await sleep(stepDelay);
-    }
-
-    const emailContext =
-      emailId === 'onboarding'
-        ? { ...sharedContext, includeArAttachmentNote: arBundle.arPdfAttached }
-        : sharedContext;
-
-    const attachments = emailId === 'onboarding' ? arBundle.attachments : [];
-
+  for (const emailId of SEQUENCE_EMAIL_IDS) {
     const sent = await sendSequenceEmail({
       emailId,
       recipients,
-      context: emailContext,
-      attachments,
+      context: sharedContext,
+      attachments: emailId === 'onboarding' ? arBundle.attachments : [],
       branchId: classContext?.branchId ?? null,
     });
     results.push(sent);
@@ -417,7 +392,7 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
 
     if (sent.summary.sent === 0) {
       console.warn(
-        `[firstEnrollmentWelcomeEmail] Abort sequence for student ${sid} — "${emailId}" failed`
+        `[firstEnrollmentWelcomeEmail] Abort for student ${sid} — "${emailId}" failed`
       );
       return {
         skipped: false,
@@ -450,7 +425,7 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
 
   console.log(
     `[firstEnrollmentWelcomeEmail] student ${sid} (${row.full_name}): ` +
-      `sequence complete (${results.length} emails) to ${recipients.join(', ')}`
+      `combined welcome email sent to ${recipients.join(', ')}`
   );
 
   return {
@@ -526,6 +501,7 @@ export {
   resolveSequenceEmailContent,
   EMAIL_ID_TO_TEMPLATE_KEY,
   buildFirstEnrollmentTemplateVariables,
+  isStaleShortOnboardingBody,
   FIRST_ENROLLMENT_TEMPLATE_KEYS,
 } from './templateConfig.js';
 

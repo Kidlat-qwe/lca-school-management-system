@@ -194,7 +194,7 @@ export default function FiuuPayOnlinePanel({
             window.open(data.pay_link_url, '_blank', 'noopener,noreferrer');
             setPhase('waiting');
             appAlert(
-              'Payment page opened for the client. They can choose optional LCA AutoPay there, then pay on FIUU.'
+              'Payment page opened for the client. LCA AutoPay is on by default there — they confirm Terms (or turn it off), then pay on FIUU.'
             );
           } else {
             submitFiuuPaymentForm(data.payUrl, data.formFields);
