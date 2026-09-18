@@ -81,15 +81,17 @@ You only see classes you are assigned to.
 2. Choose **Grade Level** (from your assigned classes).
 3. Choose **Class Code** — this selects the class **and** the Phase / Session for that scheduled session.
 4. Confirm **Phase**, **Session**, and **Lesson Date** (date usually fills from the session schedule).
-5. Fill the LCA sections:
-   - Lesson topic
+5. Fill the LCA sections (rich-text editors — formatting like email: bold, lists, links, etc.; no font/undo controls):
+   - Lesson topic (plain text)
    - Early Learning Goals
-   - Objectives 1–3
+   - Learning Objectives (one field)
    - Assessment method and criteria
    - Materials needed
    - Preliminaries, Lesson Proper, Conclusion (activity & goal)
    - Class considerations and adjustments
 6. Save as draft or submit for verification.
+
+After approval, complete **Teacher Reflection** in the same rich-text format. Head Teacher review fields (verifier) also use the same editor.
 
 ### Notes
 
@@ -173,7 +175,7 @@ Create and **submit** a lesson plan for that class + phase + session. After subm
 | Issue | What to try |
 |-------|-------------|
 | No class codes | Confirm you are assigned to the class. Ask Admin if the assignment is missing. |
-| Cannot submit | Fill every required section. Check for empty objectives, materials, or procedure fields. |
+| Cannot submit | Fill every required section. Check for empty Learning Objectives, materials, or procedure fields. |
 | Cannot edit | Status may be Submitted or Completed. Wait for revision request, or open Awaiting Reflection for reflection only. |
 | Still on Missed after saving | You must **Submit for Verification**, not only save a draft. |
 | Wrong phase/session | Use Class Code from the list (same codes as Classes → View Class Details). Changing Class Code resets Phase/Session. |

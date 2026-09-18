@@ -12,6 +12,11 @@ import LessonPlanDateFilter from '../../../components/lessonPlanDateFilter';
 import {
   formatLessonPlanDateDisplay,
 } from '../../../utils/lessonPlanPhaseSession';
+import RichTextEditor, {
+  isRichTextEmpty,
+  LESSON_PLAN_RICH_TEXT_HTML_CLASS,
+  isLessonPlanRichTextField,
+} from '../../../components/richTextEditor';
 
 const PENDING_STATUSES = ['submitted'];
 const REVISION_STATUSES = ['revision_requested'];
@@ -48,9 +53,7 @@ const META_SECTIONS = [
 
 const GOALS_SECTIONS = [
   ['Early Learning Goals', 'early_learning_goals'],
-  ['Objective 1', 'objective_1'],
-  ['Objective 2', 'objective_2'],
-  ['Objective 3', 'objective_3'],
+  ['Learning Objectives', 'objective_1'],
 ];
 
 const ASSESSMENT_SECTIONS = [
@@ -128,6 +131,7 @@ function ReviewSection({
   canFlag,
   fieldChecked,
   onToggleField,
+  html = false,
 }) {
   const controlCls =
     'inline-flex items-center gap-1.5 rounded-full border border-[#ffddc9] bg-[#fff0e6] px-2.5 py-1 text-[11px] font-semibold text-[#8a4b16] sm:text-xs';
@@ -149,9 +153,16 @@ function ReviewSection({
         ) : null}
       </div>
       <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
-        <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
-          {content || '—'}
-        </p>
+        {html ? (
+          <div
+            className={LESSON_PLAN_RICH_TEXT_HTML_CLASS}
+            dangerouslySetInnerHTML={{ __html: content || '—' }}
+          />
+        ) : (
+          <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+            {content || '—'}
+          </p>
+        )}
       </div>
     </section>
   );
@@ -201,9 +212,9 @@ export default function SuperadminLessonPlans() {
   const canApprove =
     canReview &&
     !revisionMode &&
-    Boolean(String(headTeacherOverallAssessment || '').trim()) &&
-    Boolean(String(headTeacherSpecificFeedback || '').trim()) &&
-    Boolean(String(headTeacherNextSteps || '').trim());
+    !isRichTextEmpty(headTeacherOverallAssessment) &&
+    !isRichTextEmpty(headTeacherSpecificFeedback) &&
+    !isRichTextEmpty(headTeacherNextSteps);
 
   const fetchMissed = useCallback(async (sinceValue = '') => {
     setMissedLoading(true);
@@ -511,9 +522,9 @@ export default function SuperadminLessonPlans() {
   const handleApprove = async () => {
     if (!selectedPlan) return;
     const missing = [];
-    if (!String(headTeacherOverallAssessment || '').trim()) missing.push('Overall Assessment');
-    if (!String(headTeacherSpecificFeedback || '').trim()) missing.push('Specific Feedback');
-    if (!String(headTeacherNextSteps || '').trim()) missing.push('Next Steps');
+    if (isRichTextEmpty(headTeacherOverallAssessment)) missing.push('Overall Assessment');
+    if (isRichTextEmpty(headTeacherSpecificFeedback)) missing.push('Specific Feedback');
+    if (isRichTextEmpty(headTeacherNextSteps)) missing.push('Next Steps');
     if (missing.length) {
       await appAlert(
         `Complete Head Teacher's Review and Feedback before approving: ${missing.join(', ')}.`
@@ -873,6 +884,7 @@ export default function SuperadminLessonPlans() {
                           canFlag={canReview && revisionMode}
                           fieldChecked={isFieldChecked(key)}
                           onToggleField={handleToggleField}
+                          html={isLessonPlanRichTextField(key)}
                         />
                       ))}
                     </div>
@@ -885,9 +897,18 @@ export default function SuperadminLessonPlans() {
                     <section key={key} className="py-3">
                       <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">{title}</h4>
                       <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
-                        <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
-                          {selectedPlan[key] || '—'}
-                        </p>
+                        {isLessonPlanRichTextField(key) ? (
+                          <div
+                            className={LESSON_PLAN_RICH_TEXT_HTML_CLASS}
+                            dangerouslySetInnerHTML={{
+                              __html: selectedPlan[key] || '—',
+                            }}
+                          />
+                        ) : (
+                          <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+                            {selectedPlan[key] || '—'}
+                          </p>
+                        )}
                       </div>
                     </section>
                   ))}
@@ -908,36 +929,39 @@ export default function SuperadminLessonPlans() {
                           </p>
                           <label className="block text-[16px] font-medium text-[#111111]">
                             Overall Assessment <span className="text-red-600">*</span>
-                            <textarea
-                              value={headTeacherOverallAssessment}
-                              onChange={(e) => setHeadTeacherOverallAssessment(e.target.value)}
-                              rows={3}
-                              required
-                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
-                              placeholder="Overall assessment of this lesson plan"
-                            />
+                            <div className="mt-1.5">
+                              <RichTextEditor
+                                id="head-teacher-overall-assessment"
+                                value={headTeacherOverallAssessment}
+                                onChange={setHeadTeacherOverallAssessment}
+                                placeholder="Overall assessment of this lesson plan"
+                                minHeight="120px"
+                              />
+                            </div>
                           </label>
                           <label className="block text-[16px] font-medium text-[#111111]">
                             Specific Feedback <span className="text-red-600">*</span>
-                            <textarea
-                              value={headTeacherSpecificFeedback}
-                              onChange={(e) => setHeadTeacherSpecificFeedback(e.target.value)}
-                              rows={3}
-                              required
-                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
-                              placeholder="Specific feedback for the teacher"
-                            />
+                            <div className="mt-1.5">
+                              <RichTextEditor
+                                id="head-teacher-specific-feedback"
+                                value={headTeacherSpecificFeedback}
+                                onChange={setHeadTeacherSpecificFeedback}
+                                placeholder="Specific feedback for the teacher"
+                                minHeight="120px"
+                              />
+                            </div>
                           </label>
                           <label className="block text-[16px] font-medium text-[#111111]">
                             Next Steps <span className="text-red-600">*</span>
-                            <textarea
-                              value={headTeacherNextSteps}
-                              onChange={(e) => setHeadTeacherNextSteps(e.target.value)}
-                              rows={3}
-                              required
-                              className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
-                              placeholder="Recommended next steps"
-                            />
+                            <div className="mt-1.5">
+                              <RichTextEditor
+                                id="head-teacher-next-steps"
+                                value={headTeacherNextSteps}
+                                onChange={setHeadTeacherNextSteps}
+                                placeholder="Recommended next steps"
+                                minHeight="120px"
+                              />
+                            </div>
                           </label>
                         </div>
                       ) : (
@@ -947,9 +971,12 @@ export default function SuperadminLessonPlans() {
                               {title}
                             </h4>
                             <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
-                              <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
-                                {selectedPlan[key] || '—'}
-                              </p>
+                              <div
+                                className={LESSON_PLAN_RICH_TEXT_HTML_CLASS}
+                                dangerouslySetInnerHTML={{
+                                  __html: selectedPlan[key] || '—',
+                                }}
+                              />
                             </div>
                           </section>
                         ))

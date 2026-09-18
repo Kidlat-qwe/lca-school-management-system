@@ -13,6 +13,12 @@ import {
   FieldRevisionNotes,
   GeneralRevisionNotes,
 } from '../../components/lessonPlanRevisionFeedback';
+import RichTextEditor, {
+  isRichTextEmpty,
+  mergeLessonPlanObjectivesHtml,
+  LESSON_PLAN_RICH_TEXT_HTML_CLASS,
+  isLessonPlanRichTextField,
+} from '../../components/richTextEditor';
 import {
   buildLessonPlanClassCodeOptions,
   buildLessonPlanClassCodeValue,
@@ -61,9 +67,9 @@ const populateFormFromPlan = (plan) => {
   session,
   topic: plan.topic || '',
   early_learning_goals: plan.early_learning_goals || '',
-  objective_1: plan.objective_1 || '',
-  objective_2: plan.objective_2 || '',
-  objective_3: plan.objective_3 || '',
+  objective_1: mergeLessonPlanObjectivesHtml(plan),
+  objective_2: '',
+  objective_3: '',
   assessment_method: plan.assessment_method || '',
   assessment_criteria: plan.assessment_criteria || '',
   materials_needed: plan.materials_needed || '',
@@ -105,8 +111,6 @@ function classMatchesGradeLevel(classRow, gradeLevel) {
 const LESSON_PLAN_SECTION_REQUIRED_FIELDS = [
   'early_learning_goals',
   'objective_1',
-  'objective_2',
-  'objective_3',
   'assessment_method',
   'assessment_criteria',
   'materials_needed',
@@ -126,9 +130,7 @@ function isLessonPlanSubmitReady(formData = {}) {
   if (!String(formData.phase || '').trim()) return false;
   if (!String(formData.session || '').trim()) return false;
   if (!String(formData.topic || '').trim()) return false;
-  return LESSON_PLAN_SECTION_REQUIRED_FIELDS.every((key) =>
-    String(formData[key] || '').trim()
-  );
+  return LESSON_PLAN_SECTION_REQUIRED_FIELDS.every((key) => !isRichTextEmpty(formData[key]));
 }
 
 /** Shared field chrome from TeacherLessonPlans.jsx Field styled-component */
@@ -698,6 +700,9 @@ export default function TeacherLessonPlans() {
         class_id: formData.class_id ? Number(formData.class_id) : null,
         // Persist the Class Code shown in the form (session-scoped).
         subject: selectedSessionClassCode || '',
+        // Single rich-text Learning Objectives field (legacy objective_2/3 cleared).
+        objective_2: '',
+        objective_3: '',
         reflection_went_well: '',
         reflection_amazing_moments: '',
         reflection_challenges: '',
@@ -1216,13 +1221,13 @@ export default function TeacherLessonPlans() {
 
             <label className={blockLabelCls}>
               Early Learning Goals
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-early-learning-goals"
                 disabled={!canEdit}
-                rows={4}
                 value={formData.early_learning_goals}
-                onChange={(e) => handleInputChange('early_learning_goals', e.target.value)}
+                onChange={(html) => handleInputChange('early_learning_goals', html)}
                 placeholder="List early learning goals"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="140px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="early_learning_goals" />
@@ -1231,25 +1236,18 @@ export default function TeacherLessonPlans() {
               2. Learning Objectives
             </h3>
 
-            {[
-              ['objective_1', 'Objective 1'],
-              ['objective_2', 'Objective 2'],
-              ['objective_3', 'Objective 3'],
-            ].map(([field, title]) => (
-              <Fragment key={field}>
-                <label className={`${fieldLabelCls} col-span-full`}>
-                  <span className="shrink-0">{title}</span>
-                  <input
-                    disabled={!canEdit}
-                    value={formData[field]}
-                    onChange={(e) => handleInputChange(field, e.target.value)}
-                    placeholder={title}
-                    className={fieldControlCls}
-                  />
-                </label>
-                <FieldRevisionNotes plan={selectedPlan} fieldKey={field} />
-              </Fragment>
-            ))}
+            <label className={blockLabelCls}>
+              Learning Objectives
+              <RichTextEditor
+                id="lesson-plan-learning-objectives"
+                disabled={!canEdit}
+                value={formData.objective_1}
+                onChange={(html) => handleInputChange('objective_1', html)}
+                placeholder="Write learning objectives"
+                minHeight="160px"
+              />
+            </label>
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="objective_1" />
 
             <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
               3. Assessment
@@ -1257,26 +1255,26 @@ export default function TeacherLessonPlans() {
 
             <label className={blockLabelCls}>
               Assessment Method
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-assessment-method"
                 disabled={!canEdit}
-                rows={3}
                 value={formData.assessment_method}
-                onChange={(e) => handleInputChange('assessment_method', e.target.value)}
+                onChange={(html) => handleInputChange('assessment_method', html)}
                 placeholder="Describe assessment method"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="120px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_method" />
 
             <label className={blockLabelCls}>
               Assessment Criteria
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-assessment-criteria"
                 disabled={!canEdit}
-                rows={3}
                 value={formData.assessment_criteria}
-                onChange={(e) => handleInputChange('assessment_criteria', e.target.value)}
+                onChange={(html) => handleInputChange('assessment_criteria', html)}
                 placeholder="Describe assessment criteria"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="120px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_criteria" />
@@ -1287,13 +1285,13 @@ export default function TeacherLessonPlans() {
 
             <label className={blockLabelCls}>
               Materials Needed
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-materials-needed"
                 disabled={!canEdit}
-                rows={3}
                 value={formData.materials_needed}
-                onChange={(e) => handleInputChange('materials_needed', e.target.value)}
+                onChange={(html) => handleInputChange('materials_needed', html)}
                 placeholder="List materials needed to prepare"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="120px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="materials_needed" />
@@ -1310,13 +1308,13 @@ export default function TeacherLessonPlans() {
               <Fragment key={prefix}>
                 <label className={blockLabelCls}>
                   {title} — Activity &amp; Goal
-                  <textarea
+                  <RichTextEditor
+                    id={`lesson-plan-${prefix}-activity`}
                     disabled={!canEdit}
-                    rows={3}
                     value={formData[`${prefix}_activity`]}
-                    onChange={(e) => handleInputChange(`${prefix}_activity`, e.target.value)}
+                    onChange={(html) => handleInputChange(`${prefix}_activity`, html)}
                     placeholder={`${title} activity and goal`}
-                    className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                    minHeight="120px"
                   />
                 </label>
                 <FieldRevisionNotes plan={selectedPlan} fieldKey={`${prefix}_activity`} />
@@ -1340,25 +1338,25 @@ export default function TeacherLessonPlans() {
 
             <label className={blockLabelCls}>
               Considerations
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-class1-considerations"
                 disabled={!canEdit}
-                rows={2}
                 value={formData.class1_considerations}
-                onChange={(e) => handleInputChange('class1_considerations', e.target.value)}
+                onChange={(html) => handleInputChange('class1_considerations', html)}
                 placeholder="Class considerations"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="100px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_considerations" />
             <label className={blockLabelCls}>
               Adjustments
-              <textarea
+              <RichTextEditor
+                id="lesson-plan-class1-adjustments"
                 disabled={!canEdit}
-                rows={2}
                 value={formData.class1_adjustments}
-                onChange={(e) => handleInputChange('class1_adjustments', e.target.value)}
+                onChange={(html) => handleInputChange('class1_adjustments', html)}
                 placeholder="Class adjustments"
-                className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                minHeight="100px"
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_adjustments" />
@@ -1381,19 +1379,20 @@ export default function TeacherLessonPlans() {
               ['reflection_challenges', 'Challenges'],
               ['reflection_improvements', 'Improvements'],
             ].map(([field, title]) => (
-              <label key={field} className={blockLabelCls}>
+              <label key={field} className={blockLabelCls} onFocusCapture={() => setReflectionBlink(false)}>
                 {title}
-                <textarea
+                <RichTextEditor
+                  id={`lesson-plan-${field}`}
                   disabled={!canEditReflections}
-                  rows={3}
                   value={formData[field]}
-                  onChange={(e) => handleInputChange(field, e.target.value)}
-                  onFocus={() => setReflectionBlink(false)}
-                  className={`${fieldControlCls} min-h-[60px] resize-y leading-normal ${
+                  onChange={(html) => handleInputChange(field, html)}
+                  placeholder={`Write ${title.toLowerCase()}`}
+                  minHeight="120px"
+                  className={
                     canEditReflections && reflectionBlink
                       ? 'lesson-plan-reflection-blink'
                       : ''
-                  }`}
+                  }
                 />
               </label>
             ))}
@@ -1414,10 +1413,20 @@ export default function TeacherLessonPlans() {
                   ].map(([field, title]) => (
                     <div key={field} className={blockLabelCls}>
                       {title}
-                      <div
-                        className={`${fieldControlCls} min-h-[60px] whitespace-pre-wrap leading-normal text-[#111111]`}
-                      >
-                        {(selectedPlan[field] || '').trim() || '—'}
+                      <div className="overflow-hidden rounded-lg border border-[#d8d8d8] bg-white px-3 py-2.5">
+                        {isLessonPlanRichTextField(field) &&
+                        String(selectedPlan[field] || '').trim() ? (
+                          <div
+                            className={LESSON_PLAN_RICH_TEXT_HTML_CLASS}
+                            dangerouslySetInnerHTML={{
+                              __html: selectedPlan[field],
+                            }}
+                          />
+                        ) : (
+                          <p className="min-h-[2.5rem] whitespace-pre-wrap text-base leading-relaxed text-[#111111]">
+                            {(selectedPlan[field] || '').trim() || '—'}
+                          </p>
+                        )}
                       </div>
                     </div>
                   ))}

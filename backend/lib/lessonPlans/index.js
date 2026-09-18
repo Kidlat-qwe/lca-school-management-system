@@ -429,7 +429,7 @@ const HEAD_TEACHER_REVIEW_LABELS = Object.freeze({
 export function validateHeadTeacherReviewPayload(payload = {}) {
   const errors = [];
   for (const key of HEAD_TEACHER_REVIEW_FIELDS) {
-    if (!String(payload[key] || '').trim()) {
+    if (isBlankLessonPlanRichText(payload[key])) {
       errors.push(`${HEAD_TEACHER_REVIEW_LABELS[key] || key} is required before approving`);
     }
   }
@@ -440,8 +440,6 @@ export function validateHeadTeacherReviewPayload(payload = {}) {
 export const LESSON_PLAN_SECTION_REQUIRED_FIELDS = Object.freeze([
   'early_learning_goals',
   'objective_1',
-  'objective_2',
-  'objective_3',
   'assessment_method',
   'assessment_criteria',
   'materials_needed',
@@ -454,9 +452,9 @@ export const LESSON_PLAN_SECTION_REQUIRED_FIELDS = Object.freeze([
 
 const LESSON_PLAN_SECTION_FIELD_LABELS = Object.freeze({
   early_learning_goals: 'Early Learning Goals',
-  objective_1: 'Objective 1',
-  objective_2: 'Objective 2',
-  objective_3: 'Objective 3',
+  objective_1: 'Learning Objectives',
+  objective_2: 'Learning Objectives (legacy 2)',
+  objective_3: 'Learning Objectives (legacy 3)',
   assessment_method: 'Assessment Method',
   assessment_criteria: 'Assessment Criteria',
   materials_needed: 'Materials Needed To Prepare',
@@ -466,6 +464,16 @@ const LESSON_PLAN_SECTION_FIELD_LABELS = Object.freeze({
   class1_considerations: 'Class — Considerations',
   class1_adjustments: 'Class — Adjustments',
 });
+
+function isBlankLessonPlanRichText(value) {
+  const plain = String(value || '')
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return !plain;
+}
 
 export function validateLessonPlanPayload(payload, { requireAll = false } = {}) {
   const errors = [];
@@ -491,7 +499,7 @@ export function validateLessonPlanPayload(payload, { requireAll = false } = {}) 
   }
   if (requireAll) {
     for (const key of LESSON_PLAN_SECTION_REQUIRED_FIELDS) {
-      if (!String(payload[key] || '').trim()) {
+      if (isBlankLessonPlanRichText(payload[key])) {
         errors.push(`${LESSON_PLAN_SECTION_FIELD_LABELS[key] || key} is required`);
       }
     }
@@ -541,7 +549,7 @@ export function clearReflectionFields(payload = {}) {
 export function validateReflectionPayload(payload) {
   const errors = [];
   for (const key of REFLECTION_FIELDS) {
-    if (!String(payload[key] || '').trim()) {
+    if (isBlankLessonPlanRichText(payload[key])) {
       errors.push(`${key} is required to complete the lesson plan`);
     }
   }
@@ -564,9 +572,9 @@ export const REVISION_FIELD_LABELS = {
   phase: 'Phase',
   session: 'Session',
   early_learning_goals: 'Early Learning Goals',
-  objective_1: 'Objective 1',
-  objective_2: 'Objective 2',
-  objective_3: 'Objective 3',
+  objective_1: 'Learning Objectives',
+  objective_2: 'Learning Objectives',
+  objective_3: 'Learning Objectives',
   assessment_method: 'Assessment Method',
   assessment_criteria: 'Assessment Criteria',
   materials_needed: 'Materials Needed To Prepare',
@@ -780,8 +788,9 @@ export function lessonPlanWriteColumns(payload) {
     topic: payload.topic ?? '',
     early_learning_goals: payload.early_learning_goals ?? '',
     objective_1: payload.objective_1 ?? '',
-    objective_2: payload.objective_2 ?? '',
-    objective_3: payload.objective_3 ?? '',
+    // Single rich-text Learning Objectives field; legacy slots cleared on write.
+    objective_2: '',
+    objective_3: '',
     assessment_method: payload.assessment_method ?? '',
     assessment_criteria: payload.assessment_criteria ?? '',
     materials_needed: payload.materials_needed ?? '',

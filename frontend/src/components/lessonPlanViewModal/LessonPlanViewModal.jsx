@@ -8,6 +8,11 @@ import {
   FieldRevisionNotes,
   RevisionFeedbackSummary,
 } from '../lessonPlanRevisionFeedback';
+import {
+  LESSON_PLAN_RICH_TEXT_HTML_CLASS,
+  isLessonPlanRichTextField,
+  isRichTextEmpty,
+} from '../richTextEditor';
 import { formatLessonPlanDateDisplay } from '../../utils/lessonPlanPhaseSession';
 
 /** Display title + plan field key + revision flag field key (verifier may use class_id). */
@@ -18,11 +23,12 @@ const META_SECTIONS = [
   ['Class Code', 'class_label', 'class_id'],
 ];
 
-const GOALS_SECTIONS = [
+const EARLY_GOALS_SECTIONS = [
   ['Early Learning Goals', 'early_learning_goals', 'early_learning_goals'],
-  ['Objective 1', 'objective_1', 'objective_1'],
-  ['Objective 2', 'objective_2', 'objective_2'],
-  ['Objective 3', 'objective_3', 'objective_3'],
+];
+
+const OBJECTIVES_SECTIONS = [
+  ['Learning Objectives', 'objective_1', 'objective_1'],
 ];
 
 const ASSESSMENT_SECTIONS = [
@@ -73,7 +79,7 @@ function statusBadgeClass(status) {
   return 'bg-gray-100 text-gray-700';
 }
 
-function SectionBlock({ title, content, plan, revisionFieldKey }) {
+function SectionBlock({ title, content, plan, revisionFieldKey, html = false }) {
   return (
     <section className="py-3">
       <h4 className="mb-1.5 text-[16px] font-medium text-[#111111]">{title}</h4>
@@ -81,9 +87,18 @@ function SectionBlock({ title, content, plan, revisionFieldKey }) {
         <FieldRevisionNotes plan={plan} fieldKey={revisionFieldKey} />
       ) : null}
       <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
-        <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
-          {content || '—'}
-        </p>
+        {html ? (
+          <div
+            className={LESSON_PLAN_RICH_TEXT_HTML_CLASS}
+            dangerouslySetInnerHTML={{
+              __html: content || '—',
+            }}
+          />
+        ) : (
+          <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
+            {content || '—'}
+          </p>
+        )}
       </div>
     </section>
   );
@@ -93,7 +108,30 @@ function resolveFieldContent(plan, key) {
   if (key === 'class_label') {
     return plan.class_label || plan.class_code || plan.subject || '';
   }
+  if (key === 'objective_1') {
+    const o1 = String(plan.objective_1 || '').trim();
+    const o2 = String(plan.objective_2 || '').trim();
+    const o3 = String(plan.objective_3 || '').trim();
+    if (!o2 && !o3) return o1 || '—';
+    const parts = [o1, o2, o3].filter(Boolean);
+    const hasHtml = parts.some((p) => /<[a-z][\s\S]*>/i.test(p));
+    if (hasHtml) {
+      return parts
+        .map((p) => (/<[a-z][\s\S]*>/i.test(p) ? p : `<p>${escapeHtml(p)}</p>`))
+        .join('');
+    }
+    return parts.map((p) => `<p>${escapeHtml(p)}</p>`).join('');
+  }
   return plan[key];
+}
+
+function escapeHtml(text) {
+  return String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/\n/g, '<br />');
 }
 
 /**
@@ -121,9 +159,7 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
   );
   const editButtonLabel =
     plan.status === 'awaiting_reflection' ? 'Complete Reflection' : 'Edit';
-  const showHeadTeacher = HEAD_TEACHER_SECTIONS.some(([_, key]) =>
-    String(plan[key] || '').trim()
-  );
+  const showHeadTeacher = HEAD_TEACHER_SECTIONS.some(([_, key]) => !isRichTextEmpty(plan[key]));
 
   return createPortal(
     <div
@@ -227,12 +263,13 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
 
             {[
               { heading: null, sections: META_SECTIONS },
-              { heading: '1. Early Learning Goals', sections: GOALS_SECTIONS },
-              { heading: '2. Assessment', sections: ASSESSMENT_SECTIONS },
-              { heading: '3. Materials', sections: MATERIALS_SECTIONS },
-              { heading: '4. Procedure', sections: PROCEDURE_SECTIONS },
+              { heading: '1. Early Learning Goals', sections: EARLY_GOALS_SECTIONS },
+              { heading: '2. Learning Objectives', sections: OBJECTIVES_SECTIONS },
+              { heading: '3. Assessment', sections: ASSESSMENT_SECTIONS },
+              { heading: '4. Materials', sections: MATERIALS_SECTIONS },
+              { heading: '5. Procedure', sections: PROCEDURE_SECTIONS },
               {
-                heading: '5. Class-Specific Adjustments',
+                heading: '6. Class-Specific Adjustments',
                 sections: CLASS_SECTIONS,
               },
             ].map((group) => (
@@ -249,13 +286,14 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
                     content={resolveFieldContent(plan, key)}
                     plan={plan}
                     revisionFieldKey={revisionKey}
+                    html={isLessonPlanRichTextField(key)}
                   />
                 ))}
               </div>
             ))}
 
             <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
-              6. Teacher&apos;s Reflection
+              7. Teacher&apos;s Reflection
             </h4>
             {plan.status === 'awaiting_reflection' ? (
               <p className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[13px] text-amber-900">
@@ -265,7 +303,12 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
               </p>
             ) : null}
             {REFLECTION_SECTIONS.map(([title, key]) => (
-              <SectionBlock key={key} title={title} content={plan[key]} />
+              <SectionBlock
+                key={key}
+                title={title}
+                content={plan[key]}
+                html={isLessonPlanRichTextField(key)}
+              />
             ))}
 
             {showHeadTeacher ? (
@@ -274,7 +317,12 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
                   Head Teacher&apos;s Review and Feedback
                 </h4>
                 {HEAD_TEACHER_SECTIONS.map(([title, key]) => (
-                  <SectionBlock key={key} title={title} content={plan[key]} />
+                  <SectionBlock
+                    key={key}
+                    title={title}
+                    content={plan[key]}
+                    html={isLessonPlanRichTextField(key)}
+                  />
                 ))}
               </>
             ) : null}
