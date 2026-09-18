@@ -5701,7 +5701,9 @@ router.post(
         packageMerchSwapAdjustmentTotal = swapAdjustmentResult.totalAdjustment;
       }
       
-      // Validate inventory for all merchandise (resolve in-stock SKU when placeholder id is OOS)
+      // Validate inventory for all merchandise.
+      // Package enroll: keep staff-selected concrete SKUs even at qty 0 (Pending issue).
+      // Do not remap OOS Polo to another in-stock Top type.
       console.log(`[Inventory Validation] Validating ${merchandiseToDeduct.size} merchandise items for branch ${branch_id}`);
 
       for (const [key, merchInfo] of merchandiseToDeduct.entries()) {

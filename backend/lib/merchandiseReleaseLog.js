@@ -174,10 +174,15 @@ function merchNamesMatch(a, b) {
 
 /**
  * Resolve a branch merchandise row with enough stock for enrollment/validation.
- * Falls back to same name (and size/category when provided) when the configured id is out of stock.
- * `allowZeroStock` returns a concrete SKU even at qty 0 (package backorder / pending issue).
- * When the requested merchandise_id is out of stock, in-stock alternates of the same
- * name/size may still be used; otherwise the originally selected id is kept for Pending issue.
+ *
+ * When staff selected a concrete `merchandise_id` (e.g. Male Polo XS):
+ * - If it has stock → use it
+ * - If OOS and `allowZeroStock` → keep that exact SKU for MERCH_PENDING / Pending issue
+ * - If OOS and issuing (`allowZeroStock` false) → return null (do not issue another Top
+ *   type such as Female Blouse just because it has stock)
+ *
+ * Name/size/category fallback only runs when there is no usable concrete id
+ * (missing id, wrong branch, or CMS type-shell placeholder).
  *
  * @param {import('pg').PoolClient} client
  * @param {{
@@ -240,11 +245,20 @@ export async function resolveMerchandiseWithAvailableStock(
     if (rowHasStock(byIdRow)) {
       return byIdRow;
     }
+
+    // Lock staff-selected concrete SKUs. Never remap Male Polo → Female Blouse
+    // (or Shirt) just because another Top size has stock.
+    const lockedConcreteSku =
+      byIdRow &&
+      Number(branchId) === Number(byIdRow.branch_id) &&
+      !isCmsMerchandiseTypeShellRow(byIdRow);
+    if (lockedConcreteSku) {
+      return allowZeroStock ? byIdRow : null;
+    }
   }
 
   const name = String(merchandiseName || '').trim();
   if (!name || !branchId) {
-    // Keep the concrete selected SKU (even at qty 0) for pending issue / backorder.
     return pickZeroStockRow(byIdRow ? [byIdRow] : [], byIdRow);
   }
 
@@ -289,17 +303,6 @@ export async function resolveMerchandiseWithAvailableStock(
 
   for (const row of candidatesRes.rows) {
     if (rowHasStock(row)) return row;
-  }
-
-  // Backorder: prefer the exact size SKU the user selected (e.g. XS Polo at 0),
-  // not another Top/Bottom type that happens to share the same size.
-  if (
-    allowZeroStock &&
-    byIdRow &&
-    Number(branchId) === Number(byIdRow.branch_id) &&
-    !isCmsMerchandiseTypeShellRow(byIdRow)
-  ) {
-    return byIdRow;
   }
 
   return pickZeroStockRow(candidatesRes.rows, byIdRow);
