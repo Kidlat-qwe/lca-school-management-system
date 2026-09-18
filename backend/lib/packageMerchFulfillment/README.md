@@ -5,11 +5,13 @@ Physical handoff is a later staff action.
 
 ## Flow
 
-1. Enroll stores `MERCH_PENDING:[...]` on the invoice (obligation).
+1. Enroll stores `MERCH_PENDING:[...]` on the invoice (obligation), including the **exact size SKU** selected (e.g. XS Polo at qty 0).
 2. First payment issues **in-stock** lines and writes `merchandise_release_logtbl`.
 3. Out-of-stock lines stay pending (payment does not fail). **Null or blank quantity on a concrete SKU counts as 0** — it must not log a release.
 4. After Request Stock → confirm delivery, staff opens Merchandise → **Pending issue**
    (newest invoice first) and clicks **Issue**.
+
+OOS sizes remain selectable in Configure Merchandise so enrollment can finish; staff fulfill later from Pending issue.
 
 No schema change. Remaining lines = `MERCH_PENDING` minus release-log rows for
 `(student_id, package_id, class_id)`. Students enrolled with 0 stock remain on

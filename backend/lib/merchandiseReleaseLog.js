@@ -176,6 +176,8 @@ function merchNamesMatch(a, b) {
  * Resolve a branch merchandise row with enough stock for enrollment/validation.
  * Falls back to same name (and size/category when provided) when the configured id is out of stock.
  * `allowZeroStock` returns a concrete SKU even at qty 0 (package backorder / pending issue).
+ * When the requested merchandise_id is out of stock, in-stock alternates of the same
+ * name/size may still be used; otherwise the originally selected id is kept for Pending issue.
  *
  * @param {import('pg').PoolClient} client
  * @param {{
@@ -242,6 +244,7 @@ export async function resolveMerchandiseWithAvailableStock(
 
   const name = String(merchandiseName || '').trim();
   if (!name || !branchId) {
+    // Keep the concrete selected SKU (even at qty 0) for pending issue / backorder.
     return pickZeroStockRow(byIdRow ? [byIdRow] : [], byIdRow);
   }
 
@@ -286,6 +289,17 @@ export async function resolveMerchandiseWithAvailableStock(
 
   for (const row of candidatesRes.rows) {
     if (rowHasStock(row)) return row;
+  }
+
+  // Backorder: prefer the exact size SKU the user selected (e.g. XS Polo at 0),
+  // not another Top/Bottom type that happens to share the same size.
+  if (
+    allowZeroStock &&
+    byIdRow &&
+    Number(branchId) === Number(byIdRow.branch_id) &&
+    !isCmsMerchandiseTypeShellRow(byIdRow)
+  ) {
+    return byIdRow;
   }
 
   return pickZeroStockRow(candidatesRes.rows, byIdRow);
@@ -748,7 +762,10 @@ export async function issuePackageMerchandiseLines(client, params) {
     let merchId = Number(line.merchandise_id);
     const qty = Math.max(1, parseInt(String(line.quantity ?? 1), 10) || 1);
     const uniformName = String(line.merchandise_name || '').trim();
+    // Only resolve by category+size when the pending line has no concrete SKU.
+    // Preserves the exact OOS size the staff selected (e.g. XS Polo).
     if (
+      !(Number.isFinite(merchId) && merchId > 0) &&
       PACKAGE_UNIFORM_TYPE_NAMES.includes(uniformName) &&
       (line.category === 'Top' || line.category === 'Bottom' || line.category === 'Set') &&
       line.size

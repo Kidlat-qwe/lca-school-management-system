@@ -12803,6 +12803,11 @@ const initializePackageMerchSelections = useCallback(
                         {selectedPackageMerchTypes.length > 0 && (
                           <div className="p-3 bg-white border border-gray-200 rounded-lg">
                             <p className="text-sm font-medium text-gray-900 mb-3">Configure Merchandise</p>
+                              <p className="mb-3 text-xs text-gray-600">
+                                Out-of-stock sizes (OOS) can still be selected. They are saved for{' '}
+                                <span className="font-semibold">Merchandise → Pending issue</span> and can be
+                                issued after restock — they are not logged as already released.
+                              </p>
                             
                             {/* Show per-student selection if students are selected */}
                             {selectedStudents.length > 0 ? (
@@ -16299,6 +16304,11 @@ const initializePackageMerchSelections = useCallback(
                           return uniformTypes.length > 0 && (
                             <div className="pt-3 mt-3 border-t border-gray-200">
                               <p className="text-sm font-medium text-gray-900 mb-3">Configure Merchandise</p>
+                              <p className="mb-3 text-xs text-gray-600">
+                                Out-of-stock sizes (OOS) can still be selected. They are saved for{' '}
+                                <span className="font-semibold">Merchandise → Pending issue</span> and can be
+                                issued after restock — they are not logged as already released.
+                              </p>
                               
                               {uniformTypes.map((typeName) => {
                                 const itemsForType = getMerchandiseItemsByType(typeName);

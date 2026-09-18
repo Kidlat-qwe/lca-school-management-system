@@ -5550,8 +5550,19 @@ router.post(
           
           let actualMerchId = merchId || null;
           if (merchId || merchAction === 'waive') {
-            // For items with sizes, we need to find the actual merchandise_id by size
+            // For items with sizes, prefer the concrete SKU the client selected
+            // (e.g. XS Polo at 0 stock for Pending issue). Fall back to name+size lookup.
             if (merchId && merchSize && merchName && merchAction !== 'waive') {
+              const selectedSku = await client.query(
+                `SELECT merchandise_id
+                 FROM merchandisestbl
+                 WHERE merchandise_id = $1 AND branch_id = $2
+                 LIMIT 1`,
+                [merchId, branch_id]
+              );
+              if (selectedSku.rows.length > 0) {
+                actualMerchId = selectedSku.rows[0].merchandise_id;
+              } else {
               const isUniformTopBottom =
                 PACKAGE_UNIFORM_TYPE_NAMES.includes(String(merchName).trim()) &&
                 merchCategory &&
@@ -5588,6 +5599,7 @@ router.post(
                 if (merchBySizeResult.rows.length > 0) {
                   actualMerchId = merchBySizeResult.rows[0].merchandise_id;
                 }
+              }
               }
             }
             
