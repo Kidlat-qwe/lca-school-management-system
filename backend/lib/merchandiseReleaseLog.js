@@ -705,6 +705,8 @@ function manilaNoonFromIssueDate(issueDateYmd) {
  * Deduct stock and write release log for package included merchandise.
  * Issues in-stock lines only; out-of-stock lines are skipped (backorder) so payment can complete.
  * Already-logged lines are skipped (per-line idempotency).
+ * When `allowSetBreak` is true (Pending issue), an OOS Top/Bottom may be fulfilled by
+ * breaking a same-size Set and returning the unused half to piece stock.
  *
  * @returns {Promise<{ issued: boolean, reason?: string, quantity?: number, pending_count?: number }>}
  */
@@ -718,6 +720,7 @@ export async function issuePackageMerchandiseLines(client, params) {
     paymentId = null,
     paymentIssueDate = null,
     createdBy = null,
+    allowSetBreak = false,
   } = params;
 
   const sid = Number(studentId);
@@ -757,8 +760,13 @@ export async function issuePackageMerchandiseLines(client, params) {
   const releasedAt = manilaNoonFromIssueDate(paymentIssueDate);
   let totalQty = 0;
   let pendingCount = 0;
+  const issuedThisBatch = new Set();
+  let setBreakModule = null;
 
   for (const line of remaining) {
+    const lineKey = packageMerchLineKey(line);
+    if (issuedThisBatch.has(lineKey)) continue;
+
     const action = String(line.action || 'issue').trim().toLowerCase() || 'issue';
     if (action === 'waive') continue;
 
@@ -793,6 +801,40 @@ export async function issuePackageMerchandiseLines(client, params) {
     });
 
     if (!resolved) {
+      if (allowSetBreak) {
+        if (!setBreakModule) {
+          setBreakModule = await import('./packageMerchFulfillment/setBreak.js');
+        }
+        const openRemaining = remaining.filter(
+          (candidate) => !issuedThisBatch.has(packageMerchLineKey(candidate))
+        );
+        const setBreak = await setBreakModule.tryIssueUniformFromSetBreak(client, {
+          line,
+          remainingLines: openRemaining,
+          branchId: bid,
+          studentId: sid,
+          classId: cid,
+          packageId: pid,
+          paymentId,
+          createdBy,
+          releasedAt,
+          releaseBatchId,
+        });
+        if (setBreak.ok) {
+          for (const key of setBreak.issuedLineKeys || []) {
+            issuedThisBatch.add(key);
+          }
+          totalQty += setBreak.quantity || 0;
+          continue;
+        }
+        if (setBreak.reason === 'no_leftover_piece_sku') {
+          return {
+            issued: false,
+            reason: 'no_leftover_piece_sku',
+            pending_count: qty,
+          };
+        }
+      }
       pendingCount += qty;
       continue;
     }
@@ -837,6 +879,7 @@ export async function issuePackageMerchandiseLines(client, params) {
       createdBy,
       releasedAt,
     });
+    issuedThisBatch.add(lineKey);
     totalQty += qty;
   }
 

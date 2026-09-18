@@ -13,6 +13,7 @@ import {
   resolvePackageMerchIssueContext,
   PACKAGE_UNIFORM_TYPE_NAMES,
 } from '../merchandiseReleaseLog.js';
+import { previewSetBreakForPendingLine } from './setBreak.js';
 
 const PAID_INVOICE_STATUSES = new Set(['paid', 'partially paid']);
 
@@ -249,11 +250,25 @@ export async function listPendingPackageMerch(db, { branchId } = {}) {
       const needed = Math.max(1, parseInt(String(line.quantity ?? 1), 10) || 1);
       const qtyOnHand = available;
       const hasStockNow = qtyOnHand >= needed;
-      const canIssueNow = hasFirstPayment && hasStockNow;
+
+      const setBreakPreview = previewSetBreakForPendingLine({
+        line,
+        pieceStock: stock,
+        stockByBranch,
+        branchId: bid,
+        remainingLines: remaining,
+        studentName: row.student_name,
+      });
+      const canIssueFromSet = Boolean(setBreakPreview?.available);
+      const canIssueNow = hasFirstPayment && (hasStockNow || canIssueFromSet);
 
       let blockReason = null;
       if (!hasFirstPayment) {
         blockReason = 'Waiting for first package payment';
+      } else if (!hasStockNow && canIssueFromSet) {
+        blockReason = null;
+      } else if (!hasStockNow && setBreakPreview && !setBreakPreview.available) {
+        blockReason = setBreakPreview.reason || 'Out of stock — issue after restock';
       } else if (!hasStockNow) {
         blockReason = 'Out of stock — issue after restock';
       }
@@ -284,6 +299,8 @@ export async function listPendingPackageMerch(db, { branchId } = {}) {
         sku: stock?.sku || null,
         item_name: stock?.item_name || null,
         can_issue: canIssueNow,
+        can_issue_from_set: canIssueFromSet,
+        set_break: setBreakPreview || null,
         block_reason: blockReason,
       });
     }
@@ -352,15 +369,16 @@ export async function issuePendingPackageMerchLine(client, params) {
     packageId,
     classId,
   });
-  let remaining = remainingIssuablePackageMerchLines(ctx.lines, issuedRows);
-  if (!remaining.length) {
+  const allRemaining = remainingIssuablePackageMerchLines(ctx.lines, issuedRows);
+  if (!allRemaining.length) {
     return { ok: false, status: 400, message: 'No pending package merchandise to issue' };
   }
 
+  let remaining = allRemaining;
   if (lineKey) {
-    remaining = remaining.filter((line) => packageMerchLineKey(line) === lineKey);
+    remaining = allRemaining.filter((line) => packageMerchLineKey(line) === lineKey);
   } else if (merchandiseId) {
-    remaining = remaining.filter((line) => {
+    remaining = allRemaining.filter((line) => {
       const midOk = Number(line.merchandise_id) === Number(merchandiseId);
       const sizeOk = size == null || String(line.size || '') === String(size);
       const catOk = category == null || String(line.category || '') === String(category);
@@ -374,6 +392,36 @@ export async function issuePendingPackageMerchLine(client, params) {
       status: 400,
       message: 'That pending line was not found (it may already be issued)',
     };
+  }
+
+  // When breaking a Set for Top (or Bottom), also pass the sibling line so one Set
+  // can fulfill both halves when both are still pending.
+  if (lineKey && remaining.length === 1) {
+    const target = remaining[0];
+    const cat = String(target.category || '').trim();
+    if (cat === 'Top' || cat === 'Bottom') {
+      const siblingCat = cat === 'Top' ? 'Bottom' : 'Top';
+      const name = String(target.merchandise_name || target.original_type_name || '')
+        .trim()
+        .toLowerCase();
+      const sizeVal = String(target.size || '')
+        .trim()
+        .toLowerCase();
+      const sibling = allRemaining.find((line) => {
+        if (packageMerchLineKey(line) === packageMerchLineKey(target)) return false;
+        if (String(line.category || '').trim() !== siblingCat) return false;
+        const otherName = String(line.merchandise_name || line.original_type_name || '')
+          .trim()
+          .toLowerCase();
+        const otherSize = String(line.size || '')
+          .trim()
+          .toLowerCase();
+        return otherName === name && otherSize === sizeVal;
+      });
+      if (sibling) {
+        remaining = [target, sibling];
+      }
+    }
   }
 
   const payRes = await client.query(
@@ -408,13 +456,25 @@ export async function issuePendingPackageMerchLine(client, params) {
     paymentId: null,
     paymentIssueDate: invoice.issue_date,
     createdBy,
+    allowSetBreak: true,
   });
+
+  if (result.reason === 'no_leftover_piece_sku') {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        'A matching Set is available, but there is no leftover Top/Bottom SKU to receive the unused half. Add that piece in Stocks first.',
+      result,
+    };
+  }
 
   if (result.reason === 'backordered' || (result.pending_count > 0 && !result.issued)) {
     return {
       ok: false,
       status: 400,
-      message: 'Still out of stock. Request stock, then Issue when quantity is available.',
+      message:
+        'Still out of stock. Request stock, or Issue from Set when a matching Set is available.',
       result,
     };
   }

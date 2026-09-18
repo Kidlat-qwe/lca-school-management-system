@@ -12,6 +12,13 @@ Physical handoff is a later staff action.
 3. Out-of-stock lines stay pending (payment does not fail). **Null or blank quantity on a concrete SKU counts as 0** — it must not log a release.
 4. After Request Stock → confirm delivery, staff opens Merchandise → **Pending issue**
    (newest invoice first) and clicks **Issue**.
+5. **Issue from Set:** if Top or Bottom is OOS but a same-size / same-gender **Set** has stock,
+   Pending issue enables **Issue from Set**. The confirm modal explains the stock move before issuing:
+   - Deduct 1 Set
+   - Mark the needed piece issued
+   - If the sibling Top/Bottom is also pending → issue both from that one Set (no leftover)
+   - Else → **+1** to the leftover piece SKU (e.g. issue Top → add 1 Bottom of that size)
+   First-payment auto-issue does **not** break Sets; staff must confirm on Pending issue.
 
 OOS sizes remain selectable in Configure Merchandise so enrollment can finish; staff fulfill later from Pending issue.
 

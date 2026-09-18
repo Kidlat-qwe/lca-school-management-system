@@ -58,9 +58,15 @@ export default function PackageMerchPendingQueue({
     const label = [row.merchandise_name, row.size, row.category]
       .filter(Boolean)
       .join(' · ');
-    const ok = await appConfirm(
-      `Issue ${label || 'this item'} to ${row.student_name}? This deducts 1 from branch stock.`
-    );
+    const fromSet = Boolean(row.can_issue_from_set && row.set_break?.description);
+    const ok = await appConfirm({
+      title: fromSet ? 'Issue from Set' : 'Issue merchandise',
+      message: fromSet
+        ? row.set_break.description
+        : `Issue ${label || 'this item'} to ${row.student_name}?\n\nThis deducts 1 from branch stock.`,
+      confirmLabel: fromSet ? 'Issue from Set' : 'Issue',
+      cancelLabel: 'Cancel',
+    });
     if (!ok) return;
     try {
       setIssuingKey(`${row.invoice_id}-${row.line_key}`);
@@ -94,6 +100,10 @@ export default function PackageMerchPendingQueue({
       ).length,
     [rows]
   );
+  const setBreakReadyCount = useMemo(
+    () => rows.filter((row) => row.can_issue && row.can_issue_from_set).length,
+    [rows]
+  );
 
   const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE) || 1);
   const safePage = Math.min(page, totalPages);
@@ -114,8 +124,8 @@ export default function PackageMerchPendingQueue({
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Pending issue</h2>
           <p className="text-sm text-gray-500">
-            Package items still owed when branch stock is 0. Latest enrolled student first. After restock,
-            Issue when the student receives the item.
+            Package items still owed when branch stock is 0. Latest enrolled student first. After restock
+            (or Issue from Set when a matching Set exists), Issue when the student receives the item.
           </p>
         </div>
         <button
@@ -129,7 +139,11 @@ export default function PackageMerchPendingQueue({
       </div>
       {readyCount > 0 ? (
         <p className="text-xs font-medium text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          {readyCount} item{readyCount === 1 ? '' : 's'} in stock and ready to issue.
+          {readyCount} item{readyCount === 1 ? '' : 's'} ready to issue
+          {setBreakReadyCount > 0
+            ? ` (${setBreakReadyCount} via matching Set)`
+            : ''}
+          .
         </p>
       ) : null}
       {oosCount > 0 ? (
@@ -223,6 +237,11 @@ export default function PackageMerchPendingQueue({
                         >
                           {Number.isFinite(qty) ? qty : 0}
                         </span>
+                        {row.can_issue_from_set ? (
+                          <div className="text-[10px] text-amber-800 mt-0.5 leading-snug">
+                            Set available ({row.set_break?.set_quantity ?? '—'})
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-sm">
                         {row.has_first_payment ? (
@@ -242,11 +261,19 @@ export default function PackageMerchPendingQueue({
                         <button
                           type="button"
                           disabled={!row.can_issue || issuingKey === rowKey}
-                          title={row.block_reason || 'Issue to student'}
+                          title={
+                            row.can_issue_from_set
+                              ? 'Issue by breaking a matching Set'
+                              : row.block_reason || 'Issue to student'
+                          }
                           onClick={() => handleIssue(row)}
                           className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[#F7C844] text-gray-900 hover:bg-[#F5B82E] disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          {issuingKey === rowKey ? 'Issuing…' : 'Issue'}
+                          {issuingKey === rowKey
+                            ? 'Issuing…'
+                            : row.can_issue_from_set
+                              ? 'Issue from Set'
+                              : 'Issue'}
                         </button>
                         {!row.can_issue && row.block_reason ? (
                           <div className="text-[10px] text-gray-500 mt-1 max-w-[140px] leading-snug">

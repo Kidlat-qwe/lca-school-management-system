@@ -2,6 +2,7 @@
  * One-off script: hard delete selected students from class + billing records.
  *
  * What it removes (target students only):
+ * - merchandise_release_logtbl rows for target students (so re-enroll pending issue is clean)
  * - classstudentstbl rows (hard delete; bypasses unenroll flow)
  * - paymenttbl rows tied to target invoices or target students
  * - acknowledgement_receiptstbl rows linked to target invoices/payments/students
@@ -435,6 +436,13 @@ async function main() {
       [studentIds]
     );
 
+    // Clear package merch release history so re-enroll can show OOS lines on Pending issue again.
+    const merchReleaseLogDelete = await client.query(
+      `${isDryRun ? 'SELECT COUNT(*)::int AS count FROM merchandise_release_logtbl' : 'DELETE FROM merchandise_release_logtbl'}
+       WHERE student_id = ANY($1::int[])`,
+      [studentIds]
+    );
+
     const getAffected = (result) =>
       isDryRun ? (parseInt(result.rows?.[0]?.count, 10) || 0) : result.rowCount;
 
@@ -453,6 +461,7 @@ async function main() {
       console.log(`- invoicestbl would delete: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl would delete: ${getAffected(profileDelete)}`);
       console.log(`- first_enrollment onboarding email logs would delete: ${getAffected(welcomeEmailLogDelete)}`);
+      console.log(`- merchandise_release_logtbl would delete: ${getAffected(merchReleaseLogDelete)}`);
       console.log(
         `- daily_summary_salestbl: after payment removal, ${affectedDateRows.length} branch-date pair(s) will be reconciled (update totals or delete row if day is empty)`
       );
@@ -474,6 +483,7 @@ async function main() {
       console.log(`- invoicestbl deleted: ${getAffected(invoicesDelete)}`);
       console.log(`- installmentinvoiceprofilestbl deleted: ${getAffected(profileDelete)}`);
       console.log(`- first_enrollment onboarding email logs deleted: ${getAffected(welcomeEmailLogDelete)}`);
+      console.log(`- merchandise_release_logtbl deleted: ${getAffected(merchReleaseLogDelete)}`);
       console.log(
         `- daily_summary_salestbl: updated snapshots ${dailySync.updated}, removed empty rows ${dailySync.deleted}, skipped (no prior EOD row) ${dailySync.skipped}`
       );

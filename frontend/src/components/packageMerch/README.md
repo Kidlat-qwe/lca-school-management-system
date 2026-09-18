@@ -28,6 +28,10 @@ Merchandise tab **Pending issue**: out-of-stock enrollments from **2026-08-21**
 onward only (latest enrolled student on row 1), then ready-to-issue. Paginated
 (10 / page). **Issue** deducts 1 unit when first payment exists and branch stock > 0.
 
+**Issue from Set:** when Top/Bottom piece stock is 0 but a matching gender/size **Set**
+has stock, the row shows **Issue from Set**. The confirm modal describes the move
+(deduct Set; return leftover half to piece stock, or issue Top+Bottom together).
+
 **API:** `GET /merchandise/package-pending`, `POST /merchandise/package-pending/issue`
 
 Used on Admin / Superadmin Classes enroll wizard:
