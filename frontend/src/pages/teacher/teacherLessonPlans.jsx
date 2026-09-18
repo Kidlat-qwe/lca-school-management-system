@@ -1,15 +1,29 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { appAlert } from '../../utils/appAlert';
 import { LessonPlanHeader } from '../../components/lessonPlanHeader';
+import LessonPlanClassCodeSelect from '../../components/lessonPlanClassCodeSelect';
+import LessonPlanSubmissionsTable from '../../components/lessonPlanSubmissionsTable';
+import LessonPlanMissedTable from '../../components/lessonPlanMissedTable';
+import LessonPlanViewModal from '../../components/lessonPlanViewModal';
+import LessonPlanDateFilter from '../../components/lessonPlanDateFilter';
 import {
+  FieldRevisionNotes,
+  GeneralRevisionNotes,
+} from '../../components/lessonPlanRevisionFeedback';
+import {
+  buildLessonPlanClassCodeOptions,
+  buildLessonPlanClassCodeValue,
   buildLessonPlanPhaseOptions,
   buildLessonPlanPhaseSessionPayload,
   buildLessonPlanSessionOptions,
+  buildSessionKey,
   findLessonPlanSession,
-  formatLessonPlanDateDisplay,
   parseLessonPlanPhaseSessionForm,
+  resolveSelectedSessionClassCode,
+  formatLessonPlanDateDisplay,
 } from '../../utils/lessonPlanPhaseSession';
 
 const createEmptyForm = () => ({
@@ -65,21 +79,6 @@ const populateFormFromPlan = (plan) => {
   };
 };
 
-const formatStatus = (status) => {
-  if (status === 'awaiting_reflection') return 'Awaiting Reflection';
-  if (status === 'completed') return 'Completed';
-  if (status === 'revision_requested') return 'Revision requested';
-  return (status || 'draft').replace(/_/g, ' ');
-};
-
-const statusBadgeStyle = (status) => {
-  if (status === 'completed') return { background: '#e8f5e9', color: '#2e7d32' };
-  if (status === 'awaiting_reflection') return { background: '#fff4e5', color: '#b26a00' };
-  if (status === 'submitted') return { background: '#e3f2fd', color: '#1565c0' };
-  if (status === 'revision_requested') return { background: '#fff4e5', color: '#b26a00' };
-  return { background: '#f5f5f5', color: '#666666' };
-};
-
 /** Asia/Manila calendar date YYYY-MM-DD */
 function getManilaTodayYmd() {
   return new Intl.DateTimeFormat('en-CA', {
@@ -88,11 +87,6 @@ function getManilaTodayYmd() {
     month: '2-digit',
     day: '2-digit',
   }).format(new Date());
-}
-
-function isLessonDateToday(lessonDate, todayYmd = getManilaTodayYmd()) {
-  if (!lessonDate) return false;
-  return String(lessonDate).slice(0, 10) === todayYmd;
 }
 
 function normalizeGradeLevelKey(value) {
@@ -137,84 +131,6 @@ function isLessonPlanSubmitReady(formData = {}) {
   );
 }
 
-function parseRevisionFeedbackClient(raw) {
-  const text = raw == null ? '' : String(raw);
-  if (!text.trim()) return { items: [], general: null, legacy: true };
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed && Number(parsed.v) === 1 && Array.isArray(parsed.items)) {
-      return {
-        items: parsed.items,
-        general: parsed.general || null,
-        legacy: false,
-      };
-    }
-  } catch {
-    /* legacy plain text */
-  }
-  return { items: [], general: text, legacy: true };
-}
-
-function getPlanRevisionFeedback(plan) {
-  return plan?.revision_feedback || parseRevisionFeedbackClient(plan?.revision_reason);
-}
-
-function getRevisionItemsForField(plan, fieldKey) {
-  const feedback = getPlanRevisionFeedback(plan);
-  const items = Array.isArray(feedback?.items) ? feedback.items : [];
-  return items.filter((item) => item?.field === fieldKey);
-}
-
-/** Inline revision notes placed directly under the matching form field. */
-function FieldRevisionNotes({ plan, fieldKey }) {
-  if (plan?.status !== 'revision_requested') return null;
-  const items = getRevisionItemsForField(plan, fieldKey);
-  if (!items.length) return null;
-
-  return (
-    <div className="col-span-full -mt-1 mb-1 space-y-1.5">
-      {items.map((item, idx) => (
-        <div
-          key={`${fieldKey}-${idx}`}
-          className="rounded-md border border-red-300 bg-red-100 px-2.5 py-2 text-[12px] text-red-900"
-        >
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-red-700">
-            Revision feedback
-          </p>
-          {item.highlight ? (
-            <blockquote className="mt-1 border-l-2 border-red-500 pl-2 text-[12px] italic text-red-950">
-              “{item.highlight}”
-            </blockquote>
-          ) : null}
-          {item.note ? (
-            <p className="mt-1 whitespace-pre-wrap leading-snug text-[13px] text-red-950">{item.note}</p>
-          ) : null}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** General / legacy revision note (not tied to a specific field). */
-function GeneralRevisionNotes({ plan }) {
-  if (plan?.status !== 'revision_requested') return null;
-  const feedback = getPlanRevisionFeedback(plan);
-  const general =
-    typeof feedback?.general === 'string' && feedback.general.trim()
-      ? feedback.general.trim()
-      : '';
-  if (!general) return null;
-
-  return (
-    <div className="mt-2.5 rounded-lg border border-red-300 bg-red-100 p-3 text-[13px] text-red-900">
-      <p className="mb-1 font-semibold text-red-700">
-        {feedback.legacy ? 'Revision feedback' : 'General revision feedback'}
-      </p>
-      <p className="whitespace-pre-wrap text-red-950">{general}</p>
-    </div>
-  );
-}
-
 /** Shared field chrome from TeacherLessonPlans.jsx Field styled-component */
 const fieldControlCls =
   'min-w-0 flex-1 rounded-lg border border-[#d8d8d8] bg-transparent px-3 py-2.5 text-base font-normal text-[#111111] focus:border-[#ff9f40] focus:outline-none focus:shadow-[0_0_0_3px_rgba(255,159,64,0.15)] disabled:cursor-not-allowed disabled:opacity-60';
@@ -239,28 +155,56 @@ export default function TeacherLessonPlans() {
   const { userInfo } = useAuth();
   const [meta, setMeta] = useState(null);
   const [lessonPlans, setLessonPlans] = useState([]);
+  const [missedPlans, setMissedPlans] = useState([]);
+  const [missedSince, setMissedSince] = useState('');
+  const [missedDefaultSince, setMissedDefaultSince] = useState('');
+  const [listTab, setListTab] = useState('submissions');
   const [selectedPlan, setSelectedPlan] = useState(null);
+  const [viewPlan, setViewPlan] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [formData, setFormData] = useState(createEmptyForm);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const [missedLoading, setMissedLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [classSessions, setClassSessions] = useState([]);
   const [classSessionsLoading, setClassSessionsLoading] = useState(false);
-  const [sheetFlash, setSheetFlash] = useState(false);
+  const [gradeSessions, setGradeSessions] = useState([]);
+  const [gradeSessionsLoading, setGradeSessionsLoading] = useState(false);
   const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
-  const flashTimerRef = useRef(null);
-  const lessonPlanTopRef = useRef(null);
+  const formScrollRef = useRef(null);
+  const reflectionSectionRef = useRef(null);
+  const [reflectionBlink, setReflectionBlink] = useState(false);
 
-  const scrollLessonPlanToTop = useCallback(() => {
+  const scrollFormToTop = useCallback(() => {
     requestAnimationFrame(() => {
-      window.scrollTo({ top: 0, left: 0, behavior: 'smooth' });
-      lessonPlanTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      formScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  }, []);
+
+  const scrollToTeacherReflection = useCallback(() => {
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        reflectionSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      }, 80);
     });
   }, []);
 
   const preparedBy =
     userInfo?.full_name || userInfo?.fullName || userInfo?.email || 'Current Teacher';
+
+  const branchName =
+    meta?.branch?.branch_name ||
+    meta?.branch?.name ||
+    userInfo?.branch_name ||
+    'your branch';
 
   const canEdit = useMemo(() => {
     if (!selectedPlan) return true;
@@ -268,9 +212,9 @@ export default function TeacherLessonPlans() {
   }, [selectedPlan]);
 
   const canEditReflections = useMemo(() => {
-    if (!selectedPlan || selectedPlan.status !== 'awaiting_reflection') return false;
-    return isLessonDateToday(selectedPlan.lesson_date || formData.lesson_date, manilaToday);
-  }, [selectedPlan, formData.lesson_date, manilaToday]);
+    if (!selectedPlan) return false;
+    return selectedPlan.status === 'awaiting_reflection';
+  }, [selectedPlan]);
 
   const branchClasses = useMemo(() => meta?.classes || [], [meta]);
 
@@ -291,14 +235,51 @@ export default function TeacherLessonPlans() {
     return filtered;
   }, [branchClasses, formData.grade_level, formData.class_id]);
 
+  const classCodeOptions = useMemo(() => {
+    const keepValue =
+      formData.class_id && formData.phase && formData.session
+        ? buildLessonPlanClassCodeValue(formData.class_id, formData.phase, formData.session)
+        : '';
+    // All grade sessions, each stamped with its class_id (View Class Details codes).
+    const source =
+      gradeSessions.length > 0
+        ? gradeSessions
+        : classSessions.map((row) => ({ ...row, class_id: formData.class_id }));
+    return buildLessonPlanClassCodeOptions(source, {
+      todayYmd: manilaToday,
+      keepValue,
+    });
+  }, [
+    classSessions,
+    gradeSessions,
+    formData.class_id,
+    formData.phase,
+    formData.session,
+    manilaToday,
+    selectedPlan,
+  ]);
+
+  const selectedClassCodeValue = useMemo(() => {
+    if (!formData.class_id || !formData.phase || !formData.session) return '';
+    return buildLessonPlanClassCodeValue(formData.class_id, formData.phase, formData.session);
+  }, [formData.class_id, formData.phase, formData.session]);
+
   const phaseOptions = useMemo(
-    () => buildLessonPlanPhaseOptions(classSessions),
-    [classSessions]
+    () =>
+      buildLessonPlanPhaseOptions(classSessions, {
+        todayYmd: manilaToday,
+        keepPhase: formData.phase || '',
+      }),
+    [classSessions, manilaToday, formData.phase]
   );
 
   const sessionOptions = useMemo(
-    () => buildLessonPlanSessionOptions(classSessions, formData.phase),
-    [classSessions, formData.phase]
+    () =>
+      buildLessonPlanSessionOptions(classSessions, formData.phase, {
+        todayYmd: manilaToday,
+        keepSessionKey: formData.session || '',
+      }),
+    [classSessions, formData.phase, formData.session, manilaToday]
   );
 
   const selectedSessionDateYmd = useMemo(() => {
@@ -312,17 +293,93 @@ export default function TeacherLessonPlans() {
   );
 
   const selectedClassLabel = useMemo(() => {
-    if (!formData.class_id) {
-      return selectedPlan?.class_label || selectedPlan?.subject || '';
-    }
-    const match = classOptions.find((c) => String(c.class_id) === String(formData.class_id));
-    return match?.label || selectedPlan?.class_label || selectedPlan?.subject || '';
-  }, [formData.class_id, classOptions, selectedPlan]);
+    const sessionCode = resolveSelectedSessionClassCode(classSessions, formData.session);
+    if (sessionCode) return sessionCode;
+    return selectedPlan?.class_label || selectedPlan?.subject || '';
+  }, [classSessions, formData.session, selectedPlan]);
+
+  const filterGradeOptions = useMemo(() => {
+    const fromMeta = Array.isArray(meta?.grade_levels) ? meta.grade_levels : [];
+    const fromPlans = lessonPlans
+      .map((p) => String(p.grade_level || '').trim())
+      .filter(Boolean);
+    const fromMissed = missedPlans
+      .map((p) => String(p.grade_level || '').trim())
+      .filter(Boolean);
+    return [...new Set([...fromMeta, ...fromPlans, ...fromMissed])].sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [meta, lessonPlans, missedPlans]);
 
   const filteredPlans = useMemo(() => {
-    if (statusFilter === 'all') return lessonPlans;
-    return lessonPlans.filter((p) => p.status === statusFilter);
-  }, [lessonPlans, statusFilter]);
+    const q = searchTerm.trim().toLowerCase();
+    return lessonPlans.filter((p) => {
+      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (gradeFilter !== 'all') {
+        if (
+          normalizeGradeLevelKey(p.grade_level) !== normalizeGradeLevelKey(gradeFilter)
+        ) {
+          return false;
+        }
+      }
+      // Date filter is off when empty.
+      if (dateFilter) {
+        const planDate = String(p.lesson_date || '').slice(0, 10);
+        if (planDate !== dateFilter) return false;
+      }
+      if (!q) return true;
+      const haystack = [
+        p.topic,
+        p.grade_level,
+        p.class_label,
+        p.class_code,
+        p.subject,
+        p.phase,
+        p.session,
+        p.status,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [lessonPlans, statusFilter, gradeFilter, dateFilter, searchTerm]);
+
+  const filteredMissedPlans = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return missedPlans.filter((p) => {
+      if (gradeFilter !== 'all') {
+        if (
+          normalizeGradeLevelKey(p.grade_level) !== normalizeGradeLevelKey(gradeFilter)
+        ) {
+          return false;
+        }
+      }
+      if (!q) return true;
+      const haystack = [
+        p.topic,
+        p.grade_level,
+        p.class_label,
+        p.class_code,
+        p.phase,
+        p.session,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [missedPlans, gradeFilter, searchTerm]);
+
+  const hasActiveFilters =
+    Boolean(searchTerm.trim()) ||
+    gradeFilter !== 'all' ||
+    (listTab === 'submissions' && Boolean(dateFilter)) ||
+    (listTab === 'submissions' && statusFilter !== 'all') ||
+    (listTab === 'missed' &&
+      Boolean(missedSince) &&
+      Boolean(missedDefaultSince) &&
+      missedSince !== missedDefaultSince);
 
   const submitButtonLabel =
     selectedPlan?.status === 'revision_requested'
@@ -341,16 +398,51 @@ export default function TeacherLessonPlans() {
     return () => clearInterval(id);
   }, []);
 
-  const fetchPlans = useCallback(async () => {
-    const res = await apiRequest('/lesson-plans?limit=100');
-    setLessonPlans(res.data || []);
+  const fetchMissed = useCallback(async (sinceValue = '') => {
+    setMissedLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '500' });
+      const since = String(sinceValue || '').trim().slice(0, 10);
+      if (since) params.set('since', since);
+      const missedRes = await apiRequest(`/lesson-plans/missed?${params.toString()}`);
+      setMissedPlans(Array.isArray(missedRes?.data) ? missedRes.data : []);
+      const metaSince = String(missedRes?.meta?.since || '').slice(0, 10);
+      const metaDefault = String(missedRes?.meta?.default_since || '').slice(0, 10);
+      if (metaDefault) setMissedDefaultSince(metaDefault);
+      if (metaSince) setMissedSince(metaSince);
+    } catch (err) {
+      setMissedPlans([]);
+      throw err;
+    } finally {
+      setMissedLoading(false);
+    }
   }, []);
+
+  const fetchPlans = useCallback(async () => {
+    const [plansRes] = await Promise.all([
+      apiRequest('/lesson-plans?limit=100'),
+      fetchMissed(),
+    ]);
+    setLessonPlans(plansRes.data || []);
+  }, [fetchMissed]);
+
+  const handleMissedSinceChange = async (ymd) => {
+    const next = String(ymd || '').slice(0, 10);
+    setMissedSince(next);
+    setError('');
+    try {
+      await fetchMissed(next || '');
+    } catch (err) {
+      setError(err.message || 'Failed to load missed lesson plans');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
+        setMissedLoading(true);
         setError('');
         const [metaRes] = await Promise.all([
           apiRequest('/lesson-plans/meta'),
@@ -361,7 +453,10 @@ export default function TeacherLessonPlans() {
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load lesson plans');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+          setMissedLoading(false);
+        }
       }
     })();
     return () => {
@@ -369,10 +464,59 @@ export default function TeacherLessonPlans() {
     };
   }, [fetchPlans]);
 
+  // Load sessions for all classes under the selected grade (Class Code = session codes).
+  useEffect(() => {
+    const grade = formData.grade_level;
+    const classesForGrade = branchClasses.filter((cls) =>
+      classMatchesGradeLevel(cls, grade)
+    );
+    if (!grade || !classesForGrade.length) {
+      setGradeSessions([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setGradeSessionsLoading(true);
+      try {
+        const results = await Promise.all(
+          classesForGrade.map(async (cls) => {
+            try {
+              const res = await apiRequest(`/classes/${cls.class_id}/sessions`);
+              const rows = Array.isArray(res.data) ? res.data : [];
+              return rows.map((row) => ({ ...row, class_id: cls.class_id }));
+            } catch {
+              return [];
+            }
+          })
+        );
+        if (!cancelled) {
+          setGradeSessions(results.flat());
+        }
+      } finally {
+        if (!cancelled) setGradeSessionsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.grade_level, branchClasses]);
+
   useEffect(() => {
     const classId = formData.class_id;
     if (!classId) {
       setClassSessions([]);
+      return undefined;
+    }
+
+    // Prefer already-loaded grade sessions for this class to avoid a second request.
+    const fromGrade = gradeSessions.filter(
+      (row) => String(row.class_id) === String(classId)
+    );
+    if (fromGrade.length) {
+      setClassSessions(fromGrade);
+      setClassSessionsLoading(false);
       return undefined;
     }
 
@@ -394,7 +538,10 @@ export default function TeacherLessonPlans() {
     return () => {
       cancelled = true;
     };
-  }, [formData.class_id]);
+  }, [formData.class_id, gradeSessions]);
+
+  // Grade Level only loads Class Code options — do not auto-select Class Code / Phase / Session.
+  // Phase + Session fill only after the teacher picks a Class Code (see onChange below).
 
   useEffect(() => {
     if (!formData.session || !selectedSessionDateYmd) return;
@@ -404,34 +551,75 @@ export default function TeacherLessonPlans() {
     });
   }, [formData.session, selectedSessionDateYmd]);
 
-  useEffect(() => {
-    return () => {
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    };
+  const closeFormModal = useCallback(() => {
+    setFormOpen(false);
+    setError('');
   }, []);
 
-  const flashLessonPlanSheet = () => {
-    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-    setSheetFlash(false);
-    requestAnimationFrame(() => {
-      setSheetFlash(true);
-      flashTimerRef.current = setTimeout(() => setSheetFlash(false), 1600);
-    });
-  };
+  useEffect(() => {
+    if (!formOpen) return undefined;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeFormModal();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [formOpen, closeFormModal]);
+
+  // Awaiting Reflection: scroll to Successes and blink reflection field borders.
+  useEffect(() => {
+    if (!formOpen || selectedPlan?.status !== 'awaiting_reflection') {
+      setReflectionBlink(false);
+      return undefined;
+    }
+    setReflectionBlink(true);
+    scrollToTeacherReflection();
+    const stopBlink = setTimeout(() => setReflectionBlink(false), 8000);
+    return () => clearTimeout(stopBlink);
+  }, [formOpen, selectedPlan?.lesson_plan_id, selectedPlan?.status, scrollToTeacherReflection]);
 
   const handleInputChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleNewPlan = () => {
+    setViewPlan(null);
     setSelectedPlan(null);
     setFormData(createEmptyForm());
     setError('');
-    flashLessonPlanSheet();
-    scrollLessonPlanToTop();
+    setFormOpen(true);
+    scrollFormToTop();
+  };
+
+  const handleCreateFromMissed = (missed) => {
+    if (!missed) return;
+    const phaseNum = missed.phase_number != null ? String(missed.phase_number) : '';
+    const sessionNum =
+      missed.phase_session_number != null ? String(missed.phase_session_number) : '';
+    const sessionKey = buildSessionKey(phaseNum, sessionNum);
+    setViewPlan(null);
+    setSelectedPlan(null);
+    setListTab('submissions');
+    setFormData({
+      ...createEmptyForm(),
+      lesson_date: String(missed.scheduled_date || missed.lesson_date || '').slice(0, 10),
+      grade_level: missed.grade_level || '',
+      class_id: missed.class_id != null ? String(missed.class_id) : '',
+      phase: phaseNum,
+      session: sessionKey,
+      topic: missed.topic || '',
+    });
+    setError('');
+    setFormOpen(true);
+    scrollFormToTop();
   };
 
   const handleSelectPlan = (plan) => {
+    setViewPlan(null);
     setSelectedPlan(plan);
     let nextForm = populateFormFromPlan(plan);
     if (plan.class_id && branchClasses.length) {
@@ -442,7 +630,46 @@ export default function TeacherLessonPlans() {
     }
     setFormData(nextForm);
     setError('');
-    flashLessonPlanSheet();
+    setFormOpen(true);
+    if (plan?.status === 'awaiting_reflection') {
+      scrollToTeacherReflection();
+    } else {
+      scrollFormToTop();
+    }
+  };
+
+  const handleViewPlan = async (plan) => {
+    // Awaiting Reflection: go straight to the edit form so reflection fields are writable.
+    if (plan?.status === 'awaiting_reflection') {
+      let planToEdit = plan;
+      if (plan.lesson_plan_id) {
+        try {
+          const res = await apiRequest(`/lesson-plans/${plan.lesson_plan_id}`);
+          if (res?.data) planToEdit = res.data;
+        } catch {
+          /* use list-row plan */
+        }
+      }
+      handleSelectPlan(planToEdit);
+      return;
+    }
+
+    setFormOpen(false);
+    setViewPlan(plan);
+    if (!plan?.lesson_plan_id) return;
+    try {
+      const res = await apiRequest(`/lesson-plans/${plan.lesson_plan_id}`);
+      if (res?.data) setViewPlan(res.data);
+    } catch {
+      /* Keep list-row plan if detail fetch fails */
+    }
+  };
+
+  const closeFormAfterSave = () => {
+    setFormOpen(false);
+    setSelectedPlan(null);
+    setFormData(createEmptyForm());
+    setError('');
   };
 
   const saveLessonPlan = async ({ submit = false } = {}) => {
@@ -454,22 +681,30 @@ export default function TeacherLessonPlans() {
         setError(
           'Complete lesson date, grade level, class, phase, session, topic, and all fields in sections 1–6 before submitting.'
         );
-        scrollLessonPlanToTop();
+        scrollFormToTop();
         return;
       }
 
       const phaseSessionFields = buildLessonPlanPhaseSessionPayload(formData, classSessions);
+      const selectedSessionClassCode =
+        resolveSelectedSessionClassCode(classSessions, formData.session) ||
+        classCodeOptions.find((o) => o.value === selectedClassCodeValue)?.class_code ||
+        '';
 
-      // Reflections are never saved during draft/submit — locked until lesson date after approval.
+      // Reflections are never saved during draft/submit — unlocked after verifier approval (awaiting_reflection).
       const payload = {
         ...formData,
         ...phaseSessionFields,
         class_id: formData.class_id ? Number(formData.class_id) : null,
+        // Persist the Class Code shown in the form (session-scoped).
+        subject: selectedSessionClassCode || '',
         reflection_went_well: '',
         reflection_amazing_moments: '',
         reflection_challenges: '',
         reflection_improvements: '',
       };
+
+      const wasUpdate = Boolean(selectedPlan);
 
       if (selectedPlan) {
         await apiRequest(`/lesson-plans/${selectedPlan.lesson_plan_id}`, {
@@ -481,31 +716,28 @@ export default function TeacherLessonPlans() {
             method: 'POST',
             body: JSON.stringify({}),
           });
-          await appAlert('Lesson plan submitted for verification');
-          handleNewPlan();
-        } else {
-          await appAlert('Lesson plan saved');
         }
       } else {
-        const res = await apiRequest('/lesson-plans', {
+        await apiRequest('/lesson-plans', {
           method: 'POST',
           body: JSON.stringify({
             ...payload,
             status: submit ? 'submitted' : 'draft',
           }),
         });
-        if (submit) {
-          await appAlert('Lesson plan submitted for verification');
-          handleNewPlan();
-        } else {
-          setSelectedPlan(res.data);
-          await appAlert('Lesson plan saved as draft');
-        }
       }
       await fetchPlans();
+      closeFormAfterSave();
+      await appAlert(
+        submit
+          ? 'Lesson plan submitted for verification'
+          : wasUpdate
+            ? 'Lesson plan saved'
+            : 'Lesson plan saved as draft'
+      );
     } catch (err) {
       setError(err.message || 'Failed to save lesson plan');
-      if (submit) scrollLessonPlanToTop();
+      if (submit) scrollFormToTop();
     } finally {
       setSaving(false);
     }
@@ -535,6 +767,7 @@ export default function TeacherLessonPlans() {
       }));
       await appAlert('Teacher reflection saved. Lesson plan marked as Completed.');
       await fetchPlans();
+      setFormOpen(false);
     } catch (err) {
       setError(err.message || 'Failed to save teacher reflection');
     } finally {
@@ -545,59 +778,268 @@ export default function TeacherLessonPlans() {
   const sheetFont = { fontFamily: '"Poppins", "Inter", "Segoe UI", sans-serif' };
 
   const reflectionHint = (() => {
-    const lessonYmd = String(
-      (selectedPlan?.lesson_date || formData.lesson_date || '').slice(0, 10)
-    );
-    const lessonDateLabel = lessonYmd ? formatLessonPlanDateDisplay(lessonYmd) : '—';
     if (selectedPlan?.status === 'completed') {
       return 'Teacher reflection is complete. This lesson plan is Completed.';
     }
     if (selectedPlan?.status === 'awaiting_reflection') {
-      if (canEditReflections) {
-        return `Unlocked today (${manilaToday}). Fill in all reflection fields and save to mark this plan Completed. No further verifier approval is required.`;
-      }
-      return `Locked. Teacher reflection opens only on the lesson date (${lessonDateLabel}) and locks again after that day. Today is ${manilaToday}.`;
+      return 'Fill in all Teacher Reflection fields (Successes, Amazing Moments, Challenges, Improvements), then save to mark this plan Completed. No further verifier approval is required.';
     }
-    return `Locked until the lesson date after a verifier approves this plan. You can only edit reflections on ${lessonDateLabel} (not before or after).`;
+    return 'Teacher Reflection unlocks after a verifier approves this plan (status Awaiting Reflection).';
   })();
 
   return (
-    <div ref={lessonPlanTopRef} className="space-y-5">
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Lesson Plans</h1>
+          <p className="text-sm text-gray-600">
+            View your lesson plan submissions for {branchName}
+          </p>
         </div>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={handleNewPlan}
+          className={`${btnPrimaryCls} shrink-0`}
+        >
+          Create Lesson Plan
+        </button>
+      </div>
+
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex flex-wrap gap-2" aria-label="Lesson plan tabs">
+          {[
+            { key: 'submissions', label: 'My Plans', count: lessonPlans.length },
+            { key: 'missed', label: 'Missed', count: missedPlans.length },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setListTab(tab.key)}
+              className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-semibold transition-colors ${
+                listTab === tab.key
+                  ? 'border-primary-600 text-primary-700'
+                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+              }`}
+            >
+              {tab.label}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                  listTab === tab.key
+                    ? 'bg-primary-100 text-primary-800'
+                    : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                {tab.count}
+              </span>
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      <div className="rounded-lg bg-white p-4 shadow">
+        <div
+          className={`grid grid-cols-1 gap-4 sm:grid-cols-2 ${
+            listTab === 'missed' ? 'xl:grid-cols-3' : 'xl:grid-cols-4'
+          }`}
+        >
+          <div className="min-w-0 sm:col-span-2 xl:col-span-1">
+            <label
+              htmlFor="lesson-plan-search-filter"
+              className="mb-1 block text-xs font-medium text-gray-700"
+            >
+              Search
+            </label>
+            <div className="relative">
+              <input
+                id="lesson-plan-search-filter"
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by topic, class code, or grade level..."
+                className="w-full rounded-lg border border-gray-300 px-3 py-1.5 pr-9 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              {searchTerm ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Clear search"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {listTab === 'missed' ? (
+            <LessonPlanDateFilter
+              id="teacher-lesson-plan-missed-since"
+              label="Track from"
+              value={missedSince}
+              onChange={handleMissedSinceChange}
+            />
+          ) : (
+            <LessonPlanDateFilter
+              value={dateFilter}
+              onChange={setDateFilter}
+            />
+          )}
+          <div className="min-w-0">
+            <label
+              htmlFor="lesson-plan-grade-filter"
+              className="mb-1 block text-xs font-medium text-gray-700"
+            >
+              Grade Level
+            </label>
+            <select
+              id="lesson-plan-grade-filter"
+              value={gradeFilter}
+              onChange={(e) => setGradeFilter(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              aria-label="Filter by grade level"
+            >
+              <option value="all">All Grade Levels</option>
+              {filterGradeOptions.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </div>
+          {listTab === 'submissions' ? (
+            <div className="min-w-0">
+              <label
+                htmlFor="lesson-plan-status-filter"
+                className="mb-1 block text-xs font-medium text-gray-700"
+              >
+                Status
+              </label>
+              <select
+                id="lesson-plan-status-filter"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                aria-label="Filter by status"
+              >
+                <option value="all">All Statuses</option>
+                <option value="draft">Draft</option>
+                <option value="submitted">Submitted</option>
+                <option value="awaiting_reflection">Awaiting Reflection</option>
+                <option value="revision_requested">Revision Requested</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      {listTab === 'missed' ? (
+        <LessonPlanMissedTable
+          rows={filteredMissedPlans}
+          loading={missedLoading}
+          showTeacher={false}
+          emptyMessage={
+            hasActiveFilters
+              ? 'No matching missed lesson plans. Try adjusting your search or filters.'
+              : 'No missed lesson plans. All overdue sessions have a submitted plan.'
+          }
+          showingLabel={
+            !missedLoading && filteredMissedPlans.length > 0
+              ? `Showing ${filteredMissedPlans.length} missed lesson plan${
+                  filteredMissedPlans.length === 1 ? '' : 's'
+                }${missedSince ? ` (from ${missedSince})` : ''}`
+              : ''
+          }
+          onCreate={handleCreateFromMissed}
+        />
+      ) : (
+        <LessonPlanSubmissionsTable
+          plans={filteredPlans}
+          loading={loading}
+          emptyMessage={
+            hasActiveFilters
+              ? 'No matching lesson plans. Try adjusting your search or filters.'
+              : 'No lesson plans submitted yet.'
+          }
+          showingLabel={
+            !loading && filteredPlans.length > 0
+              ? `Showing ${filteredPlans.length} of ${lessonPlans.length} lesson plan${
+                  lessonPlans.length === 1 ? '' : 's'
+                }`
+              : ''
+          }
+          activePlanId={formOpen ? selectedPlan?.lesson_plan_id : null}
+          onView={handleViewPlan}
+          onSelect={handleSelectPlan}
+        />
       )}
 
-      {/* PageWrapper */}
-      <div className="grid grid-cols-1 gap-6 min-[1101px]:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
-        <style>{`
-          @keyframes lessonPlanSheetFlash {
-            0%, 100% {
-              border-color: #eeeeee;
-              box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
-            }
-            50% {
-              border-color: #ef4444;
-              box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.35), 0 10px 30px rgba(0, 0, 0, 0.08);
-            }
-          }
-        `}</style>
-        {/* LessonPlanSheet */}
-        <div
-          className="rounded-md border border-[#eeeeee] bg-white px-[42px] py-[34px] text-[#111111] shadow-[0_10px_30px_rgba(0,0,0,0.08)] max-md:px-5 max-md:py-6"
-          style={{
-            ...sheetFont,
-            ...(sheetFlash
-              ? { animation: 'lessonPlanSheetFlash 0.45s ease-in-out 3' }
-              : null),
-          }}
-        >
-          <LessonPlanHeader branch={meta?.branch || null} />
+      {formOpen
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[9999] flex items-center justify-center overflow-hidden bg-black/55 p-3 sm:p-5 lg:p-8"
+              onClick={() => {
+                if (!saving) closeFormModal();
+              }}
+              role="presentation"
+            >
+              <div
+                className="relative flex max-h-[94vh] w-full max-w-[1100px] flex-col overflow-hidden rounded-md bg-[#f3f4f6] shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label={selectedPlan ? 'Edit lesson plan' : 'Create lesson plan'}
+              >
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:px-5">
+                  <h2 className="truncate text-base font-semibold text-[#333333] sm:text-lg">
+                    {selectedPlan?.status === 'awaiting_reflection'
+                      ? "Complete Teacher's Reflection"
+                      : selectedPlan
+                        ? 'Edit Lesson Plan'
+                        : 'Create Lesson Plan'}
+                  </h2>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={closeFormModal}
+                    className="flex h-9 w-9 items-center justify-center rounded-lg text-[28px] font-bold leading-none text-[#d32f2f] hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
+                    aria-label="Close"
+                  >
+                    ×
+                  </button>
+                </div>
 
-          {/* FormGrid */}
-          <div className="grid grid-cols-1 gap-x-[34px] gap-y-[14px] md:grid-cols-2">
-            <div className="col-span-full my-0.5 mb-2 border-t-2 border-[#111111]" />
+                <div
+                  ref={formScrollRef}
+                  className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 sm:p-5 lg:p-8"
+                  style={{
+                    scrollbarWidth: 'thin',
+                    scrollbarColor: '#cbd5e0 #f7fafc',
+                    WebkitOverflowScrolling: 'touch',
+                  }}
+                >
+                  {error ? (
+                    <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {error}
+                    </div>
+                  ) : null}
+
+                  <div
+                    className="mx-auto w-full max-w-[960px] rounded-md border border-[#eeeeee] bg-white px-5 py-6 text-[#111111] shadow-[0_10px_30px_rgba(0,0,0,0.08)] sm:px-10 sm:py-9 lg:px-[42px] lg:py-[34px]"
+                    style={sheetFont}
+                  >
+                    <LessonPlanHeader branch={meta?.branch || null} />
+
+                    {/* FormGrid */}
+                    <div className="grid grid-cols-1 gap-x-[34px] gap-y-[14px] md:grid-cols-2">
+                      <div className="col-span-full my-0.5 mb-2 border-t-2 border-[#111111]" />
 
             <label className={fieldLabelCls}>
               <span className="shrink-0">Lesson Date</span>
@@ -617,21 +1059,15 @@ export default function TeacherLessonPlans() {
                 value={formData.grade_level}
                 onChange={(e) => {
                   const gradeLevel = e.target.value;
-                  setFormData((prev) => {
-                    const next = { ...prev, grade_level: gradeLevel };
-                    if (
-                      prev.class_id &&
-                      !classMatchesGradeLevel(
-                        branchClasses.find((c) => String(c.class_id) === String(prev.class_id)),
-                        gradeLevel
-                      )
-                    ) {
-                      next.class_id = '';
-                      next.phase = '';
-                      next.session = '';
-                    }
-                    return next;
-                  });
+                  // Changing grade clears Class Code / Phase / Session — teacher picks Class Code next.
+                  setFormData((prev) => ({
+                    ...prev,
+                    grade_level: gradeLevel,
+                    class_id: '',
+                    phase: '',
+                    session: '',
+                    topic: '',
+                  }));
                 }}
                 className={fieldControlCls}
               >
@@ -648,39 +1084,34 @@ export default function TeacherLessonPlans() {
               </select>
             </label>
 
-            <label className={`${fieldLabelCls} col-span-full`}>
-              <span className="shrink-0">Class</span>
-              <select
-                disabled={!canEdit || loading || !formData.grade_level}
-                value={formData.class_id}
-                onChange={(e) => {
-                  const classId = e.target.value;
-                  const selected =
-                    branchClasses.find((c) => String(c.class_id) === String(classId)) || null;
+            <div className={`${fieldLabelCls} col-span-full`}>
+              <span className="shrink-0">Class Code</span>
+              <LessonPlanClassCodeSelect
+                options={classCodeOptions}
+                value={selectedClassCodeValue}
+                disabled={
+                  !canEdit || loading || !formData.grade_level || gradeSessionsLoading
+                }
+                loading={gradeSessionsLoading}
+                emptyHint={
+                  !formData.grade_level
+                    ? 'Select grade level first'
+                    : 'No upcoming class codes for this grade'
+                }
+                placeholder="Select class code"
+                onChange={(opt) => {
+                  // Class Code is the source of truth — Phase / Session follow it.
                   setFormData((prev) => ({
                     ...prev,
-                    class_id: classId,
-                    grade_level: selected?.level_tag || prev.grade_level,
-                    phase: '',
-                    session: '',
+                    class_id: String(opt.class_id || ''),
+                    phase: String(opt.phase || ''),
+                    session: String(opt.session || ''),
+                    lesson_date: opt.scheduled_date || prev.lesson_date,
+                    topic: opt.topic || prev.topic,
                   }));
                 }}
-                className={fieldControlCls}
-              >
-                <option value="">
-                  {!formData.grade_level
-                    ? 'Select grade level first'
-                    : classOptions.length
-                      ? 'Select class'
-                      : 'No classes for this grade level'}
-                </option>
-                {classOptions.map((cls) => (
-                  <option key={cls.class_id} value={String(cls.class_id)}>
-                    {cls.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              />
+            </div>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class_id" />
 
             <label className={fieldLabelCls}>
@@ -690,22 +1121,32 @@ export default function TeacherLessonPlans() {
                 value={formData.phase}
                 onChange={(e) => {
                   const phase = e.target.value;
+                  const nextSession = buildLessonPlanSessionOptions(classSessions, phase, {
+                    todayYmd: manilaToday,
+                  })[0];
+                  const row = nextSession
+                    ? findLessonPlanSession(classSessions, nextSession.key)
+                    : null;
                   setFormData((prev) => ({
                     ...prev,
                     phase,
-                    session: '',
+                    session: nextSession?.key || '',
+                    lesson_date: row?.scheduled_date
+                      ? String(row.scheduled_date).slice(0, 10)
+                      : prev.lesson_date,
+                    topic: String(row?.topic || '').trim() || prev.topic,
                   }));
                 }}
                 className={fieldControlCls}
               >
                 <option value="">
                   {!formData.class_id
-                    ? 'Select class first'
+                    ? 'Select class code first'
                     : classSessionsLoading
                       ? 'Loading phases…'
                       : phaseOptions.length
                         ? 'Select phase'
-                        : 'No phases scheduled for this class'}
+                        : 'No upcoming phases for this class'}
                 </option>
                 {phaseOptions.map((phaseNum) => (
                   <option key={phaseNum} value={String(phaseNum)}>
@@ -730,16 +1171,17 @@ export default function TeacherLessonPlans() {
                     lesson_date: row?.scheduled_date
                       ? String(row.scheduled_date).slice(0, 10)
                       : prev.lesson_date,
+                    topic: String(row?.topic || '').trim() || prev.topic,
                   }));
                 }}
                 className={fieldControlCls}
               >
                 <option value="">
                   {!formData.phase
-                    ? 'Select phase first'
+                    ? 'Select class code first'
                     : sessionOptions.length
                       ? 'Select session'
-                      : 'No sessions for this phase'}
+                      : 'No upcoming sessions for this phase'}
                 </option>
                 {sessionOptions.map((opt) => (
                   <option key={opt.key} value={opt.key}>
@@ -921,7 +1363,11 @@ export default function TeacherLessonPlans() {
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_adjustments" />
 
-            <h3 className="col-span-full mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]">
+            <h3
+              ref={reflectionSectionRef}
+              id="teacher-reflection-section"
+              className="col-span-full mb-1 mt-3 scroll-mt-4 border-t-2 border-[#111111] pt-2.5 text-lg font-bold text-[#111111]"
+            >
               7. Teacher&apos;s Reflection
             </h3>
 
@@ -942,7 +1388,12 @@ export default function TeacherLessonPlans() {
                   rows={3}
                   value={formData[field]}
                   onChange={(e) => handleInputChange(field, e.target.value)}
-                  className={`${fieldControlCls} min-h-[60px] resize-y leading-normal`}
+                  onFocus={() => setReflectionBlink(false)}
+                  className={`${fieldControlCls} min-h-[60px] resize-y leading-normal ${
+                    canEditReflections && reflectionBlink
+                      ? 'lesson-plan-reflection-blink'
+                      : ''
+                  }`}
                 />
               </label>
             ))}
@@ -982,7 +1433,7 @@ export default function TeacherLessonPlans() {
           {!canEdit && !canEditReflections && selectedPlan?.status !== 'completed' && (
             <div className="mt-2.5 rounded-lg border border-[#ffddc9] bg-[#fff8f3] p-2.5 text-[13px] text-[#7a4b00]">
               {selectedPlan?.status === 'awaiting_reflection'
-                ? 'Lesson body is locked after verification. Teacher reflection unlocks only on the lesson date.'
+                ? 'Lesson body is locked after verification. Complete Teacher Reflection below to mark this plan Completed.'
                 : 'This lesson plan is submitted and can no longer be edited until a revision is requested.'}
             </div>
           )}
@@ -1031,95 +1482,20 @@ export default function TeacherLessonPlans() {
               </>
             )}
           </div>
-        </div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
 
-        {/* Sidebar Card */}
-        <div
-          className="rounded-[14px] border border-[#f3e5dc] bg-white p-6 shadow-[0_8px_24px_rgba(0,0,0,0.05)]"
-          style={sheetFont}
-        >
-          <div className="mb-5 flex flex-col items-start justify-between gap-3.5 sm:flex-row">
-            <div>
-              <h2 className="mb-2 text-2xl text-[#333333]">My Submissions</h2>
-              <p className="m-0 text-[#666666]">
-                Track review status and revise when requested.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleNewPlan}
-              className={`${btnPrimaryCls} shrink-0`}
-            >
-              Create Lesson Plan
-            </button>
-          </div>
-
-          <div className="mb-[18px] flex flex-col items-stretch justify-between gap-3 rounded-xl border border-[#ffeadc] bg-[#fff8f3] px-3.5 py-3 sm:flex-row sm:items-center">
-            <span className="text-[13px] font-semibold text-[#555555]">Filter submissions</span>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="min-w-[170px] rounded-lg border border-[#ffddc9] bg-white py-2 pl-2.5 pr-8 text-[13px] text-[#333333] focus:border-[#ff9f40] focus:outline-none focus:shadow-[0_0_0_3px_rgba(255,221,201,0.35)] sm:w-auto w-full"
-            >
-              <option value="all">All Statuses</option>
-              <option value="draft">Draft</option>
-              <option value="submitted">Submitted</option>
-              <option value="awaiting_reflection">Awaiting Reflection</option>
-              <option value="revision_requested">Revision Requested</option>
-              <option value="completed">Completed</option>
-            </select>
-          </div>
-
-          {loading ? (
-            <div className="py-6 text-center text-[#666666]">Loading lesson plans...</div>
-          ) : lessonPlans.length === 0 ? (
-            <div className="py-6 text-center text-[#666666]">No lesson plans submitted yet.</div>
-          ) : filteredPlans.length === 0 ? (
-            <div className="py-6 text-center text-[#666666]">
-              No lesson plans found for this status.
-            </div>
-          ) : (
-            <div className="flex max-h-[70vh] flex-col gap-3 overflow-y-auto">
-              {filteredPlans.map((plan) => {
-                const active = selectedPlan?.lesson_plan_id === plan.lesson_plan_id;
-                const badge = statusBadgeStyle(plan.status);
-                return (
-                  <button
-                    key={plan.lesson_plan_id}
-                    type="button"
-                    onClick={() => handleSelectPlan(plan)}
-                    className={`rounded-[10px] border p-3.5 text-left ${
-                      active
-                        ? 'border-[#ffddc9] bg-[#fff0e6]'
-                        : 'border-[#eeeeee] bg-white hover:border-[#ffddc9]'
-                    }`}
-                  >
-                    <h4 className="mb-2 text-[15px] text-[#333333]">
-                      {plan.topic || 'Untitled topic'}
-                    </h4>
-                    <p className="mb-2.5 text-[13px] text-[#666666]">
-                      {plan.grade_level || 'No grade'} | {plan.class_label || plan.subject || 'No class'} |{' '}
-                      {plan.lesson_date ? formatLessonPlanDateDisplay(plan.lesson_date) : 'No date'}
-                    </p>
-                    <span
-                      className="inline-block rounded-full px-2.5 py-1.5 text-xs font-bold capitalize"
-                      style={badge}
-                    >
-                      {formatStatus(plan.status)}
-                    </span>
-                    {plan.status === 'revision_requested' && (
-                      <div className="mt-2.5 text-[12px] text-[#7a4b00]">
-                        Open the plan to view detailed revision feedback.
-                      </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      <LessonPlanViewModal
+        open={Boolean(viewPlan)}
+        plan={viewPlan}
+        onClose={() => setViewPlan(null)}
+        onEdit={(plan) => handleSelectPlan(plan)}
+      />
     </div>
   );
 }

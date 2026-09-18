@@ -62,6 +62,53 @@ const BOARD_ANNOUNCEMENT_ONLY_SQL = `
   )
 `;
 
+/** Finance / Superfinance: hide End of Shift system alerts. */
+const SUPPRESS_END_OF_SHIFT_NOTIFICATIONS_SQL = `
+  (
+    (
+      LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
+      AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
+    )
+    OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
+    OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
+  )
+`;
+
+/**
+ * Teachers: hide ops/finance system alerts (cash deposit, end of shift, payment returned).
+ * They should only receive teaching-related notifications (e.g. lesson plans, board posts).
+ */
+const SUPPRESS_TEACHER_OPS_NOTIFICATIONS_SQL = `
+  (
+    (
+      LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
+      AND (
+        COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
+        OR COALESCE(a.navigation_query, '') ILIKE '%notificationTab=cashDeposit%'
+      )
+    )
+    OR (
+      LOWER(COALESCE(a.navigation_key, '')) = 'payment-logs'
+      AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=return%'
+    )
+    OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
+    OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
+    OR LOWER(COALESCE(a.title, '')) LIKE '%cash deposit%'
+    OR LOWER(COALESCE(a.title, '')) LIKE '%payment returned%'
+  )
+`;
+
+function buildNotificationSuppressSql(userType) {
+  const type = String(userType || '').trim().toLowerCase();
+  if (type === 'teacher') {
+    return ` AND NOT ${SUPPRESS_TEACHER_OPS_NOTIFICATIONS_SQL}`;
+  }
+  if (type === 'finance' || type === 'superfinance') {
+    return ` AND NOT ${SUPPRESS_END_OF_SHIFT_NOTIFICATIONS_SQL}`;
+  }
+  return '';
+}
+
 /**
  * Map user types to recipient groups
  * Converts singular user types (Student, Teacher) to plural recipient groups (Students, Teachers)
@@ -306,12 +353,10 @@ router.get(
       const userType = req.user.userType || req.user.user_type;
       const userBranchId = req.user.branchId || req.user.branch_id;
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-      const suppressEndOfShiftNotifications = ['finance', 'superfinance'].includes(
-        String(userType || '').trim().toLowerCase()
-      );
 
       // Map user types to recipient groups (e.g., 'Student' -> 'Students', 'Teacher' -> 'Teachers')
       const recipientGroup = mapUserTypeToRecipientGroup(userType, userBranchId);
+      const suppressSql = buildNotificationSuppressSql(userType);
 
       // Build query to get active announcements for this user
       // Branch logic: Show announcements if:
@@ -369,17 +414,7 @@ router.get(
           AND (
             a.end_date IS NULL OR a.end_date::date >= $4::date
           )
-          AND NOT (
-            $5::boolean = true
-            AND (
-              (
-                LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
-                AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
-              )
-              OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
-              OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
-            )
-          )
+          ${suppressSql}
       `;
 
       if (userType === 'Student') {
@@ -405,7 +440,7 @@ router.get(
         LIMIT 20
       `;
 
-      const params = [userId, recipientGroup, userBranchId, today, suppressEndOfShiftNotifications];
+      const params = [userId, recipientGroup, userBranchId, today];
       
       const result = await query(sql, params);
 
@@ -440,9 +475,7 @@ router.post(
       const userBranchId = req.user.branchId || req.user.branch_id;
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
       const recipientGroup = mapUserTypeToRecipientGroup(userType, userBranchId);
-      const suppressEndOfShiftNotifications = ['finance', 'superfinance'].includes(
-        String(userType || '').trim().toLowerCase()
-      );
+      const suppressSql = buildNotificationSuppressSql(userType);
 
       let readAllSql = `
          WITH visible_announcements AS (
@@ -468,17 +501,7 @@ router.post(
              AND (
                a.end_date IS NULL OR a.end_date::date >= $4::date
              )
-             AND NOT (
-               $5::boolean = true
-               AND (
-                 (
-                   LOWER(COALESCE(a.navigation_key, '')) = 'daily-summary-sales'
-                   AND COALESCE(a.navigation_query, '') ILIKE '%notificationTab=endOfShift%'
-                 )
-                 OR LOWER(COALESCE(a.title, '')) LIKE '%end of shift%'
-                 OR LOWER(COALESCE(a.title, '')) LIKE '%end of day%'
-               )
-             )
+             ${suppressSql}
       `;
       if (userType === 'Student') {
         readAllSql += ` AND (a.target_user_id = $1 OR ${sqlAnnouncementMatchesStudentAudience(1)})`;
@@ -502,7 +525,6 @@ router.post(
         recipientGroup,
         userBranchId,
         today,
-        suppressEndOfShiftNotifications,
       ]);
 
       res.json({

@@ -18,19 +18,26 @@ Single unified dashboard for teachers (`TeacherDashboardView`). No separate dail
 
 ## Lesson Plans (`/teacher/lesson-plans`)
 
-UI styling matches the QA `TeacherLessonPlans.jsx` sheet (Poppins, header grid, peach primary buttons, submissions sidebar).
+Page layout matches **My Classes**: page title, tabs, search + filters card, then a white shadowed table.
 
-Form fields follow the **LCA Lesson Plan PDF**: phase/session, early learning goals, objectives 1–3, assessment method/criteria, materials, general lesson overview (preliminaries / lesson proper / conclusion), class-specific adjustments (Class 1–3). Grade level + subject remain for program browsing.
+### Tabs
 
-- Branch-based DepEd letterhead (Region / Schools Division Office from branch; DepEd seal `/deped-seal.png`); School ID always `411093`
-- After approval, teachers see read-only **Head Teacher's Review and Feedback** (Overall Assessment, Specific Feedback, Next Steps)
-- Save draft / submit for verification (Teacher's Reflection locked at submit)
-- Reflections: Successes, Amazing Moments, Challenges, Improvements — unlock **only on the lesson date** after verifier approve (`awaiting_reflection` → `completed`)
-- When status is **`revision_requested`**, structured revision notes appear **under each flagged field**
-- Prepared by = logged-in teacher
-- Superadmin → Settings → Lesson Plans selects **Admin** verifiers only; all Superadmins can already review
+| Tab | Content |
+|-----|---------|
+| **My Plans** | Submitted / draft lesson plans (`LessonPlanSubmissionsTable`) |
+| **Missed** | Overdue scheduled sessions without a submitted plan (`LessonPlanMissedTable`); **Track from** date limits history; **Create** opens the form prefilled for that session |
 
-**API:** `/api/sms/lesson-plans`
+- Table headers always show (even with no rows)
+- Filters: search, **Lesson Date** (native date input, off by default), **Grade Level**, **Status** (My Plans only)
+- Columns (My Plans): Lesson Date, Topic, Class Code, Phase and Session, Grade Level, Status, Submitted At (Asia/Manila date + time on two lines; set on first submit only), Action (eye)
+- **Create Lesson Plan** → form modal
+- **Eye icon** → read-only document modal
+- **Topic click** → edit form modal (draft / revision)
+- **Awaiting Reflection** → eye icon / topic opens the form scrolled to Teacher Reflection; reflection fields show a red blinking border; **Save Reflection & Mark Completed** sets status to `completed`
+
+**API:** `/api/sms/lesson-plans` (including `GET /lesson-plans/missed`)
+
+**Modules:** `lessonPlanSubmissionsTable`, `lessonPlanMissedTable`, `lessonPlanViewModal`, `lessonPlanDateFilter`, `lessonPlanClassCodeSelect`, `lessonPlanPhaseSession`, `lessonPlanHeader`
 
 **APIs:**
 

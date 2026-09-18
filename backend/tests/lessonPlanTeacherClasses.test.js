@@ -8,6 +8,9 @@ import {
   deriveBranchGradeLevelsFromClasses,
   fetchLessonPlanMetaClasses,
   isTeacherAssignedToClass,
+  LESSON_PLAN_MISSED_SINCE_DEFAULT,
+  mapMissedLessonPlanRow,
+  resolveLessonPlanMissedSince,
 } from '../lib/lessonPlans/index.js';
 
 async function testFetchLessonPlanMetaClassesTeacherFilter() {
@@ -30,6 +33,7 @@ async function testFetchLessonPlanMetaClassesTeacherFilter() {
   const all = await fetchLessonPlanMetaClasses(db, { branchId: 3 });
   assert.equal(all.length, 1);
   assert.equal(calls[0].params.length, 1);
+  assert.match(calls[0].sql, /class_code/i);
 
   calls.length = 0;
   const teacherOnly = await fetchLessonPlanMetaClasses(db, {
@@ -55,10 +59,41 @@ function testGradeLevelsFromDesignatedClasses() {
   assert.deepEqual(levels, ['Pre-Kindergarten', 'Grade 2']);
 }
 
+function testMapMissedLessonPlanRow() {
+  const mapped = mapMissedLessonPlanRow({
+    classsession_id: 12,
+    class_id: 94,
+    phase_number: 1,
+    phase_session_number: 6,
+    class_code: 'ABC-1',
+    scheduled_date: '2026-09-10',
+    days_overdue: 7,
+    topic: 'Phonics',
+    teacher_user_id: 5,
+    branch_id: 2,
+    grade_level: 'Kindergarten',
+    class_name: 'Busy Bees',
+    teacher_name: 'Jane Teacher',
+    branch_name: 'Main',
+  });
+  assert.equal(mapped.status, 'missed');
+  assert.equal(mapped.phase, 'Phase 1');
+  assert.equal(mapped.session, 'Session 6 — Phonics');
+  assert.equal(mapped.days_overdue, 7);
+  assert.equal(mapped.miss_key, '12:5:94:1:6');
+}
+
+function testResolveMissedSince() {
+  assert.equal(resolveLessonPlanMissedSince(null), LESSON_PLAN_MISSED_SINCE_DEFAULT);
+  assert.equal(resolveLessonPlanMissedSince('2026-09-20'), '2026-09-20');
+}
+
 async function run() {
   await testFetchLessonPlanMetaClassesTeacherFilter();
   await testIsTeacherAssignedToClass();
   testGradeLevelsFromDesignatedClasses();
+  testMapMissedLessonPlanRow();
+  testResolveMissedSince();
   console.log('lessonPlanTeacherClasses.test.js: all tests passed');
 }
 

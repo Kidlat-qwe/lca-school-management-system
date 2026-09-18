@@ -11,16 +11,17 @@ import {
   deriveBranchGradeLevelsFromClasses,
   enrichLessonPlanPayloadWithClass,
   fetchLessonPlanMetaClasses,
-  isLessonDateToday,
   lessonPlanWriteColumns,
   mapLessonPlanRow,
   normalizeHeadTeacherReviewBody,
   normalizeLessonPlanBody,
   notifyTeacherOfLessonPlanReview,
   countPendingLessonPlanSubmissions,
+  fetchMissedLessonPlans,
   serializeRevisionFeedback,
   summarizeRevisionFeedbackForNotification,
   validateLessonPlanPayload,
+  validateHeadTeacherReviewPayload,
   validateReflectionPayload,
   validateRevisionFeedbackPayload,
   isConfiguredLessonPlanAdminVerifier,
@@ -48,7 +49,39 @@ const SELECT_PLAN = `
     v.full_name AS verified_by_name,
     lc.class_name AS linked_class_name,
     lc.level_tag AS linked_level_tag,
-    lcp.program_name AS linked_program_name
+    lcp.program_name AS linked_program_name,
+    (
+      COALESCE(
+        (
+          SELECT cs.class_code
+          FROM classsessionstbl cs
+          WHERE cs.class_id = lp.class_id
+            AND NULLIF(TRIM(cs.class_code), '') IS NOT NULL
+            AND NULLIF(substring(lp.phase from '[0-9]+'), '') IS NOT NULL
+            AND NULLIF(
+              (regexp_match(lp.session_label, '[Ss]ession[[:space:]]*([0-9]+)'))[1],
+              ''
+            ) IS NOT NULL
+            AND cs.phase_number = NULLIF(substring(lp.phase from '[0-9]+'), '')::int
+            AND cs.phase_session_number =
+              NULLIF(
+                (regexp_match(lp.session_label, '[Ss]ession[[:space:]]*([0-9]+)'))[1],
+                ''
+              )::int
+          ORDER BY cs.classsession_id ASC
+          LIMIT 1
+        ),
+        NULLIF(TRIM(lp.subject), ''),
+        (
+          SELECT cs.class_code
+          FROM classsessionstbl cs
+          WHERE cs.class_id = lp.class_id
+            AND NULLIF(TRIM(cs.class_code), '') IS NOT NULL
+          ORDER BY cs.scheduled_date ASC NULLS LAST, cs.classsession_id ASC
+          LIMIT 1
+        )
+      )
+    ) AS linked_class_code
   FROM lessonplanstbl lp
   LEFT JOIN userstbl u ON u.user_id = lp.teacher_user_id
   LEFT JOIN branchestbl b ON b.branch_id = lp.branch_id
@@ -342,6 +375,7 @@ router.get(
   requireRole('Teacher', 'Superadmin', 'Admin'),
   [
     queryValidator('status').optional().isString(),
+    queryValidator('branch_id').optional().isInt({ min: 1 }),
     queryValidator('page').optional().isInt({ min: 1 }),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }),
     handleValidationErrors,
@@ -352,6 +386,7 @@ router.get(
       const limit = parseInt(req.query.limit, 10) || 50;
       const offset = (page - 1) * limit;
       const status = req.query.status && req.query.status !== 'all' ? req.query.status : null;
+      const branchFilterId = req.query.branch_id ? parseInt(req.query.branch_id, 10) : null;
       const isTeacher = req.user.userType === 'Teacher';
       const userId = req.user.userId || req.user.user_id;
 
@@ -379,6 +414,13 @@ router.get(
         where += ` AND lp.teacher_user_id = $${params.length}`;
       } else if (verifierCtx?.userType === 'Admin' && verifierCtx.branchId != null) {
         params.push(verifierCtx.branchId);
+        where += ` AND lp.branch_id = $${params.length}`;
+      } else if (
+        verifierCtx?.userType === 'Superadmin' &&
+        Number.isFinite(branchFilterId) &&
+        branchFilterId > 0
+      ) {
+        params.push(branchFilterId);
         where += ` AND lp.branch_id = $${params.length}`;
       }
       if (status) {
@@ -410,6 +452,71 @@ router.get(
           total: countResult.rows[0]?.total || 0,
         },
       });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/lesson-plans/missed
+ * Overdue scheduled sessions with no submitted lesson plan (draft does not count).
+ * Teachers: own missed only. Verifiers: branch-scoped (Admin) or optional branch_id (Superadmin).
+ * Query `since=YYYY-MM-DD` limits the window (default: LESSON_PLAN_MISSED_SINCE_DEFAULT in code).
+ */
+router.get(
+  '/missed',
+  requireRole('Teacher', 'Superadmin', 'Admin'),
+  [
+    queryValidator('branch_id').optional().isInt({ min: 1 }),
+    queryValidator('since')
+      .optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/)
+      .withMessage('since must be YYYY-MM-DD'),
+    queryValidator('limit').optional().isInt({ min: 1, max: 1000 }),
+    handleValidationErrors,
+  ],
+  async (req, res, next) => {
+    try {
+      const limit = parseInt(req.query.limit, 10) || 500;
+      const branchFilterId = req.query.branch_id ? parseInt(req.query.branch_id, 10) : null;
+      const since = req.query.since ? String(req.query.since).slice(0, 10) : null;
+      const isTeacher = req.user.userType === 'Teacher';
+      const userId = req.user.userId || req.user.user_id;
+
+      if (isTeacher) {
+        const result = await fetchMissedLessonPlans(query, {
+          teacherUserId: userId,
+          since,
+          limit,
+        });
+        return res.json({ success: true, data: result.rows, meta: result.meta });
+      }
+
+      const verifierCtx = await getVerifierContext(req);
+      if (!verifierCtx.isVerifier) {
+        return res.status(403).json({
+          success: false,
+          message:
+            'Only Superadmins and configured Admin lesson plan verifiers can view missed lesson plans',
+        });
+      }
+      if (verifierCtx.userType === 'Admin' && verifierCtx.branchId == null) {
+        return res.status(403).json({
+          success: false,
+          message: 'Admin verifiers must have a designated branch',
+        });
+      }
+
+      let branchId = null;
+      if (verifierCtx.userType === 'Admin') {
+        branchId = verifierCtx.branchId;
+      } else if (Number.isFinite(branchFilterId) && branchFilterId > 0) {
+        branchId = branchFilterId;
+      }
+
+      const result = await fetchMissedLessonPlans(query, { branchId, since, limit });
+      return res.json({ success: true, data: result.rows, meta: result.meta });
     } catch (error) {
       next(error);
     }
@@ -575,8 +682,8 @@ router.post(
 /**
  * PUT /api/sms/lesson-plans/:id
  * - draft / revision_requested: full edit (reflections forced empty)
- * - awaiting_reflection: Teacher's Reflection only, and only on the lesson date (Manila);
- *   saving reflections marks the plan completed (no second verifier approval)
+ * - awaiting_reflection: Teacher's Reflection fields only; saving complete reflections
+ *   marks the plan completed (no second verifier approval; no lesson-date gate)
  */
 router.put(
   '/:id',
@@ -596,16 +703,8 @@ router.put(
 
       const currentStatus = existing.rows[0].status;
 
-      // --- Complete reflection after verifier approval (lesson date only) ---
+      // --- Complete reflection after verifier approval ---
       if (REFLECTION_EDITABLE_STATUSES.has(currentStatus)) {
-        if (!isLessonDateToday(existing.rows[0].lesson_date)) {
-          return res.status(400).json({
-            success: false,
-            message:
-              'Teacher reflection can only be edited on the lesson date. It is locked before and after that day.',
-          });
-        }
-
         const reflectionPayload = normalizeLessonPlanBody(req.body);
         const reflectionErrors = validateReflectionPayload(reflectionPayload);
         if (reflectionErrors.length) {
@@ -643,7 +742,7 @@ router.put(
         return res.status(400).json({
           success: false,
           message:
-            'Only draft or revision-requested plans can be edited (or awaiting-reflection plans on the lesson date for reflection)',
+            'Only draft or revision-requested plans can be edited (or awaiting-reflection plans for teacher reflection)',
         });
       }
 
@@ -792,12 +891,17 @@ router.post(
         return res.status(400).json({ success: false, message: submitErrors.join('; ') });
       }
 
-      // Clear any reflection content at submit time (locked until lesson date after approval).
+      // Clear any reflection content at submit time (locked until after verifier approval).
+      // Stamp submitted_at only on first submit (draft → submitted). Resubmit after revision keeps the original timestamp.
+      const previousStatus = existing.rows[0].status;
+      const stampSubmittedAt =
+        previousStatus === 'draft' || existing.rows[0].submitted_at == null;
+
       await query(
         `
         UPDATE lessonplanstbl SET
           status = 'submitted',
-          submitted_at = NOW(),
+          submitted_at = ${stampSubmittedAt ? 'NOW()' : 'submitted_at'},
           revision_reason = NULL,
           reflection_went_well = '',
           reflection_amazing_moments = '',
@@ -860,6 +964,13 @@ router.post(
       }
 
       const review = normalizeHeadTeacherReviewBody(req.body);
+      const reviewErrors = validateHeadTeacherReviewPayload(review);
+      if (reviewErrors.length) {
+        return res.status(400).json({
+          success: false,
+          message: reviewErrors.join('; '),
+        });
+      }
 
       await query(
         `

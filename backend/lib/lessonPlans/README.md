@@ -7,6 +7,22 @@ Helpers for teacher lesson plan CRUD and Superadmin/Admin verification.
 `draft` → `submitted` → `awaiting_reflection` → `completed`  
 `submitted` → `revision_requested` → (edit) → `submitted`
 
+### Missed lesson plans
+
+`fetchMissedLessonPlans` / `mapMissedLessonPlanRow` compare overdue `classsessionstbl` rows to submitted plans.
+
+- **Window**: `since <= scheduled_date <` Asia/Manila today
+- **Default `since`**: `LESSON_PLAN_MISSED_SINCE_DEFAULT` in `lib/lessonPlans` (**2026-09-19**); UI **Track from** can override per request
+- **Draft**: does not count as submitted
+- **Match**: teacher + `class_id` + phase number + session number
+- **Clears miss**: `submitted`, `revision_requested`, `awaiting_reflection`, `completed`
+
+### `submitted_at`
+
+- **Draft create/save**: `submitted_at` stays `NULL` (not stamped).
+- **First submit** (`draft` → `submitted`, or create with status `submitted`): set to `NOW()`.
+- **Resubmit after revision** (`revision_requested` → `submitted`): keep the original `submitted_at` (do not overwrite).
+
 ### Teacher's Reflection
 
 LCA labels: **Successes**, **Amazing Moments**, **Challenges**, **Improvements**  
@@ -14,16 +30,16 @@ LCA labels: **Successes**, **Amazing Moments**, **Challenges**, **Improvements**
 
 - Locked while drafting / submitting / pending verification.
 - After verifier **approves**, status becomes **`awaiting_reflection`** (label: Awaiting Reflection).
-- Reflection fields unlock **only on the lesson date** (Asia/Manila calendar day). Locked again the day after.
-- Saving reflections marks the plan **`completed`** — no second verifier approval.
+- Reflection fields unlock while status is **`awaiting_reflection`** (all four fields editable).
+- Saving complete reflections marks the plan **`completed`** — no second verifier approval.
 
 ### Form fields
 
-Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class** options come from the teacher's designated classes only (`classestbl.teacher_id` or `classteacherstbl`). Superadmin meta still lists all branch classes. Each plan is linked to **one CMS class** via `class_id` (migration `148_add_class_id_to_lessonplanstbl.sql`).
+Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class code** options come from the teacher's designated classes only (`classestbl.teacher_id` or `classteacherstbl`). Class Code is the **session** `class_code` for the selected Phase/Session (View Class Details). On save, that code is stored in `subject` and Phase/Session are stored as display strings (`Phase N`, `Session N`). List/API resolve Class Code from phase+session match, then saved `subject`, then first session code fallback.
 
 ### Head Teacher review
 
-Verifier-only on approve: `head_teacher_overall_assessment`, `head_teacher_specific_feedback`, `head_teacher_next_steps`.
+Verifier-only on approve (all three required): `head_teacher_overall_assessment`, `head_teacher_specific_feedback`, `head_teacher_next_steps`.
 
 ### Structured revision feedback
 

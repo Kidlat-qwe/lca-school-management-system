@@ -3,22 +3,40 @@ import { createPortal } from 'react-dom';
 import { Navigate } from 'react-router-dom';
 import { apiRequest } from '../../../config/api';
 import { useAuth } from '../../../contexts/AuthContext';
+import { useGlobalBranchFilter } from '../../../contexts/GlobalBranchFilterContext';
 import { appAlert, appConfirm } from '../../../utils/appAlert';
 import { LessonPlanHeader } from '../../../components/lessonPlanHeader';
+import LessonPlanSubmissionsTable from '../../../components/lessonPlanSubmissionsTable';
+import LessonPlanMissedTable from '../../../components/lessonPlanMissedTable';
+import LessonPlanDateFilter from '../../../components/lessonPlanDateFilter';
+import {
+  formatLessonPlanDateDisplay,
+} from '../../../utils/lessonPlanPhaseSession';
 
-const REVIEW_STATUSES = ['submitted', 'revision_requested', 'awaiting_reflection', 'completed'];
+const PENDING_STATUSES = ['submitted'];
+const REVISION_STATUSES = ['revision_requested'];
+const VERIFIED_STATUSES = ['awaiting_reflection', 'completed'];
+const REVIEW_STATUSES = [...PENDING_STATUSES, ...REVISION_STATUSES, ...VERIFIED_STATUSES];
 
-const GRADE_LEVEL_OPTIONS = [
-  'Nursery',
-  'Pre Kindergarten',
-  'Kindergarten',
-  'Grade 1',
-  'Grade 2',
-  'Grade 3',
-  'Grade 4',
-  'Grade 5',
-  'Grade 6',
-];
+const TAB_STATUSES = {
+  pending: PENDING_STATUSES,
+  revision: REVISION_STATUSES,
+  verified: VERIFIED_STATUSES,
+};
+
+const TAB_EMPTY_MESSAGES = {
+  pending: 'No pending lesson plans to review.',
+  revision: 'No lesson plans awaiting teacher revision.',
+  verified: 'No verified lesson plans yet.',
+  missed: 'No missed lesson plans. All overdue sessions have a submitted plan.',
+};
+
+const TAB_LABELS = {
+  pending: 'pending',
+  revision: 'revision',
+  verified: 'verified',
+  missed: 'missed',
+};
 
 /** LCA form sections shown in PDF order (flaggable when in revision mode). */
 const META_SECTIONS = [
@@ -79,13 +97,13 @@ const HEAD_TEACHER_REVIEW_FIELDS = [
 const createRevisionItem = (partial = {}) => ({
   id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   field: partial.field || '',
-  highlight: partial.highlight || '',
   note: partial.note || '',
 });
 
 const formatStatus = (status) => {
   if (status === 'awaiting_reflection') return 'Awaiting Reflection';
   if (status === 'completed') return 'Completed';
+  if (status === 'revision_requested') return 'Revision requested';
   return (status || '').replace(/_/g, ' ');
 };
 
@@ -96,114 +114,11 @@ const statusBadgeClass = (status) => {
   return 'bg-amber-100 text-amber-800';
 };
 
-const sortPrograms = (a, b) => {
-  const ai = GRADE_LEVEL_OPTIONS.indexOf(a);
-  const bi = GRADE_LEVEL_OPTIONS.indexOf(b);
-  if (ai === -1 && bi === -1) return a.localeCompare(b);
-  if (ai === -1) return 1;
-  if (bi === -1) return -1;
-  return ai - bi;
-};
-
-function FolderIcon({ className = 'h-14 w-14' }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 64 52"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      <path
-        d="M2 12.5C2 9.46 4.46 7 7.5 7H22.2c1.1 0 2.15.48 2.87 1.32L28.2 12.5H56.5C59.54 12.5 62 14.96 62 18v24.5c0 3.04-2.46 5.5-5.5 5.5H7.5C4.46 48 2 45.54 2 42.5V12.5Z"
-        fill="#F6C453"
-      />
-      <path
-        d="M2 18.5h60V42.5c0 3.04-2.46 5.5-5.5 5.5H7.5C4.46 48 2 45.54 2 42.5V18.5Z"
-        fill="#E8A317"
-      />
-      <path
-        d="M2 12.5C2 9.46 4.46 7 7.5 7H22.2c1.1 0 2.15.48 2.87 1.32L28.2 12.5H7.5C4.46 12.5 2 14.96 2 18V12.5Z"
-        fill="#FFD978"
-      />
-    </svg>
-  );
-}
-
-function DocumentIcon({ className = 'h-10 w-10' }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 40 48"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
-      <path
-        d="M6 2h18l10 10v30a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Z"
-        fill="#FFF8F0"
-        stroke="#D4A574"
-        strokeWidth="1.5"
-      />
-      <path d="M24 2v8a2 2 0 0 0 2 2h8" fill="#FFE8CC" stroke="#D4A574" strokeWidth="1.5" />
-      <path d="M10 22h20M10 28h20M10 34h14" stroke="#C4A484" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function FolderCard({ title, subtitle, badge, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex flex-col items-center rounded-xl border border-[#e8d4b8] bg-gradient-to-b from-[#fffaf3] to-[#fff3e0] p-4 text-center shadow-sm transition hover:-translate-y-0.5 hover:border-[#e0b96a] hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 sm:p-5"
-    >
-      <div className="relative mb-3">
-        <FolderIcon className="h-14 w-14 drop-shadow-sm transition group-hover:scale-105 sm:h-16 sm:w-16" />
-        {badge != null && badge > 0 ? (
-          <span className="absolute -right-1 -top-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-bold text-white">
-            {badge > 99 ? '99+' : badge}
-          </span>
-        ) : null}
-      </div>
-      <h3 className="line-clamp-2 w-full text-sm font-semibold text-gray-900 sm:text-base" title={title}>
-        {title}
-      </h3>
-      {subtitle ? (
-        <p className="mt-1 line-clamp-2 w-full text-xs text-gray-500 sm:text-sm">{subtitle}</p>
-      ) : null}
-    </button>
-  );
-}
-
-function PlanFileCard({ plan, onClick }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex items-start gap-3 rounded-xl border border-[#e8d4b8] bg-white p-3 text-left shadow-sm transition hover:border-[#e0b96a] hover:bg-[#fffaf3] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 sm:p-4"
-    >
-      <DocumentIcon className="mt-0.5 h-9 w-9 shrink-0 sm:h-10 sm:w-10" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <h3 className="truncate text-sm font-semibold text-gray-900 sm:text-base" title={plan.topic}>
-            {plan.topic || 'Untitled topic'}
-          </h3>
-          <span
-            className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${statusBadgeClass(
-              plan.status
-            )}`}
-          >
-            {formatStatus(plan.status)}
-          </span>
-        </div>
-        <p className="mt-1 truncate text-xs text-gray-500 sm:text-sm">
-          {plan.class_label || plan.subject || 'No class'}
-          {plan.lesson_date ? ` · ${plan.lesson_date}` : ''}
-        </p>
-      </div>
-    </button>
-  );
+function normalizeGradeKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, ' ');
 }
 
 function ReviewSection({
@@ -213,7 +128,6 @@ function ReviewSection({
   canFlag,
   fieldChecked,
   onToggleField,
-  onHighlightSelection,
 }) {
   const controlCls =
     'inline-flex items-center gap-1.5 rounded-full border border-[#ffddc9] bg-[#fff0e6] px-2.5 py-1 text-[11px] font-semibold text-[#8a4b16] sm:text-xs';
@@ -223,29 +137,19 @@ function ReviewSection({
       <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <h4 className="text-[16px] font-medium text-[#111111]">{title}</h4>
         {canFlag ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <label className={`${controlCls} cursor-pointer select-none`}>
-              <input
-                type="checkbox"
-                checked={fieldChecked}
-                onChange={(e) => onToggleField(fieldKey, title, e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-orange-300 text-primary-600 focus:ring-primary-500"
-              />
-              Field needs revision
-            </label>
-            <button
-              type="button"
-              onClick={() => onHighlightSelection(fieldKey, title)}
-              className={`${controlCls} hover:bg-[#ffe8d6]`}
-              title="Select text in this field first, then click"
-            >
-              Highlight selected text
-            </button>
-          </div>
+          <label className={`${controlCls} cursor-pointer select-none`}>
+            <input
+              type="checkbox"
+              checked={fieldChecked}
+              onChange={(e) => onToggleField(fieldKey, title, e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-orange-300 text-primary-600 focus:ring-primary-500"
+            />
+            Field needs revision
+          </label>
         ) : null}
       </div>
       <div className="rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 shadow-sm">
-        <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111] selection:bg-amber-200">
+        <p className="min-h-[2.5rem] whitespace-pre-wrap text-[15px] leading-relaxed text-[#111111]">
           {content || '—'}
         </p>
       </div>
@@ -255,20 +159,26 @@ function ReviewSection({
 
 /**
  * Lesson Plan review for Superadmins (always) and configured Admin verifiers.
- * Folder navigation: Program (grade level) → Teacher → Lesson plans.
- * Admin verifiers only see plans for their designated branch (enforced by API).
+ * Table UI with Pending / Revision / Verified tabs (same column layout as teacher Lesson Plans).
+ * Superadmin: header branch filter via GlobalBranchFilter. Admin: designated branch only (API-enforced).
  */
 export default function SuperadminLessonPlans() {
   const { userInfo } = useAuth();
+  const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const userType = userInfo?.user_type || userInfo?.userType;
+  const isSuperadmin = userType === 'Superadmin';
   const homePath = userType === 'Admin' ? '/admin' : '/superadmin';
   const [accessChecked, setAccessChecked] = useState(false);
   const [isVerifier, setIsVerifier] = useState(false);
   const [lessonPlans, setLessonPlans] = useState([]);
-  const [selectedProgram, setSelectedProgram] = useState(null);
-  const [selectedTeacherKey, setSelectedTeacherKey] = useState(null);
+  const [missedPlans, setMissedPlans] = useState([]);
+  const [missedSince, setMissedSince] = useState('');
+  const [missedDefaultSince, setMissedDefaultSince] = useState('');
+  const [reviewTab, setReviewTab] = useState('pending');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [gradeFilter, setGradeFilter] = useState('all');
   const [selectedPlan, setSelectedPlan] = useState(null);
-  const [statusFilter, setStatusFilter] = useState('all');
   const [showRevisionModal, setShowRevisionModal] = useState(false);
   const [revisionMode, setRevisionMode] = useState(false);
   const [revisionItems, setRevisionItems] = useState([]);
@@ -279,77 +189,61 @@ export default function SuperadminLessonPlans() {
   const [headTeacherSpecificFeedback, setHeadTeacherSpecificFeedback] = useState('');
   const [headTeacherNextSteps, setHeadTeacherNextSteps] = useState('');
   const [loading, setLoading] = useState(true);
+  const [missedLoading, setMissedLoading] = useState(true);
   const [reviewing, setReviewing] = useState(false);
   const [error, setError] = useState('');
-
-  const programFolders = useMemo(() => {
-    const map = new Map();
-    for (const plan of lessonPlans) {
-      const program = plan.grade_level || 'Unassigned';
-      if (!map.has(program)) {
-        map.set(program, { program, plans: [], pending: 0 });
-      }
-      const entry = map.get(program);
-      entry.plans.push(plan);
-      if (plan.status === 'submitted') entry.pending += 1;
-    }
-    return [...map.values()].sort((a, b) => sortPrograms(a.program, b.program));
-  }, [lessonPlans]);
-
-  const teacherFolders = useMemo(() => {
-    if (!selectedProgram) return [];
-    const map = new Map();
-    for (const plan of lessonPlans) {
-      if ((plan.grade_level || 'Unassigned') !== selectedProgram) continue;
-      const teacherId = plan.teacher_user_id ?? plan.teacher_name ?? 'unknown';
-      const key = String(teacherId);
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          teacherUserId: plan.teacher_user_id ?? null,
-          teacherName: plan.teacher_name || 'Unknown teacher',
-          plans: [],
-          pending: 0,
-        });
-      }
-      const entry = map.get(key);
-      entry.plans.push(plan);
-      if (plan.status === 'submitted') entry.pending += 1;
-    }
-    return [...map.values()].sort((a, b) => a.teacherName.localeCompare(b.teacherName));
-  }, [lessonPlans, selectedProgram]);
-
-  const selectedTeacher = useMemo(
-    () => teacherFolders.find((t) => t.key === selectedTeacherKey) || null,
-    [teacherFolders, selectedTeacherKey]
-  );
-
-  const teacherPlans = useMemo(() => {
-    if (!selectedTeacher) return [];
-    return selectedTeacher.plans
-      .filter((plan) => statusFilter === 'all' || plan.status === statusFilter)
-      .sort((a, b) => {
-        const da = new Date(a.submitted_at || a.updated_at || a.lesson_date || 0).getTime();
-        const db = new Date(b.submitted_at || b.updated_at || b.lesson_date || 0).getTime();
-        return db - da;
-      });
-  }, [selectedTeacher, statusFilter]);
 
   const canReview = selectedPlan?.status === 'submitted';
   const showHeadTeacherForm = canReview && !revisionMode;
   const showSavedHeadTeacherReview =
     Boolean(selectedPlan) &&
     ['awaiting_reflection', 'completed'].includes(selectedPlan.status);
+  const canApprove =
+    canReview &&
+    !revisionMode &&
+    Boolean(String(headTeacherOverallAssessment || '').trim()) &&
+    Boolean(String(headTeacherSpecificFeedback || '').trim()) &&
+    Boolean(String(headTeacherNextSteps || '').trim());
+
+  const fetchMissed = useCallback(async (sinceValue = '') => {
+    setMissedLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '500' });
+      if (isSuperadmin && globalBranchId) {
+        params.set('branch_id', String(globalBranchId));
+      }
+      const since = String(sinceValue || '').trim().slice(0, 10);
+      if (since) params.set('since', since);
+      const missedRes = await apiRequest(`/lesson-plans/missed?${params.toString()}`);
+      setMissedPlans(Array.isArray(missedRes?.data) ? missedRes.data : []);
+      const metaSince = String(missedRes?.meta?.since || '').slice(0, 10);
+      const metaDefault = String(missedRes?.meta?.default_since || '').slice(0, 10);
+      if (metaDefault) setMissedDefaultSince(metaDefault);
+      if (metaSince) setMissedSince(metaSince);
+    } catch (err) {
+      setMissedPlans([]);
+      throw err;
+    } finally {
+      setMissedLoading(false);
+    }
+  }, [isSuperadmin, globalBranchId]);
 
   const fetchQueue = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const responses = await Promise.all(
-        REVIEW_STATUSES.map((status) =>
-          apiRequest(`/lesson-plans?status=${status}&limit=100`)
-        )
-      );
+      const branchQs =
+        isSuperadmin && globalBranchId
+          ? `&branch_id=${encodeURIComponent(globalBranchId)}`
+          : '';
+      const [responses] = await Promise.all([
+        Promise.all(
+          REVIEW_STATUSES.map((status) =>
+            apiRequest(`/lesson-plans?status=${status}&limit=100${branchQs}`)
+          )
+        ),
+        fetchMissed(),
+      ]);
       const plans = responses
         .flatMap((res) => res.data || [])
         .sort((a, b) => {
@@ -365,10 +259,117 @@ export default function SuperadminLessonPlans() {
     } catch (err) {
       setError(err.message || 'Failed to load lesson plans');
       setLessonPlans([]);
+      setMissedPlans([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isSuperadmin, globalBranchId, fetchMissed]);
+
+  const pendingCount = useMemo(
+    () => lessonPlans.filter((p) => PENDING_STATUSES.includes(p.status)).length,
+    [lessonPlans]
+  );
+
+  const revisionCount = useMemo(
+    () => lessonPlans.filter((p) => REVISION_STATUSES.includes(p.status)).length,
+    [lessonPlans]
+  );
+
+  const verifiedCount = useMemo(
+    () => lessonPlans.filter((p) => VERIFIED_STATUSES.includes(p.status)).length,
+    [lessonPlans]
+  );
+
+  const missedCount = missedPlans.length;
+
+  const filterGradeOptions = useMemo(() => {
+    const source = reviewTab === 'missed' ? missedPlans : lessonPlans;
+    const grades = source
+      .map((p) => String(p.grade_level || '').trim())
+      .filter(Boolean);
+    return [...new Set(grades)].sort((a, b) => a.localeCompare(b));
+  }, [lessonPlans, missedPlans, reviewTab]);
+
+  const filteredPlans = useMemo(() => {
+    if (reviewTab === 'missed') return [];
+    const tabStatuses = TAB_STATUSES[reviewTab] || PENDING_STATUSES;
+    const q = searchTerm.trim().toLowerCase();
+    return lessonPlans.filter((p) => {
+      if (!tabStatuses.includes(p.status)) return false;
+      if (gradeFilter !== 'all') {
+        if (normalizeGradeKey(p.grade_level) !== normalizeGradeKey(gradeFilter)) {
+          return false;
+        }
+      }
+      if (dateFilter) {
+        const planDate = String(p.lesson_date || '').slice(0, 10);
+        if (planDate !== dateFilter) return false;
+      }
+      if (!q) return true;
+      const haystack = [
+        p.topic,
+        p.grade_level,
+        p.class_label,
+        p.class_code,
+        p.subject,
+        p.phase,
+        p.session,
+        p.status,
+        p.teacher_name,
+        p.branch_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [lessonPlans, reviewTab, searchTerm, gradeFilter, dateFilter]);
+
+  const filteredMissedPlans = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    return missedPlans.filter((p) => {
+      if (gradeFilter !== 'all') {
+        if (normalizeGradeKey(p.grade_level) !== normalizeGradeKey(gradeFilter)) {
+          return false;
+        }
+      }
+      if (!q) return true;
+      const haystack = [
+        p.topic,
+        p.grade_level,
+        p.class_label,
+        p.class_code,
+        p.phase,
+        p.session,
+        p.teacher_name,
+        p.branch_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [missedPlans, searchTerm, gradeFilter]);
+
+  const hasActiveFilters =
+    Boolean(searchTerm.trim()) ||
+    gradeFilter !== 'all' ||
+    (reviewTab !== 'missed' && Boolean(dateFilter)) ||
+    (reviewTab === 'missed' &&
+      Boolean(missedSince) &&
+      Boolean(missedDefaultSince) &&
+      missedSince !== missedDefaultSince);
+
+  const handleMissedSinceChange = async (ymd) => {
+    const next = String(ymd || '').slice(0, 10);
+    setMissedSince(next);
+    setError('');
+    try {
+      await fetchMissed(next || '');
+    } catch (err) {
+      setError(err.message || 'Failed to load missed lesson plans');
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -455,38 +456,8 @@ export default function SuperadminLessonPlans() {
     setHeadTeacherNextSteps('');
   };
 
-  const openProgram = (program) => {
-    setSelectedProgram(program);
-    setSelectedTeacherKey(null);
-    setSelectedPlan(null);
-    setStatusFilter('all');
-    clearRevisionDraft();
-  };
-
-  const openTeacher = (teacherKey) => {
-    setSelectedTeacherKey(teacherKey);
-    setSelectedPlan(null);
-    setStatusFilter('all');
-    clearRevisionDraft();
-  };
-
-  const goToPrograms = () => {
-    setSelectedProgram(null);
-    setSelectedTeacherKey(null);
-    setSelectedPlan(null);
-    setStatusFilter('all');
-    clearRevisionDraft();
-  };
-
-  const goToTeachers = () => {
-    setSelectedTeacherKey(null);
-    setSelectedPlan(null);
-    setStatusFilter('all');
-    clearRevisionDraft();
-  };
-
   const isFieldChecked = (fieldKey) =>
-    revisionItems.some((item) => item.field === fieldKey && !String(item.highlight || '').trim());
+    revisionItems.some((item) => item.field === fieldKey);
 
   const openReasonModal = (draft) => {
     setReasonDraft(draft);
@@ -507,16 +478,9 @@ export default function SuperadminLessonPlans() {
     }
     addRevisionItem({
       field: reasonDraft.fieldKey,
-      highlight: reasonDraft.highlight || '',
       note,
     });
     closeReasonModal();
-  };
-
-  const getSelectedTextInDocument = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return '';
-    return String(sel.toString() || '').trim();
   };
 
   const addRevisionItem = (partial = {}) => {
@@ -526,32 +490,12 @@ export default function SuperadminLessonPlans() {
   const handleToggleField = (fieldKey, title, checked) => {
     if (checked) {
       openReasonModal({
-        mode: 'field',
         fieldKey,
         title,
-        highlight: '',
       });
       return;
     }
-    setRevisionItems((prev) =>
-      prev.filter((item) => !(item.field === fieldKey && !String(item.highlight || '').trim()))
-    );
-  };
-
-  const handleHighlightSelection = async (fieldKey, title) => {
-    const highlight = getSelectedTextInDocument();
-    if (!highlight) {
-      await appAlert(
-        'Select (highlight) text in that field first, then click Highlight selected text.'
-      );
-      return;
-    }
-    openReasonModal({
-      mode: 'highlight',
-      fieldKey,
-      title,
-      highlight,
-    });
+    setRevisionItems((prev) => prev.filter((item) => item.field !== fieldKey));
   };
 
   const updateRevisionItem = (id, patch) => {
@@ -566,6 +510,20 @@ export default function SuperadminLessonPlans() {
 
   const handleApprove = async () => {
     if (!selectedPlan) return;
+    const missing = [];
+    if (!String(headTeacherOverallAssessment || '').trim()) missing.push('Overall Assessment');
+    if (!String(headTeacherSpecificFeedback || '').trim()) missing.push('Specific Feedback');
+    if (!String(headTeacherNextSteps || '').trim()) missing.push('Next Steps');
+    if (missing.length) {
+      await appAlert(
+        `Complete Head Teacher's Review and Feedback before approving: ${missing.join(', ')}.`
+      );
+      document.getElementById('head-teacher-review-section')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+      return;
+    }
     const ok = await appConfirm('Approve this lesson plan?');
     if (!ok) return;
     try {
@@ -594,14 +552,13 @@ export default function SuperadminLessonPlans() {
     const items = revisionItems
       .map((item) => ({
         field: item.field || undefined,
-        highlight: item.highlight.trim() || undefined,
         note: item.note.trim() || undefined,
       }))
-      .filter((item) => item.field || item.highlight || item.note);
+      .filter((item) => item.field || item.note);
     const general = revisionGeneral.trim();
     if (items.length === 0 && !general) {
       await appAlert(
-        'Add at least one flagged field/highlight, or a general note, before requesting revision.'
+        'Add at least one flagged field, or a general note, before requesting revision.'
       );
       return;
     }
@@ -627,175 +584,173 @@ export default function SuperadminLessonPlans() {
     return <Navigate to={homePath} replace />;
   }
 
-  const view =
-    selectedProgram && selectedTeacherKey
-      ? 'plans'
-      : selectedProgram
-        ? 'teachers'
-        : 'programs';
+  const openReviewPlan = (plan) => {
+    clearRevisionDraft();
+    setShowRevisionModal(false);
+    setSelectedPlan(plan);
+  };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-gray-900 sm:text-3xl">Lesson Plan Review</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Browse folders: Program → Teacher → Lesson plans. Open a plan to approve or request
-          revision.
+        <p className="mt-1 text-sm text-gray-600">
+          Review submitted lesson plans, or open the Missed tab to see overdue sessions without a submission.
         </p>
       </div>
 
-      {error && (
+      {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
         </div>
-      )}
+      ) : null}
 
-      {/* Folder window */}
-      <div className="overflow-hidden rounded-2xl border border-[#e0c9a0] bg-[#f7f0e4] shadow-sm">
-        {/* Title bar */}
-        <div className="flex flex-wrap items-center gap-2 border-b border-[#e0c9a0] bg-gradient-to-r from-[#f0d9a8] to-[#e8c98a] px-3 py-2.5 sm:px-4">
-          <FolderIcon className="h-6 w-6 shrink-0" />
-          <nav
-            className="flex min-w-0 flex-1 flex-wrap items-center gap-1 text-sm font-medium text-gray-800"
-            aria-label="Folder path"
-          >
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex flex-wrap gap-2" aria-label="Lesson plan review tabs">
+          {[
+            { key: 'pending', label: 'Pending', count: pendingCount },
+            { key: 'revision', label: 'Revision', count: revisionCount },
+            { key: 'verified', label: 'Verified', count: verifiedCount },
+            { key: 'missed', label: 'Missed', count: missedCount },
+          ].map((tab) => (
             <button
+              key={tab.key}
               type="button"
-              onClick={goToPrograms}
-              className={`truncate rounded px-1.5 py-0.5 hover:bg-black/5 ${
-                view === 'programs' ? 'font-semibold text-gray-900' : 'text-gray-700'
+              onClick={() => setReviewTab(tab.key)}
+              className={`inline-flex items-center gap-2 border-b-2 px-3 py-2.5 text-sm font-semibold transition-colors ${
+                reviewTab === tab.key
+                  ? 'border-primary-600 text-primary-700'
+                  : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
               }`}
             >
-              Programs
+              {tab.label}
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                  reviewTab === tab.key
+                    ? 'bg-primary-100 text-primary-800'
+                    : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                {tab.count}
+              </span>
             </button>
-            {selectedProgram ? (
-              <>
-                <span className="text-gray-500" aria-hidden="true">
-                  /
-                </span>
+          ))}
+        </nav>
+      </div>
+
+      <div className="rounded-lg bg-white p-4 shadow">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="min-w-0 sm:col-span-2 xl:col-span-1">
+            <label
+              htmlFor="lesson-plan-review-search"
+              className="mb-1 block text-xs font-medium text-gray-700"
+            >
+              Search
+            </label>
+            <div className="relative">
+              <input
+                id="lesson-plan-review-search"
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by topic, teacher, class code, or grade..."
+                className="w-full rounded-lg border border-gray-300 px-3 py-1.5 pr-9 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              />
+              {searchTerm ? (
                 <button
                   type="button"
-                  onClick={goToTeachers}
-                  className={`truncate rounded px-1.5 py-0.5 hover:bg-black/5 ${
-                    view === 'teachers' ? 'font-semibold text-gray-900' : 'text-gray-700'
-                  }`}
-                  title={selectedProgram}
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  aria-label="Clear search"
                 >
-                  {selectedProgram}
-                </button>
-              </>
-            ) : null}
-            {selectedTeacher ? (
-              <>
-                <span className="text-gray-500" aria-hidden="true">
-                  /
-                </span>
-                <span
-                  className="truncate rounded px-1.5 py-0.5 font-semibold text-gray-900"
-                  title={selectedTeacher.teacherName}
-                >
-                  {selectedTeacher.teacherName}
-                </span>
-              </>
-            ) : null}
-          </nav>
-          {view !== 'programs' ? (
-            <button
-              type="button"
-              onClick={view === 'plans' ? goToTeachers : goToPrograms}
-              className="shrink-0 rounded-lg border border-[#d4b87a] bg-white/80 px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-white"
-            >
-              ← Back
-            </button>
-          ) : null}
-        </div>
-
-        <div className="bg-[#faf6ef] p-3 sm:p-5">
-          {loading || !accessChecked ? (
-            <p className="py-12 text-center text-sm text-gray-500">Loading folders…</p>
-          ) : view === 'programs' ? (
-            programFolders.length === 0 ? (
-              <p className="py-12 text-center text-sm text-gray-500">No lesson plans found.</p>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {programFolders.map((folder) => (
-                  <FolderCard
-                    key={folder.program}
-                    title={folder.program}
-                    subtitle={`${folder.plans.length} plan${folder.plans.length === 1 ? '' : 's'}`}
-                    badge={folder.pending}
-                    onClick={() => openProgram(folder.program)}
-                  />
-                ))}
-              </div>
-            )
-          ) : view === 'teachers' ? (
-            teacherFolders.length === 0 ? (
-              <p className="py-12 text-center text-sm text-gray-500">
-                No teachers with lesson plans in this program.
-              </p>
-            ) : (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                {teacherFolders.map((folder) => (
-                  <FolderCard
-                    key={folder.key}
-                    title={folder.teacherName}
-                    subtitle={`${folder.plans.length} plan${folder.plans.length === 1 ? '' : 's'}`}
-                    badge={folder.pending}
-                    onClick={() => openTeacher(folder.key)}
-                  />
-                ))}
-              </div>
-            )
-          ) : (
-            <div className="space-y-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-gray-600">
-                  Showing {teacherPlans.length} lesson plan
-                  {teacherPlans.length === 1 ? '' : 's'}
-                  {selectedTeacher ? (
-                    <>
-                      {' '}
-                      for <span className="font-semibold text-gray-800">{selectedTeacher.teacherName}</span>
-                    </>
-                  ) : null}
-                </p>
-                <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
-                  Status
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="rounded-lg border border-[#e0c9a0] bg-white px-3 py-2 text-sm font-normal text-gray-800"
-                  >
-                    <option value="all">All</option>
-                    {REVIEW_STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {formatStatus(s)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              {teacherPlans.length === 0 ? (
-                <p className="py-10 text-center text-sm text-gray-500">
-                  No lesson plans match this filter.
-                </p>
-              ) : (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {teacherPlans.map((plan) => (
-                    <PlanFileCard
-                      key={plan.lesson_plan_id}
-                      plan={plan}
-                      onClick={() => setSelectedPlan(plan)}
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
                     />
-                  ))}
-                </div>
-              )}
+                  </svg>
+                </button>
+              ) : null}
             </div>
+          </div>
+          {reviewTab === 'missed' ? (
+            <LessonPlanDateFilter
+              id="lesson-plan-missed-since"
+              label="Track from"
+              value={missedSince}
+              onChange={handleMissedSinceChange}
+            />
+          ) : (
+            <LessonPlanDateFilter value={dateFilter} onChange={setDateFilter} />
           )}
+          <div className="min-w-0">
+            <label
+              htmlFor="lesson-plan-review-grade"
+              className="mb-1 block text-xs font-medium text-gray-700"
+            >
+              Grade Level
+            </label>
+            <select
+              id="lesson-plan-review-grade"
+              value={gradeFilter}
+              onChange={(e) => setGradeFilter(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500"
+              aria-label="Filter by grade level"
+            >
+              <option value="all">All Grade Levels</option>
+              {filterGradeOptions.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
+
+      {reviewTab === 'missed' ? (
+        <LessonPlanMissedTable
+          rows={filteredMissedPlans}
+          loading={missedLoading || !accessChecked}
+          showTeacher
+          emptyMessage={
+            hasActiveFilters
+              ? 'No matching missed lesson plans. Try adjusting your search or filters.'
+              : TAB_EMPTY_MESSAGES.missed
+          }
+          showingLabel={
+            !missedLoading && filteredMissedPlans.length > 0
+              ? `Showing ${filteredMissedPlans.length} missed lesson plan${
+                  filteredMissedPlans.length === 1 ? '' : 's'
+                }${missedSince ? ` (from ${missedSince})` : ''}`
+              : ''
+          }
+        />
+      ) : (
+        <LessonPlanSubmissionsTable
+          plans={filteredPlans}
+          loading={loading || !accessChecked}
+          emptyMessage={
+            hasActiveFilters
+              ? 'No matching lesson plans. Try adjusting your search or filters.'
+              : TAB_EMPTY_MESSAGES[reviewTab] || TAB_EMPTY_MESSAGES.pending
+          }
+          showingLabel={
+            !loading && filteredPlans.length > 0
+              ? `Showing ${filteredPlans.length} ${TAB_LABELS[reviewTab] || 'pending'} lesson plan${
+                  filteredPlans.length === 1 ? '' : 's'
+                }`
+              : ''
+          }
+          activePlanId={selectedPlan?.lesson_plan_id ?? null}
+          timestampMode={reviewTab === 'verified' ? 'verified' : 'submitted'}
+          showTeacher
+          onView={openReviewPlan}
+          onSelect={openReviewPlan}
+        />
+      )}
 
       {selectedPlan &&
         createPortal(
@@ -860,7 +815,9 @@ export default function SuperadminLessonPlans() {
                   <div className="mb-2 grid grid-cols-1 gap-x-[34px] gap-y-3 sm:grid-cols-2">
                     <p className="text-[16px] text-[#111111]">
                       <span className="font-medium">Lesson Date</span>{' '}
-                      <span className="font-normal">{selectedPlan.lesson_date || '—'}</span>
+                      <span className="font-normal">
+                        {formatLessonPlanDateDisplay(selectedPlan.lesson_date) || '—'}
+                      </span>
                     </p>
                     <p className="text-[16px] text-[#111111]">
                       <span className="font-medium">Grade Level</span>{' '}
@@ -876,9 +833,8 @@ export default function SuperadminLessonPlans() {
 
                   {canReview && revisionMode ? (
                     <p className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      Check <strong>Field needs revision</strong> to mark a whole section, or select
-                      text and click <strong>Highlight selected text</strong>. Each action asks for a
-                      reason. Then use <strong>Review &amp; submit revision</strong>.
+                      Check <strong>Field needs revision</strong> to mark a section. Each flag asks
+                      for a reason. Then use <strong>Review &amp; submit revision</strong>.
                       {revisionItems.length > 0 ? (
                         <span className="ml-1 font-semibold">
                           ({revisionItems.length} item{revisionItems.length === 1 ? '' : 's'})
@@ -917,7 +873,6 @@ export default function SuperadminLessonPlans() {
                           canFlag={canReview && revisionMode}
                           fieldChecked={isFieldChecked(key)}
                           onToggleField={handleToggleField}
-                          onHighlightSelection={handleHighlightSelection}
                         />
                       ))}
                     </div>
@@ -939,41 +894,47 @@ export default function SuperadminLessonPlans() {
 
                   {(showHeadTeacherForm || showSavedHeadTeacherReview) && (
                     <>
-                      <h4 className="mb-1 mt-3 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]">
+                      <h4
+                        id="head-teacher-review-section"
+                        className="mb-1 mt-3 scroll-mt-4 border-t-2 border-[#111111] pt-2.5 text-[18px] font-bold text-[#111111]"
+                      >
                         Head Teacher&apos;s Review and Feedback
                       </h4>
                       {showHeadTeacherForm ? (
                         <div className="space-y-3 py-3">
-                          <p className="text-xs text-gray-500">
-                            Complete this review before approving. Feedback is saved with the
-                            verification.
+                          <p className="text-xs text-amber-800">
+                            Required before Approve. Enter Overall Assessment, Specific Feedback,
+                            and Next Steps.
                           </p>
                           <label className="block text-[16px] font-medium text-[#111111]">
-                            Overall Assessment
+                            Overall Assessment <span className="text-red-600">*</span>
                             <textarea
                               value={headTeacherOverallAssessment}
                               onChange={(e) => setHeadTeacherOverallAssessment(e.target.value)}
                               rows={3}
+                              required
                               className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
                               placeholder="Overall assessment of this lesson plan"
                             />
                           </label>
                           <label className="block text-[16px] font-medium text-[#111111]">
-                            Specific Feedback
+                            Specific Feedback <span className="text-red-600">*</span>
                             <textarea
                               value={headTeacherSpecificFeedback}
                               onChange={(e) => setHeadTeacherSpecificFeedback(e.target.value)}
                               rows={3}
+                              required
                               className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
                               placeholder="Specific feedback for the teacher"
                             />
                           </label>
                           <label className="block text-[16px] font-medium text-[#111111]">
-                            Next Steps
+                            Next Steps <span className="text-red-600">*</span>
                             <textarea
                               value={headTeacherNextSteps}
                               onChange={(e) => setHeadTeacherNextSteps(e.target.value)}
                               rows={3}
+                              required
                               className="mt-1.5 w-full rounded-lg border border-[#e5e5e5] bg-white px-3 py-2.5 text-[15px] leading-relaxed text-[#111111] shadow-sm"
                               placeholder="Recommended next steps"
                             />
@@ -1038,8 +999,13 @@ export default function SuperadminLessonPlans() {
                   )}
                   <button
                     type="button"
-                    disabled={reviewing || revisionMode}
+                    disabled={reviewing || revisionMode || !canApprove}
                     onClick={handleApprove}
+                    title={
+                      !canApprove && canReview && !revisionMode
+                        ? "Complete Head Teacher's Review and Feedback before approving"
+                        : undefined
+                    }
                     className="rounded-lg border border-[#ffddc9] bg-[#ffddc9] px-4 py-[11px] text-sm font-semibold text-[#333333] hover:bg-[#fff0e6] disabled:opacity-50"
                   >
                     {reviewing ? 'Saving…' : 'Approve'}
@@ -1057,15 +1023,8 @@ export default function SuperadminLessonPlans() {
             <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
               <h2 className="text-lg font-semibold text-gray-900">Add Revision Reason</h2>
               <p className="mt-1 text-sm text-gray-500">
-                {reasonDraft.mode === 'highlight'
-                  ? `Why does this highlighted text in "${reasonDraft.title}" need revision?`
-                  : `Why does "${reasonDraft.title}" need revision?`}
+                Why does &quot;{reasonDraft.title}&quot; need revision?
               </p>
-              {reasonDraft.highlight ? (
-                <blockquote className="mt-3 border-l-2 border-amber-400 bg-amber-50/80 px-3 py-2 text-sm italic text-gray-800">
-                  “{reasonDraft.highlight}”
-                </blockquote>
-              ) : null}
               <textarea
                 value={reasonNote}
                 onChange={(e) => setReasonNote(e.target.value)}
@@ -1102,8 +1061,8 @@ export default function SuperadminLessonPlans() {
               <div className="border-b border-gray-100 px-5 py-4">
                 <h2 className="text-lg font-semibold text-gray-900">Request revision</h2>
                 <p className="mt-1 text-sm text-gray-500">
-                  Review items marked with <strong>Field needs revision</strong> or{' '}
-                  <strong>Highlight selected text</strong>, then submit to the teacher.
+                  Review items marked with <strong>Field needs revision</strong>, then submit to the
+                  teacher.
                 </p>
               </div>
 
@@ -1113,7 +1072,7 @@ export default function SuperadminLessonPlans() {
               >
                 {revisionItems.length === 0 ? (
                   <p className="text-sm text-gray-500">
-                    No items yet. Add a field flag or highlighted quote below.
+                    No items yet. Flag a field above or add an item below.
                   </p>
                 ) : (
                   revisionItems.map((item, index) => (
@@ -1147,18 +1106,6 @@ export default function SuperadminLessonPlans() {
                             </option>
                           ))}
                         </select>
-                      </label>
-                      <label className="mb-2 block text-xs font-semibold text-gray-600">
-                        Highlighted text to revise (optional)
-                        <textarea
-                          value={item.highlight}
-                          onChange={(e) =>
-                            updateRevisionItem(item.id, { highlight: e.target.value })
-                          }
-                          rows={3}
-                          className="mt-1 w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-normal text-gray-800"
-                          placeholder='e.g. Show pictures and let the kids identify the beginning sound…'
-                        />
                       </label>
                       <label className="block text-xs font-semibold text-gray-600">
                         Note to teacher (optional)

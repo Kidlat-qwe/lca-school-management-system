@@ -156,9 +156,41 @@ const TEXT_FIELDS = [
   'reflection_improvements',
 ];
 
+/**
+ * Coerce DB Date / ISO / MM/DD/YYYY / session schedule values to YYYY-MM-DD.
+ * node-pg returns PostgreSQL `date` as a JS Date at UTC midnight for that calendar day.
+ */
+export function toLessonPlanDateYmd(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const y = value.getUTCFullYear();
+    const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(value.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) {
+    const mm = mdy[1].padStart(2, '0');
+    const dd = mdy[2].padStart(2, '0');
+    return `${mdy[3]}-${mm}-${dd}`;
+  }
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const y = parsed.getUTCFullYear();
+    const m = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+}
+
 /** Display label for a CMS class row (Settings / meta / legacy subject column). */
 export function formatLessonPlanClassLabel(classRow = null) {
   if (!classRow) return '';
+  const code = String(classRow.class_code || '').trim();
+  if (code) return code;
   const name = String(classRow.class_name || '').trim();
   const program = String(classRow.program_name || '').trim();
   const level = String(classRow.level_tag || '').trim();
@@ -230,7 +262,15 @@ export async function fetchLessonPlanMetaClasses(
       c.class_name,
       c.level_tag,
       c.status,
-      p.program_name
+      p.program_name,
+      (
+        SELECT cs.class_code
+        FROM classsessionstbl cs
+        WHERE cs.class_id = c.class_id
+          AND NULLIF(TRIM(cs.class_code), '') IS NOT NULL
+        ORDER BY cs.scheduled_date ASC NULLS LAST, cs.classsession_id ASC
+        LIMIT 1
+      ) AS class_code
     FROM classestbl c
     LEFT JOIN programstbl p ON p.program_id = c.program_id
     WHERE c.branch_id = $1
@@ -244,6 +284,7 @@ export async function fetchLessonPlanMetaClasses(
   return (result.rows || []).map((row) => ({
     class_id: row.class_id,
     class_name: row.class_name || '',
+    class_code: row.class_code || '',
     program_name: row.program_name || '',
     level_tag: row.level_tag || '',
     status: row.status || '',
@@ -253,7 +294,7 @@ export async function fetchLessonPlanMetaClasses(
 
 export function normalizeLessonPlanBody(body = {}) {
   const out = {};
-  if (body.lesson_date != null) out.lesson_date = String(body.lesson_date).slice(0, 10);
+  if (body.lesson_date != null) out.lesson_date = toLessonPlanDateYmd(body.lesson_date);
   if (body.grade_level != null) out.grade_level = String(body.grade_level).trim();
   if (body.class_id != null && body.class_id !== '') {
     const classId = Number(body.class_id);
@@ -288,7 +329,15 @@ export async function enrichLessonPlanPayloadWithClass(
       c.class_name,
       c.level_tag,
       c.branch_id,
-      p.program_name
+      p.program_name,
+      (
+        SELECT cs.class_code
+        FROM classsessionstbl cs
+        WHERE cs.class_id = c.class_id
+          AND NULLIF(TRIM(cs.class_code), '') IS NOT NULL
+        ORDER BY cs.scheduled_date ASC NULLS LAST, cs.classsession_id ASC
+        LIMIT 1
+      ) AS class_code
     FROM classestbl c
     LEFT JOIN programstbl p ON p.program_id = c.program_id
     WHERE c.class_id = $1 AND c.archived_at IS NULL
@@ -313,14 +362,40 @@ export async function enrichLessonPlanPayloadWithClass(
   const levelTag = String(row.level_tag || '').trim();
   const gradeLevel = payload.grade_level || levelTag || '';
 
+  // Prefer the session class_code for the plan's phase/session (same as View Class Details).
+  let sessionClassCode = String(row.class_code || '').trim();
+  const phaseNum = String(payload.phase || '').match(/(\d+)/)?.[1];
+  const sessionNum = String(payload.session || '').match(/Session\s*(\d+)/i)?.[1];
+  if (phaseNum && sessionNum) {
+    const sessionRes = await runQuery(
+      `
+      SELECT class_code
+      FROM classsessionstbl
+      WHERE class_id = $1
+        AND phase_number = $2
+        AND phase_session_number = $3
+        AND NULLIF(TRIM(class_code), '') IS NOT NULL
+      ORDER BY classsession_id ASC
+      LIMIT 1
+      `,
+      [classId, Number(phaseNum), Number(sessionNum)]
+    );
+    if (sessionRes.rows?.[0]?.class_code) {
+      sessionClassCode = String(sessionRes.rows[0].class_code).trim();
+      row.class_code = sessionClassCode;
+    }
+  }
+
+  const displayLabel = formatLessonPlanClassLabel(row) || label;
+
   return {
     ok: true,
     payload: {
       ...payload,
       class_id: classId,
       grade_level: gradeLevel,
-      subject: label,
-      class1_name: String(row.class_name || '').trim() || label,
+      subject: displayLabel,
+      class1_name: String(row.class_name || '').trim() || displayLabel,
       class1_age_group: levelTag,
       class1_considerations: payload.class1_considerations ?? '',
       class1_adjustments: payload.class1_adjustments ?? '',
@@ -342,6 +417,23 @@ export function normalizeHeadTeacherReviewBody(body = {}) {
     if (body[key] != null) out[key] = String(body[key]);
   }
   return out;
+}
+
+const HEAD_TEACHER_REVIEW_LABELS = Object.freeze({
+  head_teacher_overall_assessment: 'Overall Assessment',
+  head_teacher_specific_feedback: 'Specific Feedback',
+  head_teacher_next_steps: 'Next Steps',
+});
+
+/** All Head Teacher review fields required before approve. */
+export function validateHeadTeacherReviewPayload(payload = {}) {
+  const errors = [];
+  for (const key of HEAD_TEACHER_REVIEW_FIELDS) {
+    if (!String(payload[key] || '').trim()) {
+      errors.push(`${HEAD_TEACHER_REVIEW_LABELS[key] || key} is required before approving`);
+    }
+  }
+  return errors;
 }
 
 /** Sections 1–6 — all fields required before submit for verification. */
@@ -424,12 +516,8 @@ export function getManilaTodayYmd(date = new Date()) {
 }
 
 export function normalizeLessonDateYmd(lessonDate) {
-  if (!lessonDate) return null;
-  if (lessonDate instanceof Date) {
-    return getManilaTodayYmd(lessonDate);
-  }
-  const s = String(lessonDate).slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  const ymd = toLessonPlanDateYmd(lessonDate);
+  return ymd || null;
 }
 
 /** True when lesson_date equals today's date in Asia/Manila. */
@@ -523,6 +611,25 @@ export function serializeRevisionFeedback(payload) {
 
 /** Parse revision_reason: structured JSON (v1) or legacy plain text. */
 export function parseRevisionFeedback(raw) {
+  if (raw != null && typeof raw === 'object' && !Array.isArray(raw)) {
+    if (Number(raw.v) === 1 && Array.isArray(raw.items)) {
+      return {
+        v: 1,
+        items: raw.items,
+        general: raw.general || null,
+        legacy: false,
+      };
+    }
+    if (Array.isArray(raw.items) || raw.general) {
+      return {
+        v: Number(raw.v) === 1 ? 1 : 0,
+        items: Array.isArray(raw.items) ? raw.items : [],
+        general: raw.general || null,
+        legacy: Boolean(raw.legacy),
+      };
+    }
+  }
+
   const text = raw == null ? '' : String(raw);
   if (!text.trim()) {
     return { v: 0, items: [], general: null, legacy: true };
@@ -578,6 +685,10 @@ export function validateRevisionFeedbackPayload(payload) {
 export function mapLessonPlanRow(row) {
   if (!row) return null;
   const revisionReason = row.revision_reason;
+  // Prefer the session class_code saved on the plan (subject) / phase-session match.
+  const savedClassCode = String(row.subject || '').trim();
+  const linkedClassCode = String(row.linked_class_code || '').trim();
+  const displayClassCode = linkedClassCode || savedClassCode;
   return {
     lesson_plan_id: row.lesson_plan_id,
     branch_id: row.branch_id,
@@ -593,19 +704,21 @@ export function mapLessonPlanRow(row) {
 
     teacher_user_id: row.teacher_user_id,
     teacher_name: row.teacher_name || null,
-    lesson_date: row.lesson_date,
+    lesson_date: toLessonPlanDateYmd(row.lesson_date),
     grade_level: row.grade_level,
     class_id: row.class_id ?? null,
     class_name: row.linked_class_name || row.class1_name || null,
+    class_code: displayClassCode || null,
     program_name: row.linked_program_name || null,
     class_label:
+      displayClassCode ||
       formatLessonPlanClassLabel({
         class_id: row.class_id,
+        class_code: linkedClassCode,
         class_name: row.linked_class_name || row.class1_name,
         program_name: row.linked_program_name,
         level_tag: row.linked_level_tag || row.class1_age_group,
       }) ||
-      row.subject ||
       '',
     subject: row.subject,
     phase: row.phase || '',
@@ -658,7 +771,7 @@ export function mapLessonPlanRow(row) {
 /** Columns written for teacher create/update (DB names). */
 export function lessonPlanWriteColumns(payload) {
   return {
-    lesson_date: payload.lesson_date,
+    lesson_date: toLessonPlanDateYmd(payload.lesson_date) || payload.lesson_date,
     grade_level: payload.grade_level,
     class_id: payload.class_id ?? null,
     subject: payload.subject ?? '',
@@ -694,6 +807,229 @@ export function lessonPlanWriteColumns(payload) {
     reflection_amazing_moments: payload.reflection_amazing_moments ?? '',
     reflection_challenges: payload.reflection_challenges ?? '',
     reflection_improvements: payload.reflection_improvements ?? '',
+  };
+}
+
+/** Statuses that count as a submitted lesson plan (draft does not). */
+export const SUBMITTED_LESSON_PLAN_STATUSES = Object.freeze([
+  'submitted',
+  'revision_requested',
+  'awaiting_reflection',
+  'completed',
+]);
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Missed-tab go-live: sessions before this date are ignored.
+ * Redeploy start (Asia/Manila). Change here when rolling out tracking.
+ */
+export const LESSON_PLAN_MISSED_SINCE_DEFAULT = '2026-09-19';
+
+/** Asia/Manila calendar date as YYYY-MM-DD. */
+export function getLessonPlanManilaTodayYmd() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+/**
+ * Default "track missed from" date (code constant, not .env).
+ */
+export function getDefaultLessonPlanMissedSince() {
+  if (YMD_RE.test(LESSON_PLAN_MISSED_SINCE_DEFAULT)) {
+    return LESSON_PLAN_MISSED_SINCE_DEFAULT;
+  }
+  const today = getLessonPlanManilaTodayYmd();
+  const [y, m, d] = today.split('-').map(Number);
+  const base = new Date(Date.UTC(y, m - 1, d));
+  base.setUTCDate(base.getUTCDate() - 14);
+  const yy = base.getUTCFullYear();
+  const mm = String(base.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(base.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/**
+ * Resolve effective missed window start (inclusive).
+ * Requested `since` wins when valid; otherwise the configured default.
+ */
+export function resolveLessonPlanMissedSince(requestedSince = null) {
+  const req = String(requestedSince || '').trim().slice(0, 10);
+  if (YMD_RE.test(req)) return req;
+  return getDefaultLessonPlanMissedSince();
+}
+
+/**
+ * Map a missed-session row → API shape (expected plan that was never submitted).
+ */
+export function mapMissedLessonPlanRow(row) {
+  if (!row) return null;
+  const phaseNumber = row.phase_number != null ? Number(row.phase_number) : null;
+  const sessionNumber =
+    row.phase_session_number != null ? Number(row.phase_session_number) : null;
+  const topic = String(row.topic || '').trim();
+  const sessionLabel =
+    sessionNumber != null && Number.isFinite(sessionNumber)
+      ? topic
+        ? `Session ${sessionNumber} — ${topic}`
+        : `Session ${sessionNumber}`
+      : '';
+  const classCode = String(row.class_code || '').trim();
+  return {
+    miss_key: [
+      row.classsession_id,
+      row.teacher_user_id,
+      row.class_id,
+      phaseNumber,
+      sessionNumber,
+    ].join(':'),
+    classsession_id: row.classsession_id,
+    class_id: row.class_id,
+    branch_id: row.branch_id ?? null,
+    branch_name: row.branch_name || null,
+    teacher_user_id: row.teacher_user_id,
+    teacher_name: row.teacher_name || null,
+    scheduled_date: toLessonPlanDateYmd(row.scheduled_date),
+    lesson_date: toLessonPlanDateYmd(row.scheduled_date),
+    grade_level: String(row.grade_level || row.level_tag || '').trim() || null,
+    class_name: row.class_name || null,
+    class_code: classCode || null,
+    class_label: classCode || row.class_name || null,
+    phase: phaseNumber != null && Number.isFinite(phaseNumber) ? `Phase ${phaseNumber}` : '',
+    session: sessionLabel,
+    phase_number: phaseNumber,
+    phase_session_number: sessionNumber,
+    topic: topic || null,
+    days_overdue: Number(row.days_overdue) || 0,
+    status: 'missed',
+  };
+}
+
+/**
+ * Overdue scheduled sessions with no submitted lesson plan for the assigned teacher.
+ * Missed = since <= scheduled_date < today (Asia/Manila). Draft plans do not count.
+ * `since` defaults to LESSON_PLAN_MISSED_SINCE_DEFAULT (2026-09-19) so older class history is ignored.
+ *
+ * @param {Function} runQuery
+ * @param {{
+ *   teacherUserId?: number|null,
+ *   branchId?: number|null,
+ *   since?: string|null,
+ *   limit?: number,
+ * }} [options]
+ * @returns {Promise<{ rows: object[], meta: { since: string, default_since: string, today: string } }>}
+ */
+export async function fetchMissedLessonPlans(
+  runQuery,
+  { teacherUserId = null, branchId = null, since = null, limit = 500 } = {}
+) {
+  const defaultSince = getDefaultLessonPlanMissedSince();
+  const effectiveSince = resolveLessonPlanMissedSince(since);
+  const today = getLessonPlanManilaTodayYmd();
+  const params = [];
+  let teacherFilter = '';
+  let branchFilter = '';
+
+  if (branchId != null) {
+    params.push(Number(branchId));
+    branchFilter = ` AND c.branch_id = $${params.length}`;
+  }
+  if (teacherUserId != null) {
+    params.push(Number(teacherUserId));
+    teacherFilter = ` AND t.teacher_id = $${params.length}`;
+  }
+
+  params.push(effectiveSince);
+  const sinceParam = `$${params.length}`;
+
+  const submittedStatuses = SUBMITTED_LESSON_PLAN_STATUSES.map((s) => `'${s}'`).join(', ');
+  params.push(Math.min(Math.max(Number(limit) || 500, 1), 1000));
+
+  const result = await runQuery(
+    `
+    WITH class_teachers AS (
+      SELECT DISTINCT
+        c.class_id,
+        c.branch_id,
+        c.level_tag,
+        c.class_name,
+        t.teacher_id
+      FROM classestbl c
+      CROSS JOIN LATERAL (
+        SELECT DISTINCT x.teacher_id
+        FROM (
+          SELECT c.teacher_id AS teacher_id
+          WHERE c.teacher_id IS NOT NULL
+          UNION
+          SELECT ct.teacher_id
+          FROM classteacherstbl ct
+          WHERE ct.class_id = c.class_id
+        ) x
+        WHERE x.teacher_id IS NOT NULL
+      ) t
+      WHERE c.archived_at IS NULL
+        AND COALESCE(NULLIF(TRIM(c.status), ''), 'Active') = 'Active'
+        ${branchFilter}
+        ${teacherFilter}
+    )
+    SELECT
+      cs.classsession_id,
+      cs.class_id,
+      cs.phase_number,
+      cs.phase_session_number,
+      NULLIF(TRIM(cs.class_code), '') AS class_code,
+      TO_CHAR(cs.scheduled_date, 'YYYY-MM-DD') AS scheduled_date,
+      (
+        (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date - cs.scheduled_date
+      )::int AS days_overdue,
+      NULLIF(TRIM(ps.topic), '') AS topic,
+      ct.teacher_id AS teacher_user_id,
+      ct.branch_id,
+      ct.level_tag AS grade_level,
+      ct.class_name,
+      u.full_name AS teacher_name,
+      b.branch_name
+    FROM classsessionstbl cs
+    INNER JOIN class_teachers ct ON ct.class_id = cs.class_id
+    INNER JOIN userstbl u ON u.user_id = ct.teacher_id
+    LEFT JOIN branchestbl b ON b.branch_id = ct.branch_id
+    LEFT JOIN phasesessionstbl ps ON ps.phasesessiondetail_id = cs.phasesessiondetail_id
+    WHERE cs.scheduled_date IS NOT NULL
+      AND cs.scheduled_date >= ${sinceParam}::date
+      AND cs.scheduled_date < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')::date
+      AND COALESCE(NULLIF(TRIM(cs.status), ''), 'Scheduled') <> 'Cancelled'
+      AND cs.phase_number IS NOT NULL
+      AND cs.phase_session_number IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM lessonplanstbl lp
+        WHERE lp.teacher_user_id = ct.teacher_id
+          AND lp.class_id = cs.class_id
+          AND lp.status IN (${submittedStatuses})
+          AND NULLIF(substring(lp.phase from '[0-9]+'), '')::int = cs.phase_number
+          AND NULLIF(
+            (regexp_match(lp.session_label, '[Ss]ession[[:space:]]*([0-9]+)'))[1],
+            ''
+          )::int = cs.phase_session_number
+      )
+    ORDER BY cs.scheduled_date ASC, u.full_name ASC NULLS LAST, cs.class_id ASC,
+      cs.phase_number ASC, cs.phase_session_number ASC
+    LIMIT $${params.length}
+    `,
+    params
+  );
+
+  return {
+    rows: (result.rows || []).map(mapMissedLessonPlanRow),
+    meta: {
+      since: effectiveSince,
+      default_since: defaultSince,
+      today,
+    },
   };
 }
 

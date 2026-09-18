@@ -124,6 +124,27 @@ export const formatDateTimeManila = (dateInput, options = {}) => {
 };
 
 /**
+ * Format time only in Asia/Manila.
+ * @param {string|Date} dateInput
+ * @param {{ hour12?: boolean }} [options]
+ * @returns {string} e.g. "1:45:08 PM" or "-" if invalid
+ */
+export const formatTimeManila = (dateInput, options = {}) => {
+  const { hour12 = false } = options;
+  const d = parseDateForDisplay(dateInput);
+  if (!d) return '-';
+  const p = getManilaDateTimeParts(d);
+  let hour = p.hour;
+  let suffix = '';
+  if (hour12) {
+    suffix = hour >= 12 ? ' PM' : ' AM';
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+  }
+  return `${hour12 ? String(hour) : pad2(hour)}:${pad2(p.minute)}:${pad2(p.second)}${suffix}`;
+};
+
+/**
  * Today's date in Asia/Manila as YYYY-MM-DD (for date inputs).
  * @returns {string}
  */

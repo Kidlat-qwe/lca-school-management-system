@@ -270,20 +270,7 @@ const createCashDepositSubmissionNotification = async ({
     console.warn('[cashDeposit] template load failed:', templateErr?.message || templateErr);
   }
 
-  await query(
-    `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, navigation_key, navigation_query)
-     VALUES ($1, $2, $3, 'Active', 'High', $4, $5, $6, $7)`,
-    [
-      title,
-      body,
-      ['All'],
-      branchId,
-      createdBy,
-      'daily-summary-sales',
-      `notificationTab=cashDeposit&cashDepositSummaryId=${cashDepositSummaryId}`,
-    ]
-  );
-
+  // Targeted only — do not broadcast recipient_groups 'All' (Teachers must not receive these).
   const notifyUserTypes = ['superfinance', 'superadmin'];
   const notifyUsersRes = await query(
     `SELECT user_id, LOWER(TRIM(user_type)) AS user_type
@@ -304,7 +291,7 @@ const createCashDepositSubmissionNotification = async ({
           [
             title,
             body,
-            ['All'],
+            ['Finance', 'Superadmin'],
             branchId,
             createdBy,
             targetUserId,

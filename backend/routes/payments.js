@@ -359,28 +359,45 @@ const notifyPaymentReturnedToBranch = async ({
       );
 
       if (ownerTargetIds.length > 0) {
-        await Promise.all(
-          ownerTargetIds.map(async (targetUserId) => {
-            const targetBody =
-              Number(targetUserId) === Number(returnedByUserId)
-                ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
-                : `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
-            return query(
-              `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
-               VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
-              [
-                returnTitleMain,
-                targetBody,
-                ['All'],
-                branchId,
-                returnedByUserId,
-                targetUserId,
-                'payment-logs',
-                'notificationTab=return',
-              ]
-            );
-          })
+        const ownerTypeRes = await query(
+          `SELECT user_id, LOWER(TRIM(user_type)) AS user_type
+           FROM userstbl
+           WHERE user_id = ANY($1::int[])`,
+          [ownerTargetIds]
         );
+        const nonTeacherOwnerIds = (ownerTypeRes.rows || [])
+          .filter((row) => row.user_type !== 'teacher')
+          .map((row) => Number(row.user_id))
+          .filter((id) => !Number.isNaN(id));
+
+        if (nonTeacherOwnerIds.length > 0) {
+          await Promise.all(
+            nonTeacherOwnerIds.map(async (targetUserId) => {
+              const targetBody =
+                Number(targetUserId) === Number(returnedByUserId)
+                  ? `You returned ${invLabel} (${studentLabel}) for correction.${reasonText}`
+                  : `${invLabel} (${studentLabel}) was returned by ${returnedBy} for correction.${reasonText}`;
+              return query(
+                `INSERT INTO announcementstbl (title, body, recipient_groups, status, priority, branch_id, created_by, target_user_id, navigation_key, navigation_query)
+                 VALUES ($1, $2, $3, 'Active', 'Medium', $4, $5, $6, $7, $8)`,
+                [
+                  returnTitleMain,
+                  targetBody,
+                  ['Admin'],
+                  branchId,
+                  returnedByUserId,
+                  targetUserId,
+                  'payment-logs',
+                  'notificationTab=return',
+                ]
+              );
+            })
+          );
+        } else {
+          console.warn(
+            `notifyPaymentReturnedToBranch: skipped in-app announcement for payment_id=${paymentId} because owners are Teachers or missing`
+          );
+        }
       } else {
         console.warn(
           `notifyPaymentReturnedToBranch: skipped in-app announcement for payment_id=${paymentId} because action owner is missing`
@@ -436,20 +453,25 @@ const notifyPaymentReturnedToBranch = async ({
     ) {
       try {
         const ownerRes = await query(
-          `SELECT full_name, email FROM userstbl WHERE user_id = $1`,
+          `SELECT full_name, email, LOWER(TRIM(user_type)) AS user_type
+           FROM userstbl WHERE user_id = $1`,
           [actionOwnerUserId]
         );
-        const rawEmail = ownerRes.rows[0]?.email;
-        const [to] = normalizeNotificationRecipients([rawEmail]);
-        if (to) {
-          const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
-          const emailSubject = `Payment returned — ${invLabel} (${branchName})`;
-          const emailBody = `Hi ${ownerFirst},\n\n${returnedBy} returned ${invLabel} for student ${studentLabel} at ${branchName} so you can fix the reference or attachment.${reason && String(reason).trim() ? `\n\nNote from Finance: ${String(reason).trim()}` : ''}\n\nOpen Payment Logs and use the Return tab to update this payment.`;
-          await sendSystemNotificationEmail({
-            to,
-            subject: emailSubject,
-            html: plainTextToEmailHtml(emailBody),
-          });
+        if (ownerRes.rows[0]?.user_type === 'teacher') {
+          // Teachers are not notified about payment returns.
+        } else {
+          const rawEmail = ownerRes.rows[0]?.email;
+          const [to] = normalizeNotificationRecipients([rawEmail]);
+          if (to) {
+            const ownerFirst = ownerRes.rows[0]?.full_name || 'there';
+            const emailSubject = `Payment returned — ${invLabel} (${branchName})`;
+            const emailBody = `Hi ${ownerFirst},\n\n${returnedBy} returned ${invLabel} for student ${studentLabel} at ${branchName} so you can fix the reference or attachment.${reason && String(reason).trim() ? `\n\nNote from Finance: ${String(reason).trim()}` : ''}\n\nOpen Payment Logs and use the Return tab to update this payment.`;
+            await sendSystemNotificationEmail({
+              to,
+              subject: emailSubject,
+              html: plainTextToEmailHtml(emailBody),
+            });
+          }
         }
       } catch (emailErr) {
         console.error(

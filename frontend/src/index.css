@@ -189,8 +189,27 @@
   animation-delay: -2s;
 }
 
+@keyframes lesson-plan-reflection-blink {
+  0%,
+  100% {
+    border-color: #ef4444;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+  }
+  50% {
+    border-color: #fecaca;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.08);
+  }
+}
+
+.lesson-plan-reflection-blink {
+  animation: lesson-plan-reflection-blink 0.85s ease-in-out infinite;
+  border-color: #ef4444 !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .lb-hero-bubble {
-    animation: none !important;
+  .lesson-plan-reflection-blink {
+    animation: none;
+    border-color: #ef4444 !important;
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
   }
 }

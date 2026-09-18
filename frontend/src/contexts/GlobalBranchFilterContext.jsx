@@ -36,6 +36,7 @@ const SUPPORTED_ROUTE_SEGMENTS = new Set([
   'calendar-schedule',
   'announcements',
   'holidays',
+  'lesson-plans',
 ]);
 
 const formatBranchNameParts = (branchName) => {

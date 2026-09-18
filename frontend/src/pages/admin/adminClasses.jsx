@@ -6359,6 +6359,23 @@ const resolvedBranchId =
       return;
     }
 
+    if (teacherConflicts.length > 0) {
+      await appAlert(
+        'Cannot create or update this class while selected teacher(s) have schedule conflicts. Remove or replace the conflicting teacher(s) first.'
+      );
+      const teacherSection = document.getElementById('teacher_search_input');
+      if (teacherSection) {
+        teacherSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        teacherSection.focus();
+      }
+      return;
+    }
+
+    if (checkingConflicts) {
+      await appAlert('Please wait until teacher schedule conflict checking finishes.');
+      return;
+    }
+
     setSubmitting(true);
     setError(''); // Clear previous errors
     try {
@@ -10149,8 +10166,13 @@ const resolvedBranchId =
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
-                      disabled={submitting}
+                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={submitting || checkingConflicts || teacherConflicts.length > 0}
+                      title={
+                        teacherConflicts.length > 0
+                          ? 'Resolve teacher schedule conflicts before creating this class'
+                          : undefined
+                      }
                     >
                       {submitting ? (
                         <span className="flex items-center space-x-2">
@@ -10180,8 +10202,13 @@ const resolvedBranchId =
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
-                      disabled={submitting}
+                      className="px-4 py-2 text-sm font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={submitting || checkingConflicts || teacherConflicts.length > 0}
+                      title={
+                        teacherConflicts.length > 0
+                          ? 'Resolve teacher schedule conflicts before updating this class'
+                          : undefined
+                      }
                     >
                       {submitting ? (
                         <span className="flex items-center space-x-2">

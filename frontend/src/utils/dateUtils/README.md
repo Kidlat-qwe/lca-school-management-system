@@ -7,6 +7,7 @@ All CMS date/time display uses **Asia/Manila (UTC+8)**.
 | Export | Output |
 |--------|--------|
 | `formatDateManila` | `June 06, 2026` |
+| `formatTimeManila` | `1:45:08 PM` (optional `hour12`) |
 | `formatDateTimeManila` | `June 06, 2026, 14:30:00` |
 | `parseDateForDisplay` | `Date` instant for those formatters |
 
