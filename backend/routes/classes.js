@@ -713,6 +713,14 @@ router.get(
   requireRole('Superadmin', 'Admin'),
   async (req, res, next) => {
     try {
+      // Auto-purge classes whose 30-day retention has ended (days left = 0).
+      // Runs on every Archived Classes load so expired rows do not linger.
+      try {
+        await purgeExpiredArchivedClasses(getClient);
+      } catch (purgeErr) {
+        console.error('Auto-purge of expired archived classes failed:', purgeErr.message || purgeErr);
+      }
+
       const branchId =
         req.user.userType !== 'Superadmin' && req.user.branchId
           ? req.user.branchId

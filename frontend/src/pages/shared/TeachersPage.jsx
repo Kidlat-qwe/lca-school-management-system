@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useSearchParams } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
@@ -10,12 +11,17 @@ import { appAlert } from '../../utils/appAlert';
 /**
  * Teachers management — list teachers with assigned classes and class turnover.
  * Used by Superadmin and Branch Admin under Manage Users.
+ *
+ * Deep-link from Personnel Inactive flow:
+ *   /superadmin/teachers?tab=turnover&turnoverTeacherId=<id>
+ *   /admin/teachers?tab=turnover&turnoverTeacherId=<id>
  */
 const TeachersPage = () => {
   const { userInfo } = useAuth();
   const userType = userInfo?.userType || userInfo?.user_type;
   const isSuperadmin = userType === 'Superadmin';
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const MAX_VISIBLE_CLASSES = 2;
 
@@ -37,6 +43,7 @@ const TeachersPage = () => {
   const [turnoverTeacher, setTurnoverTeacher] = useState(null);
   const [classTeacherMap, setClassTeacherMap] = useState({});
   const [availableTeachersByClass, setAvailableTeachersByClass] = useState({});
+  const [conflictReasonsByClass, setConflictReasonsByClass] = useState({});
   const [selectedClassIds, setSelectedClassIds] = useState([]);
   const [turnoverOptionsLoading, setTurnoverOptionsLoading] = useState(false);
   const [turnoverLoading, setTurnoverLoading] = useState(false);
@@ -50,7 +57,9 @@ const TeachersPage = () => {
   const [historyError, setHistoryError] = useState('');
 
   /** 'teachers' = Personnel-like directory; 'turnover' = assigned classes + turnover actions */
-  const [activeTab, setActiveTab] = useState('teachers');
+  const initialTab = searchParams.get('tab') === 'turnover' ? 'turnover' : 'teachers';
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const autoOpenedTurnoverRef = useRef(false);
 
   const branchQuery = useMemo(() => {
     if (!isSuperadmin) return null;
@@ -178,6 +187,7 @@ const TeachersPage = () => {
     setSelectedClassIds([]);
     setClassTeacherMap({});
     setAvailableTeachersByClass({});
+    setConflictReasonsByClass({});
     setTurnoverError('');
     setClassFit([]);
     setPreviewLoading(false);
@@ -193,15 +203,28 @@ const TeachersPage = () => {
         ? optionRes.data.class_options
         : [];
       const byClass = {};
+      const conflictReasonsByClass = {};
       const defaults = {};
       for (const row of classOptions) {
         const available = Array.isArray(row.available_teachers) ? row.available_teachers : [];
+        const conflicts = Array.isArray(row.conflict_teachers) ? row.conflict_teachers : [];
         byClass[row.class_id] = available;
+        conflictReasonsByClass[row.class_id] = conflicts.flatMap((t) => {
+          const name = t.full_name || 'Teacher';
+          const msgs = Array.isArray(t.conflicts) ? t.conflicts : [];
+          if (msgs.length === 0) {
+            return [{ message: `${name} has a schedule conflict with this class.` }];
+          }
+          return msgs.map((c) => ({
+            message: c.message || `${name}: ${c.day || 'Schedule'} conflict`,
+          }));
+        });
         if (available.length > 0) {
           defaults[row.class_id] = available[0].user_id;
         }
       }
       setAvailableTeachersByClass(byClass);
+      setConflictReasonsByClass(conflictReasonsByClass);
       setClassTeacherMap(defaults);
     } catch (err) {
       setTurnoverError(err.message || 'Failed to load destination teachers');
@@ -210,11 +233,54 @@ const TeachersPage = () => {
     }
   };
 
+  // Deep-link: ?tab=turnover&turnoverTeacherId=123 opens Turnover tab + modal
+  useEffect(() => {
+    if (loading || autoOpenedTurnoverRef.current) return;
+    const tab = searchParams.get('tab');
+    const rawId = searchParams.get('turnoverTeacherId');
+    const teacherId = rawId != null ? Number(rawId) : NaN;
+    if (tab !== 'turnover' || !Number.isFinite(teacherId)) return;
+
+    setActiveTab('turnover');
+    const match = teachers.find((t) => Number(t.user_id) === teacherId);
+    if (!match) {
+      // Teacher may be on another page of results — fetch that teacher alone via classes endpoint
+      (async () => {
+        try {
+          const res = await apiRequest(`/teachers/${teacherId}/classes`);
+          const teacher = res?.data?.teacher;
+          const classes = Array.isArray(res?.data?.classes)
+            ? res.data.classes.filter((c) => String(c.status || 'Active') === 'Active')
+            : [];
+          if (!teacher) {
+            setTurnoverError('Teacher not found for turnover.');
+            return;
+          }
+          autoOpenedTurnoverRef.current = true;
+          await openTurnover({ ...teacher, classes });
+          const next = new URLSearchParams(searchParams);
+          next.delete('turnoverTeacherId');
+          setSearchParams(next, { replace: true });
+        } catch (err) {
+          setTurnoverError(err.message || 'Failed to open turnover for this teacher.');
+        }
+      })();
+      return;
+    }
+
+    autoOpenedTurnoverRef.current = true;
+    openTurnover(match);
+    const next = new URLSearchParams(searchParams);
+    next.delete('turnoverTeacherId');
+    setSearchParams(next, { replace: true });
+  }, [loading, teachers, searchParams, setSearchParams]);
+
   const closeTurnover = () => {
     if (turnoverLoading) return;
     setTurnoverTeacher(null);
     setClassTeacherMap({});
     setAvailableTeachersByClass({});
+    setConflictReasonsByClass({});
     setSelectedClassIds([]);
     setClassFit([]);
     setPreviewLoading(false);
@@ -1034,20 +1100,39 @@ const TeachersPage = () => {
                                     </select>
                                   </div>
                                 ) : null}
-                                {isConflict && (fit?.conflicts || []).length > 0 ? (
+                                {isConflict ? (
                                   <div className="mt-2 rounded-lg border border-red-200 bg-white/70 px-2.5 py-2">
                                     <p className="text-[11px] font-semibold uppercase tracking-wide text-red-700 mb-1">
                                       Why it conflicts
                                     </p>
                                     <ul className="space-y-1 text-xs text-red-800">
-                                      {fit.conflicts.map((c, idx) => (
-                                        <li key={`${cls.class_id}-${idx}`} className="flex gap-1.5">
-                                          <span className="shrink-0 text-red-500">•</span>
-                                          <span>
-                                            {c.message || `${c.day || 'Schedule'} conflict`}
-                                          </span>
-                                        </li>
-                                      ))}
+                                      {(() => {
+                                        const previewMsgs = (fit?.conflicts || []).filter(
+                                          (c) =>
+                                            c.message !==
+                                            'No destination teacher selected for this class.'
+                                        );
+                                        const optionMsgs = conflictReasonsByClass[cls.class_id] || [];
+                                        const msgs =
+                                          previewMsgs.length > 0
+                                            ? previewMsgs
+                                            : optionMsgs.length > 0
+                                              ? optionMsgs
+                                              : [
+                                                  {
+                                                    message:
+                                                      'No destination teacher selected for this class.',
+                                                  },
+                                                ];
+                                        return msgs.map((c, idx) => (
+                                          <li key={`${cls.class_id}-${idx}`} className="flex gap-1.5">
+                                            <span className="shrink-0 text-red-500">•</span>
+                                            <span>
+                                              {c.message || `${c.day || 'Schedule'} conflict`}
+                                            </span>
+                                          </li>
+                                        ));
+                                      })()}
                                     </ul>
                                   </div>
                                 ) : null}
@@ -1203,9 +1288,11 @@ const TeachersPage = () => {
                                 className={`inline-flex px-2 py-0.5 rounded-full text-[11px] font-semibold ${
                                   row.is_turnover
                                     ? 'bg-amber-100 text-amber-900'
-                                    : row.is_active
-                                      ? 'bg-green-100 text-green-800'
-                                      : 'bg-gray-100 text-gray-700'
+                                    : row.is_archived || row.period_label === 'Archived'
+                                      ? 'bg-slate-200 text-slate-800'
+                                      : row.is_active
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-700'
                                 }`}
                               >
                                 {row.period_label}
@@ -1239,6 +1326,10 @@ const TeachersPage = () => {
                                   <span className="font-medium text-gray-900">
                                     {row.turned_over_to_name}
                                   </span>
+                                </span>
+                              ) : row.is_archived || row.period_label === 'Archived' ? (
+                                <span className="text-slate-600">
+                                  Class archived (removed from Classes list)
                                 </span>
                               ) : row.is_active ? (
                                 <span className="text-green-700">Currently assigned</span>

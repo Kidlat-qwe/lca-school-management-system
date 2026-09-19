@@ -12,7 +12,7 @@ Service: `classLifecycleService.js`
 | **Archive** | Soft-delete: set `archived_at`, `archived_by`, `archive_purge_after` (+30 days). Ended classes are finalized first. Non-ended classes block if they still have active enrollments / reservations / active profiles |
 | **Restore** | Clears archive fields; keeps **Inactive** if end date already passed |
 | **Permanent delete** | FK-safe cleanup (reservations, null profile `class_id`, enrollments, schedules, sessions, teachers, then class row). Only for archived classes (or cron purge) |
-| **Purge cron** | Permanently deletes where `archive_purge_after <= today` |
+| **Purge** | Permanently deletes where `archive_purge_after <= today` (days left = 0). Runs automatically on `GET /classes/archived`, and on demand via `POST /classes/purge-archived` |
 
 ## API (via `routes/classes.js`)
 

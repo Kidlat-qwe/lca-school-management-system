@@ -49,9 +49,26 @@ router.get(
       // Build SELECT with last_login formatted in Philippines timezone if column exists
       // Since last_login is stored as timestamp without time zone in Philippines time,
       // we format it directly (it's already in Philippines timezone)
+      // status / substitute_teacher_id may be missing on older DBs before migration 150
+      let hasStatusColumn = false;
+      try {
+        const statusColCheck = await query(
+          `SELECT column_name FROM information_schema.columns
+           WHERE table_name = 'userstbl' AND column_name = 'status'`
+        );
+        hasStatusColumn = statusColCheck.rows.length > 0;
+      } catch (checkError) {
+        console.warn('Could not check for status column:', checkError);
+      }
+
+      const statusSelect = hasStatusColumn
+        ? `COALESCE(status, 'Active') AS status, substitute_teacher_id`
+        : `'Active' AS status, NULL::integer AS substitute_teacher_id`;
+
       let sql = hasLastLoginColumn
         ? `SELECT user_id, email, full_name, nickname, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
+                  ${statusSelect},
                   CASE 
                     WHEN last_login IS NOT NULL 
                     THEN TO_CHAR(last_login, 'YYYY-MM-DD HH24:MI:SS')
@@ -60,6 +77,7 @@ router.get(
            FROM userstbl WHERE 1=1`
         : `SELECT user_id, email, full_name, nickname, user_type, gender, date_of_birth, phone_number, lrn,
                   branch_id, level_tag, profile_picture_url, firebase_uid,
+                  ${statusSelect},
                   NULL as last_login
            FROM userstbl WHERE 1=1`;
       const params = [];
@@ -325,6 +343,11 @@ router.put(
     optionalNicknameValidator,
     body('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     body('gender').optional().isIn(['Male', 'Female', 'Other']).withMessage('Invalid gender'),
+    body('status').optional().isIn(['Active', 'Inactive', 'Suspended']).withMessage('Invalid status'),
+    body('substitute_teacher_id')
+      .optional({ nullable: true })
+      .custom((value) => value === null || value === undefined || value === '' || Number.isInteger(Number(value)))
+      .withMessage('Substitute teacher ID must be an integer or null'),
     body('phone_number')
       .optional()
       .custom((value) => value === null || value === undefined || typeof value === 'string')
@@ -350,6 +373,8 @@ router.put(
         profile_picture_url,
         email,
         lrn,
+        status,
+        substitute_teacher_id,
       } = req.body;
 
       // Check if user exists
@@ -402,6 +427,12 @@ router.put(
             message: 'Access denied. You cannot change your level tag.',
           });
         }
+        if (status !== undefined || substitute_teacher_id !== undefined) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. You cannot change account status or substitute teacher.',
+          });
+        }
       }
 
       // Check if email is being updated and if it already exists
@@ -412,6 +443,111 @@ router.put(
             success: false,
             message: 'A user with this email already exists',
           });
+        }
+      }
+
+      // Resolve status / substitute assignment (admin only; columns from migration 150)
+      let resolvedStatus = status;
+      let resolvedSubstituteId = undefined;
+      if (status !== undefined || substitute_teacher_id !== undefined) {
+        if (!isAdmin) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied. Only administrators can change account status.',
+          });
+        }
+
+        const nextStatus =
+          status !== undefined
+            ? status
+            : (existingUser.rows[0].status || 'Active');
+
+        if (nextStatus === 'Suspended') {
+          const isTeacher =
+            (user_type !== undefined ? user_type : existingUser.rows[0].user_type) === 'Teacher';
+
+          if (isTeacher) {
+            const rawSub =
+              substitute_teacher_id !== undefined
+                ? substitute_teacher_id
+                : existingUser.rows[0].substitute_teacher_id;
+            if (rawSub === null || rawSub === undefined || rawSub === '') {
+              return res.status(400).json({
+                success: false,
+                message: 'A substitute teacher is required when status is Suspended.',
+              });
+            }
+            const subId = parseInt(rawSub, 10);
+            if (!Number.isInteger(subId) || subId === parseInt(id, 10)) {
+              return res.status(400).json({
+                success: false,
+                message: 'Invalid substitute teacher.',
+              });
+            }
+            const subCheck = await query(
+              `SELECT user_id FROM userstbl
+               WHERE user_id = $1 AND user_type = 'Teacher'
+                 AND COALESCE(status, 'Active') = 'Active'`,
+              [subId]
+            );
+            if (subCheck.rows.length === 0) {
+              return res.status(400).json({
+                success: false,
+                message: 'Substitute teacher must be an active Teacher account.',
+              });
+            }
+            resolvedStatus = nextStatus;
+            resolvedSubstituteId = subId;
+          } else {
+            resolvedStatus = nextStatus;
+            resolvedSubstituteId = null;
+          }
+        } else if (nextStatus === 'Inactive') {
+          const isTeacher =
+            (user_type !== undefined ? user_type : existingUser.rows[0].user_type) === 'Teacher';
+
+          if (isTeacher) {
+            // Inactive = no longer teaching. Require Class Turnover first (not a substitute).
+            const activeClasses = await query(
+              `SELECT DISTINCT c.class_id, c.class_name
+               FROM classestbl c
+               LEFT JOIN classteacherstbl ct
+                 ON ct.class_id = c.class_id AND ct.teacher_id = $1
+               WHERE (ct.teacher_id = $1 OR c.teacher_id = $1)
+                 AND COALESCE(c.status, 'Active') = 'Active'
+                 AND c.archived_at IS NULL
+               ORDER BY c.class_name`,
+              [id]
+            );
+            if (activeClasses.rows.length > 0) {
+              const names = activeClasses.rows
+                .slice(0, 5)
+                .map((r) => r.class_name)
+                .join(', ');
+              const more =
+                activeClasses.rows.length > 5
+                  ? ` (+${activeClasses.rows.length - 5} more)`
+                  : '';
+              return res.status(400).json({
+                success: false,
+                message:
+                  `Cannot set this teacher to Inactive while they still have ${activeClasses.rows.length} active class(es). ` +
+                  `Turn over all active classes first (Teachers → Turnover class), then set Inactive. ` +
+                  `Active classes: ${names}${more}.`,
+                code: 'TEACHER_HAS_ACTIVE_CLASSES',
+                data: {
+                  active_class_count: activeClasses.rows.length,
+                  active_classes: activeClasses.rows,
+                },
+              });
+            }
+          }
+
+          resolvedStatus = nextStatus;
+          resolvedSubstituteId = null;
+        } else {
+          resolvedStatus = nextStatus;
+          resolvedSubstituteId = null;
         }
       }
 
@@ -459,6 +595,17 @@ router.put(
         }
       });
 
+      if (resolvedStatus !== undefined) {
+        paramCount++;
+        updates.push(`status = $${paramCount}`);
+        params.push(resolvedStatus);
+      }
+      if (resolvedSubstituteId !== undefined) {
+        paramCount++;
+        updates.push(`substitute_teacher_id = $${paramCount}`);
+        params.push(resolvedSubstituteId);
+      }
+
       if (updates.length === 0) {
         return res.status(400).json({
           success: false,
@@ -486,6 +633,13 @@ router.put(
             message: 'A user with this email already exists',
           });
         }
+      }
+      // Missing status column (migration 150 not applied yet)
+      if (error.code === '42703') {
+        return res.status(500).json({
+          success: false,
+          message: 'Personnel status columns are missing. Please run migration 150_add_status_to_userstbl.sql.',
+        });
       }
       next(error);
     }

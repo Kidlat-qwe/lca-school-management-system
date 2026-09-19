@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
@@ -10,7 +11,8 @@ import useDebouncedValue from '../../hooks/useDebouncedValue';
 import { appAlert, appConfirm } from '../../utils/appAlert';
 
 const Personnel = () => {
-  const { signup } = useAuth();
+  const { signup, userInfo } = useAuth();
+  const navigate = useNavigate();
   const { selectedBranchId: globalBranchId } = useGlobalBranchFilter();
   const [personnel, setPersonnel] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,6 +51,8 @@ const Personnel = () => {
     phone_number: '',
     branch_id: '',
     level_tag: '',
+    status: 'Active',
+    substitute_teacher_id: '',
     // Guardian fields
     guardian_name: '',
     guardian_email: '',
@@ -64,6 +68,10 @@ const Personnel = () => {
   const [existingGuardian, setExistingGuardian] = useState(null);
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+  const [availableSubstitutes, setAvailableSubstitutes] = useState([]);
+  const [loadingSubstitutes, setLoadingSubstitutes] = useState(false);
+  const [activeAssignedClasses, setActiveAssignedClasses] = useState([]);
+  const [loadingActiveClasses, setLoadingActiveClasses] = useState(false);
   const isAllBranchesRole =
     formData.user_type === 'Superadmin' ||
     (formData.user_type === 'Finance' &&
@@ -222,6 +230,8 @@ const Personnel = () => {
     setSelectedBranch(null);
     setIsSuperAccount(false);
     setExistingGuardian(null);
+    setAvailableSubstitutes([]);
+    setActiveAssignedClasses([]);
     setFormData({
       full_name: '',
       nickname: '',
@@ -231,6 +241,8 @@ const Personnel = () => {
       phone_number: '',
       branch_id: '',
       level_tag: '',
+      status: 'Active',
+      substitute_teacher_id: '',
       // Guardian fields
       guardian_name: '',
       guardian_email: '',
@@ -259,13 +271,62 @@ const Personnel = () => {
     }));
   };
 
+  const goToTeacherTurnover = () => {
+    if (!editingPersonnel?.user_id) return;
+    const userType = userInfo?.userType || userInfo?.user_type;
+    const base = userType === 'Admin' ? '/admin/teachers' : '/superadmin/teachers';
+    const teacherId = editingPersonnel.user_id;
+    closeModal();
+    navigate(`${base}?tab=turnover&turnoverTeacherId=${teacherId}`);
+  };
+
+  const fetchAvailableSubstitutes = async (teacherId) => {
+    if (!teacherId) {
+      setAvailableSubstitutes([]);
+      return;
+    }
+    setLoadingSubstitutes(true);
+    try {
+      const response = await apiRequest(`/teachers/${teacherId}/available-substitutes`);
+      setAvailableSubstitutes(response.data?.substitutes || []);
+    } catch (err) {
+      console.error('Error fetching available substitutes:', err);
+      setAvailableSubstitutes([]);
+    } finally {
+      setLoadingSubstitutes(false);
+    }
+  };
+
+  const fetchActiveAssignedClasses = async (teacherId) => {
+    if (!teacherId) {
+      setActiveAssignedClasses([]);
+      return;
+    }
+    setLoadingActiveClasses(true);
+    try {
+      const response = await apiRequest(`/teachers/${teacherId}/classes`);
+      const classes = Array.isArray(response.data?.classes) ? response.data.classes : [];
+      setActiveAssignedClasses(
+        classes.filter((c) => String(c.status || 'Active') === 'Active')
+      );
+    } catch (err) {
+      console.error('Error fetching teacher classes:', err);
+      setActiveAssignedClasses([]);
+    } finally {
+      setLoadingActiveClasses(false);
+    }
+  };
+
   const openEditModal = async (person) => {
     setOpenMenuId(null);
     setEditingPersonnel(person);
     setError('');
     setModalStep('form');
     setSelectedBranch(branches.find(b => b.branch_id === person.branch_id) || null);
-    
+    setAvailableSubstitutes([]);
+    setActiveAssignedClasses([]);
+
+    const personStatus = person.status || 'Active';
     setFormData({
       full_name: person.full_name || '',
       nickname: person.nickname || '',
@@ -275,6 +336,10 @@ const Personnel = () => {
       phone_number: person.phone_number || '',
       branch_id: person.branch_id ? person.branch_id.toString() : '',
       level_tag: person.level_tag || '',
+      status: personStatus,
+      substitute_teacher_id: person.substitute_teacher_id
+        ? String(person.substitute_teacher_id)
+        : '',
       // Guardian fields - will be populated after fetching
       guardian_name: '',
       guardian_email: '',
@@ -289,6 +354,16 @@ const Personnel = () => {
     });
     setFormErrors({});
     setIsModalOpen(true);
+
+    if (person.user_type === 'Teacher') {
+      if (personStatus === 'Suspended') {
+        fetchAvailableSubstitutes(person.user_id);
+      }
+      if (personStatus === 'Inactive' || personStatus === 'Active') {
+        // Prefetch so switching to Inactive shows turnover guidance immediately
+        fetchActiveAssignedClasses(person.user_id);
+      }
+    }
 
     // Fetch guardian data if user is a student
     if (person.user_type === 'Student') {
@@ -324,6 +399,8 @@ const Personnel = () => {
     setModalStep('branch-selection');
     setSelectedBranch(null);
     setExistingGuardian(null);
+    setAvailableSubstitutes([]);
+    setActiveAssignedClasses([]);
     setFormErrors({});
   };
 
@@ -349,6 +426,7 @@ const Personnel = () => {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+
     setFormData((prev) => {
       const updated = {
         ...prev,
@@ -382,9 +460,45 @@ const Personnel = () => {
         if (!editingPersonnel && getDefaultPasswordForUserType(value)) {
           updated.password = getDefaultPasswordForUserType(value);
         }
+        if (value !== 'Teacher' || updated.status !== 'Suspended') {
+          updated.substitute_teacher_id = '';
+        }
       }
+
+      if (name === 'status' && value !== 'Suspended') {
+        updated.substitute_teacher_id = '';
+      }
+
       return updated;
     });
+
+    // Side effects outside the state updater
+    if (name === 'status') {
+      if (value !== 'Suspended') {
+        setAvailableSubstitutes([]);
+      } else if (editingPersonnel?.user_id && formData.user_type === 'Teacher') {
+        fetchAvailableSubstitutes(editingPersonnel.user_id);
+      }
+      if (value === 'Inactive' && editingPersonnel?.user_id && formData.user_type === 'Teacher') {
+        fetchActiveAssignedClasses(editingPersonnel.user_id);
+      }
+      if (value !== 'Inactive') {
+        // Keep cached list; no need to clear — useful if they toggle back
+      }
+    }
+    if (name === 'user_type') {
+      if (value !== 'Teacher' || formData.status !== 'Suspended') {
+        setAvailableSubstitutes([]);
+      } else if (editingPersonnel?.user_id) {
+        fetchAvailableSubstitutes(editingPersonnel.user_id);
+      }
+      if (value === 'Teacher' && formData.status === 'Inactive' && editingPersonnel?.user_id) {
+        fetchActiveAssignedClasses(editingPersonnel.user_id);
+      } else if (value !== 'Teacher') {
+        setActiveAssignedClasses([]);
+      }
+    }
+
     // Clear error for this field
     if (formErrors[name]) {
       setFormErrors((prev) => {
@@ -431,6 +545,25 @@ const Personnel = () => {
       errors.guardian_email = 'Please enter a valid guardian email address';
     }
 
+    if (
+      editingPersonnel &&
+      formData.status === 'Suspended' &&
+      formData.user_type === 'Teacher' &&
+      !formData.substitute_teacher_id
+    ) {
+      errors.substitute_teacher_id = 'Please select a substitute teacher';
+    }
+
+    if (
+      editingPersonnel &&
+      formData.status === 'Inactive' &&
+      formData.user_type === 'Teacher' &&
+      activeAssignedClasses.length > 0
+    ) {
+      errors.status =
+        `Turn over ${activeAssignedClasses.length} active class(es) first (use “Open Turnover class”), then set Inactive.`;
+    }
+
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -470,6 +603,15 @@ const Personnel = () => {
         payload.level_tag = formData.level_tag && formData.level_tag.trim() 
           ? formData.level_tag.trim() 
           : null;
+
+        payload.status = formData.status || 'Active';
+        if (payload.status === 'Suspended' && formData.user_type === 'Teacher') {
+          payload.substitute_teacher_id = formData.substitute_teacher_id
+            ? parseInt(formData.substitute_teacher_id, 10)
+            : null;
+        } else {
+          payload.substitute_teacher_id = null;
+        }
         
         console.log('??? Updating user payload:', payload);
         console.log('??? User ID:', editingPersonnel.user_id);
@@ -923,9 +1065,11 @@ const Personnel = () => {
                     <td className="px-3 py-4">
                       <span
                         className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                          person.status === 'Active' || !person.status
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-gray-100 text-gray-800'
+                          person.status === 'Suspended'
+                            ? 'bg-amber-100 text-amber-800'
+                            : person.status === 'Inactive'
+                            ? 'bg-gray-100 text-gray-800'
+                            : 'bg-green-100 text-green-800'
                         }`}
                       >
                         {person.status || 'Active'}
@@ -1438,6 +1582,128 @@ const formattedDate = formatDateManila(date);
                             className="input-field bg-gray-50 cursor-not-allowed"
                           />
                           <p className="mt-1 text-xs text-gray-500">Super accounts have access to all branches</p>
+                        </div>
+                      )}
+
+                      {editingPersonnel && (
+                        <div>
+                          <label htmlFor="status" className="label-field">
+                            Status <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            id="status"
+                            name="status"
+                            value={formData.status || 'Active'}
+                            onChange={handleInputChange}
+                            className={`input-field ${formErrors.status ? 'border-red-500' : ''}`}
+                            required
+                          >
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                            <option value="Suspended">Suspended</option>
+                          </select>
+                          {formErrors.status && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.status}</p>
+                          )}
+                          {formData.user_type === 'Teacher' && formData.status === 'Inactive' && (
+                            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                              {loadingActiveClasses ? (
+                                <p>Checking active class assignments…</p>
+                              ) : activeAssignedClasses.length > 0 ? (
+                                <>
+                                  <p className="font-semibold">
+                                    Cannot set Inactive yet — {activeAssignedClasses.length} active
+                                    class{activeAssignedClasses.length === 1 ? '' : 'es'} still
+                                    assigned.
+                                  </p>
+                                  <p className="mt-1">
+                                    Turn over all active classes first. Do not assign a substitute for
+                                    Inactive.
+                                  </p>
+                                  <ul className="mt-1 list-disc pl-4">
+                                    {activeAssignedClasses.slice(0, 5).map((c) => (
+                                      <li key={c.class_id}>{c.class_name}</li>
+                                    ))}
+                                    {activeAssignedClasses.length > 5 ? (
+                                      <li>+{activeAssignedClasses.length - 5} more</li>
+                                    ) : null}
+                                  </ul>
+                                  <button
+                                    type="button"
+                                    onClick={goToTeacherTurnover}
+                                    className="mt-2 inline-flex items-center justify-center rounded-lg bg-[#F7C844] px-3 py-1.5 text-xs font-semibold text-gray-900 hover:bg-[#F5B82E]"
+                                  >
+                                    Open Turnover class
+                                  </button>
+                                </>
+                              ) : (
+                                <p>
+                                  No active classes assigned. You can set this teacher to Inactive.
+                                  They will not be able to sign in.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {formData.user_type === 'Teacher' && formData.status === 'Suspended' && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              Suspended is for temporary leave. Assign a substitute teacher below.
+                              Class ownership stays until you turn over classes.
+                            </p>
+                          )}
+                        </div>
+                      )}
+
+                      {editingPersonnel &&
+                        formData.status === 'Suspended' &&
+                        formData.user_type === 'Teacher' && (
+                        <div>
+                          <label htmlFor="substitute_teacher_id" className="label-field">
+                            Substitute Teacher <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            id="substitute_teacher_id"
+                            name="substitute_teacher_id"
+                            value={formData.substitute_teacher_id}
+                            onChange={handleInputChange}
+                            className={`input-field ${formErrors.substitute_teacher_id ? 'border-red-500' : ''}`}
+                            required
+                            disabled={loadingSubstitutes}
+                          >
+                            <option value="">
+                              {loadingSubstitutes
+                                ? 'Loading available teachers...'
+                                : 'Select substitute teacher...'}
+                            </option>
+                            {availableSubstitutes.map((teacher) => (
+                              <option key={teacher.user_id} value={teacher.user_id}>
+                                {teacher.full_name}
+                                {teacher.email ? ` (${teacher.email})` : ''}
+                              </option>
+                            ))}
+                            {/* Keep currently assigned sub visible even if not in conflict-free list */}
+                            {formData.substitute_teacher_id &&
+                              !availableSubstitutes.some(
+                                (t) => String(t.user_id) === String(formData.substitute_teacher_id)
+                              ) &&
+                              editingPersonnel?.substitute_teacher_id &&
+                              String(editingPersonnel.substitute_teacher_id) ===
+                                String(formData.substitute_teacher_id) && (
+                                <option value={formData.substitute_teacher_id}>
+                                  Current substitute (ID {formData.substitute_teacher_id})
+                                </option>
+                              )}
+                          </select>
+                          {formErrors.substitute_teacher_id && (
+                            <p className="mt-1 text-sm text-red-600">{formErrors.substitute_teacher_id}</p>
+                          )}
+                          {!loadingSubstitutes && availableSubstitutes.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-600">
+                              No conflict-free teachers available for this teacher&apos;s schedule.
+                            </p>
+                          )}
+                          <p className="mt-1 text-xs text-gray-500">
+                            Only teachers with no schedule conflict against this teacher&apos;s active classes are listed.
+                          </p>
                         </div>
                       )}
 

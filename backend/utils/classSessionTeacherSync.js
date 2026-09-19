@@ -1,6 +1,10 @@
 /**
  * Keeps classsessionstbl teacher fields aligned with the class primary teacher.
  * Skips sessions that have an active substitute assignment.
+ *
+ * Important: Class Turnover must call this after updating classestbl / classteacherstbl.
+ * Otherwise outgoing teachers keep stale original_teacher_id / assigned_teacher_id on
+ * sessions and appear "busy" in schedule-conflict checks even with no active classes.
  */
 
 /**

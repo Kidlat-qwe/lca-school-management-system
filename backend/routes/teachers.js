@@ -7,6 +7,7 @@ import { verifyFirebaseToken, requireRole } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
 import { checkTeacherScheduleConflict } from '../utils/scheduleConflict.js';
+import { syncClassSessionTeachersFromClass } from '../utils/classSessionTeacherSync.js';
 
 const router = express.Router();
 
@@ -48,7 +49,8 @@ async function backfillOpenHistoryForTeacher(teacherId, db = { query }) {
      FROM classestbl c
      LEFT JOIN classteacherstbl ct
        ON ct.class_id = c.class_id AND ct.teacher_id = $1
-     WHERE ct.teacher_id = $1 OR c.teacher_id = $1`,
+     WHERE (ct.teacher_id = $1 OR c.teacher_id = $1)
+       AND c.archived_at IS NULL`,
     [teacherId]
   );
 
@@ -163,6 +165,7 @@ async function loadAssignedClasses(teacherId, { activeOnly = true } = {}) {
      LEFT JOIN branchestbl b ON b.branch_id = c.branch_id
      LEFT JOIN classteacherstbl ct ON ct.class_id = c.class_id AND ct.teacher_id = $1
      WHERE (ct.teacher_id = $1 OR c.teacher_id = $1)
+       AND c.archived_at IS NULL
        ${statusFilter}
      ORDER BY c.class_name`,
     [teacherId]
@@ -410,6 +413,7 @@ router.get(
           WHERE (ct.teacher_id = u.user_id OR c.teacher_id = u.user_id)
             AND c.program_id = $${params.length}
             AND COALESCE(c.status, 'Active') = 'Active'
+            AND c.archived_at IS NULL
         )`;
       }
 
@@ -492,6 +496,95 @@ router.get(
 );
 
 /**
+ * GET /teachers/:id/available-substitutes
+ * Teachers in the same branch with no schedule conflicts against the source teacher's active classes.
+ * Used by Edit Personnel when setting status to Suspended.
+ */
+router.get(
+  '/:id/available-substitutes',
+  requireRole('Superadmin', 'Admin'),
+  [param('id').isInt().withMessage('Teacher ID must be an integer'), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const teacher = await loadTeacherOr404(req.params.id);
+      if (!teacher) {
+        return res.status(404).json({ success: false, message: 'Teacher not found' });
+      }
+      if (
+        req.user.userType === 'Admin' &&
+        req.user.branchId &&
+        teacher.branch_id !== req.user.branchId
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+
+      const activeClasses = await loadAssignedClasses(teacher.user_id, { activeOnly: true });
+      const candidates = await loadCandidateDestinationTeachers(req, teacher);
+
+      // Batch-load Active status for candidates (status column from migration 150)
+      const candidateIds = candidates.map((c) => c.user_id);
+      const activeIdSet = new Set(candidateIds);
+      if (candidateIds.length > 0) {
+        try {
+          const statusRes = await query(
+            `SELECT user_id FROM userstbl
+             WHERE user_id = ANY($1::int[])
+               AND COALESCE(status, 'Active') = 'Active'`,
+            [candidateIds]
+          );
+          activeIdSet.clear();
+          for (const row of statusRes.rows) {
+            activeIdSet.add(row.user_id);
+          }
+        } catch {
+          // Column may not exist yet; treat all candidates as Active
+        }
+      }
+
+      const available = [];
+      for (const candidate of candidates) {
+        if (!activeIdSet.has(candidate.user_id)) continue;
+
+        let allOk = true;
+        for (const cls of activeClasses) {
+          const fit = await evaluateClassForTurnover(cls, candidate.user_id);
+          if (fit.status !== 'ok' && fit.status !== 'already_assigned') {
+            allOk = false;
+            break;
+          }
+        }
+
+        if (allOk) {
+          available.push({
+            user_id: candidate.user_id,
+            full_name: candidate.full_name,
+            email: candidate.email,
+            branch_id: candidate.branch_id,
+            class_count: activeClasses.length,
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        data: {
+          teacher: {
+            user_id: teacher.user_id,
+            full_name: teacher.full_name,
+            email: teacher.email,
+            branch_id: teacher.branch_id,
+          },
+          active_class_count: activeClasses.length,
+          substitutes: available,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/**
  * GET /teachers/:id/class-history
  * View-only assignment history for a teacher (current + past, including turnovers).
  */
@@ -526,6 +619,19 @@ router.get(
         [teacher.user_id]
       );
 
+      // Close open history for archived classes (should not appear as Currently assigned)
+      await query(
+        `UPDATE teacher_class_historytbl h
+         SET ended_at = GREATEST(h.assigned_at, ${MANILA_NOW_SQL}),
+             end_reason = COALESCE(NULLIF(h.end_reason, ''), 'archived')
+         FROM classestbl c
+         WHERE h.class_id = c.class_id
+           AND h.teacher_id = $1
+           AND h.ended_at IS NULL
+           AND c.archived_at IS NOT NULL`,
+        [teacher.user_id]
+      );
+
       const historyRes = await query(
         `SELECT
            h.history_id,
@@ -541,6 +647,7 @@ router.get(
            c.class_name,
            c.level_tag,
            c.status AS class_status,
+           TO_CHAR(c.archived_at AT TIME ZONE 'Asia/Manila', 'YYYY-MM-DD') AS archived_ymd,
            TO_CHAR(c.start_date, 'YYYY-MM-DD') AS class_start_date,
            TO_CHAR(c.end_date, 'YYYY-MM-DD') AS class_end_date,
            p.program_name,
@@ -562,7 +669,9 @@ router.get(
 
       const rows = historyRes.rows.map((row) => {
         const isTurnover = row.end_reason === 'turnover';
-        const isOpen = row.ended_ymd == null;
+        const isArchived =
+          row.end_reason === 'archived' || row.archived_ymd != null;
+        const isOpen = row.ended_ymd == null && !isArchived;
         const classEnded =
           row.class_end_date != null && String(row.class_end_date) < todayYmd;
 
@@ -577,6 +686,9 @@ router.get(
               ? period_start
               : row.ended_ymd;
           period_label = 'Turned over';
+        } else if (isArchived) {
+          period_end = row.ended_ymd || row.archived_ymd || row.class_end_date;
+          period_label = 'Archived';
         } else if (!isOpen) {
           period_end = row.ended_ymd || row.class_end_date;
           period_label =
@@ -606,7 +718,8 @@ router.get(
           ended_at_display: row.ended_at_display,
           end_reason: row.end_reason,
           is_turnover: isTurnover,
-          is_active: isOpen && !classEnded,
+          is_archived: isArchived,
+          is_active: isOpen && !classEnded && !isArchived,
           turned_over_to_teacher_id: row.turned_over_to_teacher_id,
           turned_over_to_name: row.turned_over_to_name,
           period_start,
@@ -1019,6 +1132,10 @@ router.post(
            WHERE class_id = $2 AND teacher_id = $3`,
           [destinationId, cls.class_id, fromTeacherId]
         );
+
+        // Keep session teacher fields aligned (prevents stale original/assigned IDs
+        // from blocking future turnovers for the outgoing teacher).
+        await syncClassSessionTeachersFromClass(client, cls.class_id, destinationId);
 
         transferred.push({
           class_id: cls.class_id,

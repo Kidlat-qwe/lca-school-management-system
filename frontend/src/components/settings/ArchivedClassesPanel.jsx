@@ -86,7 +86,8 @@ export default function ArchivedClassesPanel({ branchId = null }) {
           <h2 className="text-base font-semibold text-gray-900">Archived Classes</h2>
           <p className="mt-1 text-sm text-gray-500">
             Classes removed from the main list are kept here for 30 days. Restore them, or they are
-            permanently deleted after the purge date.
+            permanently deleted after the purge date. Expired rows (0 days left) are removed
+            automatically when you open or refresh this tab.
           </p>
         </div>
         <button

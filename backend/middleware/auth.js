@@ -9,6 +9,7 @@ import { query } from '../config/database.js';
  * (2) same Firebase project as frontend (psms-b9ca7), (3) server clock is correct. Check server logs for the actual error.
  */
 export const verifyFirebaseToken = async (req, res, next) => {
+  let decodedToken = null;
   try {
     const authHeader = req.headers.authorization;
 
@@ -22,7 +23,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
     const idToken = authHeader.split('Bearer ')[1];
 
     // Verify the token with Firebase
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    decodedToken = await admin.auth().verifyIdToken(idToken);
 
     // Attach user info to request
     req.user = {
@@ -32,13 +33,42 @@ export const verifyFirebaseToken = async (req, res, next) => {
     };
 
     // Fetch user from database to get additional info
-    const userResult = await query(
-      'SELECT user_id, email, full_name, nickname, user_type, branch_id, firebase_uid, profile_picture_url FROM userstbl WHERE firebase_uid = $1',
-      [decodedToken.uid]
-    );
+    let userResult;
+    try {
+      userResult = await query(
+        `SELECT user_id, email, full_name, nickname, user_type, branch_id, firebase_uid,
+                profile_picture_url, COALESCE(status, 'Active') AS status
+         FROM userstbl WHERE firebase_uid = $1`,
+        [decodedToken.uid]
+      );
+    } catch (colErr) {
+      // Older DBs may not have status column yet (migration 150)
+      if (colErr && colErr.code === '42703') {
+        userResult = await query(
+          `SELECT user_id, email, full_name, nickname, user_type, branch_id, firebase_uid,
+                  profile_picture_url, 'Active' AS status
+           FROM userstbl WHERE firebase_uid = $1`,
+          [decodedToken.uid]
+        );
+      } else {
+        throw colErr;
+      }
+    }
 
     if (userResult.rows.length > 0) {
       const dbUser = userResult.rows[0];
+      const accountStatus = String(dbUser.status || 'Active').trim();
+      if (accountStatus === 'Inactive' || accountStatus === 'Suspended') {
+        return res.status(403).json({
+          success: false,
+          message:
+            accountStatus === 'Inactive'
+              ? 'This account is inactive. Please contact an administrator.'
+              : 'This account is suspended. Please contact an administrator.',
+          code: 'ACCOUNT_STATUS_BLOCKED',
+          data: { status: accountStatus },
+        });
+      }
       req.user.userId = dbUser.user_id;
       req.user.user_id = dbUser.user_id;
       req.user.fullName = dbUser.full_name;
@@ -49,6 +79,7 @@ export const verifyFirebaseToken = async (req, res, next) => {
       req.user.branchId = dbUser.branch_id;
       req.user.branch_id = dbUser.branch_id;
       req.user.profile_picture_url = dbUser.profile_picture_url;
+      req.user.status = accountStatus;
     }
 
     next();

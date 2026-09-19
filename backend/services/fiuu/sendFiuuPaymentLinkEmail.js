@@ -10,20 +10,13 @@ import {
 } from '../../utils/emailService.js';
 import {
   DEFAULT_SCHOOL_NAME,
-  getEmailBrandLogoUrl,
+  escapeHtml,
+  wrapBrandedEmailHtml,
 } from '../../utils/templateRenderService.js';
 
 function formatPhp(amount) {
   const n = Number(amount || 0);
   return `PHP ${n.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /**

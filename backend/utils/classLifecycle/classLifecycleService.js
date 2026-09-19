@@ -256,6 +256,18 @@ export async function archiveClass(client, { classId, userId, branchId = null, r
     [userId || null, purgeAfter, cid]
   );
 
+  // Close open teacher history rows so Class history does not keep saying "Currently assigned"
+  await client.query(
+    `UPDATE teacher_class_historytbl
+     SET ended_at = GREATEST(assigned_at, (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Manila')),
+         end_reason = 'archived'
+     WHERE class_id = $1
+       AND ended_at IS NULL`,
+    [cid]
+  ).catch(() => {
+    // Table may not exist on older DBs; ignore
+  });
+
   return updated.rows[0];
 }
 
@@ -369,6 +381,9 @@ export async function permanentlyDeleteClass(
   // 6. Teachers junction
   await client.query(`DELETE FROM classteacherstbl WHERE class_id = $1`, [cid]);
 
+  // 6b. Teacher assignment history (CASCADE should handle this; explicit for clarity)
+  await client.query(`DELETE FROM teacher_class_historytbl WHERE class_id = $1`, [cid]).catch(() => {});
+
   // 7. Class row
   await client.query(`DELETE FROM classestbl WHERE class_id = $1`, [cid]);
 
@@ -445,6 +460,7 @@ export async function purgeExpiredArchivedClasses(getClientFn) {
   }
 
   const purged = [];
+  const errors = [];
   for (const row of dueRows) {
     const client = await getClientFn();
     try {
@@ -457,11 +473,18 @@ export async function purgeExpiredArchivedClasses(getClientFn) {
       purged.push(result);
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
-      throw err;
+      console.error(
+        `Failed to purge archived class_id=${row.class_id}:`,
+        err.message || err
+      );
+      errors.push({
+        class_id: row.class_id,
+        message: err.message || 'Purge failed',
+      });
     } finally {
       client.release();
     }
   }
 
-  return { purged_count: purged.length, purged };
+  return { purged_count: purged.length, purged, errors };
 }
