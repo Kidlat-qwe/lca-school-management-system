@@ -266,7 +266,12 @@ export function isTshirtMerchandiseName(merchandiseName) {
 /** RHET LCA_SHIRT category — plain name "Shirt" (not PE Uniform piece type). */
 export function isLcaShirtMerchandiseName(merchandiseName) {
   if (!merchandiseName) return false;
-  const n = String(merchandiseName).trim().toLowerCase();
+  const n = String(merchandiseName)
+    .trim()
+    .replace(/\s*[-–—]\s*freebies?\s*$/i, '')
+    .replace(/\s+freebies?\s*$/i, '')
+    .trim()
+    .toLowerCase();
   return n === 'shirt' || n === 'lca shirt';
 }
 
@@ -435,7 +440,13 @@ export function isUniformMerchandiseName(merchandiseName) {
   if (isLcaShirtMerchandiseName(merchandiseName)) return true;
   if (isTshirtMerchandiseName(merchandiseName)) return true;
   if (isUniformTopBottomType(merchandiseName)) return true;
-  return String(merchandiseName).toLowerCase().includes('uniform');
+  const n = String(merchandiseName)
+    .trim()
+    .replace(/\s*[-–—]\s*freebies?\s*$/i, '')
+    .replace(/\s+freebies?\s*$/i, '')
+    .trim()
+    .toLowerCase();
+  return n.includes('uniform');
 }
 
 /** Alias: uniforms require Size, Gender, and Piece (type) on the Merchandise form. */

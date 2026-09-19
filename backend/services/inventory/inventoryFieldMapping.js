@@ -54,7 +54,11 @@ export const UNIFORM_CATEGORY_KINDS = Object.freeze([
 ]);
 
 export const LEARNING_KIT_CATEGORY_KIND = 'LEARNING_KIT';
+export const TOOL_KIT_CATEGORY_KIND = 'TOOL_KIT';
 export const OTHER_CATEGORY_KIND = 'OTHER';
+
+/** RHET Freebies kinds use FREEBIE_ prefix (e.g. FREEBIE_SCHOOL_UNIFORM). */
+export const FREEBIE_CATEGORY_KIND_PREFIX = 'FREEBIE_';
 
 const GENDER_MAP = {
   Men: 'Male',
@@ -273,25 +277,57 @@ export function normalizeCategoryKind(categoryKind) {
   return String(categoryKind || '').trim().toUpperCase();
 }
 
+/**
+ * Strip FREEBIE_ prefix so Freebies behave like the base Uniform / Shirt / Kit kind.
+ * FREEBIE_SCHOOL_UNIFORM → SCHOOL_UNIFORM, FREEBIE_LEARNING_KIT → LEARNING_KIT.
+ */
+export function baseCategoryKind(categoryKind) {
+  const key = normalizeCategoryKind(categoryKind);
+  if (!key) return '';
+  return key.startsWith(FREEBIE_CATEGORY_KIND_PREFIX)
+    ? key.slice(FREEBIE_CATEGORY_KIND_PREFIX.length)
+    : key;
+}
+
 export function isUniformCategoryKind(categoryKind) {
-  return UNIFORM_CATEGORY_KINDS.includes(normalizeCategoryKind(categoryKind));
+  return UNIFORM_CATEGORY_KINDS.includes(baseCategoryKind(categoryKind));
+}
+
+/** Bundle / kit kinds (Learning Kit, Tool Kit, and FREEBIE_* variants). */
+export function isKitCategoryKind(categoryKind) {
+  const base = baseCategoryKind(categoryKind);
+  return base === LEARNING_KIT_CATEGORY_KIND || base === TOOL_KIT_CATEGORY_KIND;
 }
 
 export function isLearningKitCategoryKind(categoryKind) {
-  return normalizeCategoryKind(categoryKind) === LEARNING_KIT_CATEGORY_KIND;
+  return isKitCategoryKind(categoryKind);
 }
 
 export function isLcaShirtCategoryKind(categoryKind) {
-  return normalizeCategoryKind(categoryKind) === 'LCA_SHIRT';
+  return baseCategoryKind(categoryKind) === 'LCA_SHIRT';
+}
+
+/**
+ * Strip RHET Freebies display suffixes so name heuristics match the base category.
+ * "Shirt - Freebies" → "Shirt", "School Uniform Freebies" → "School Uniform".
+ */
+export function stripFreebieCategorySuffix(categoryName) {
+  return String(categoryName || '')
+    .trim()
+    .replace(/\s*[-–—]\s*freebies?\s*$/i, '')
+    .replace(/\s+freebies?\s*$/i, '')
+    .trim();
 }
 
 /**
  * Name-heuristic fallback when categoryKind is missing.
  * Includes plain "Shirt" (RHET LCA_SHIRT) — name does not end with "uniform".
+ * Freebie display names ("Shirt - Freebies") resolve to the base name first.
  */
 export function isUniformLikeCategoryName(categoryOrMerchandiseName) {
   if (!categoryOrMerchandiseName) return false;
-  const raw = String(categoryOrMerchandiseName).trim();
+  const raw = stripFreebieCategorySuffix(categoryOrMerchandiseName);
+  if (!raw) return false;
   if (isLearningKitCategory(raw)) return false;
   const mapped = CATEGORY_NAME_MAP[raw] || raw;
   const name = String(mapped).trim().toLowerCase();
@@ -320,22 +356,27 @@ export function isUniformLikeCategoryName(categoryOrMerchandiseName) {
 export function isUniformLikeCategory(categoryOrMerchandiseName, categoryKind) {
   const kind = normalizeCategoryKind(categoryKind);
   if (kind) {
-    if (isLearningKitCategoryKind(kind)) return false;
+    const base = baseCategoryKind(kind);
+    if (isKitCategoryKind(kind)) return false;
     if (isUniformCategoryKind(kind)) return true;
-    if (kind === OTHER_CATEGORY_KIND) return false;
+    if (base === OTHER_CATEGORY_KIND) return false;
   }
   return isUniformLikeCategoryName(categoryOrMerchandiseName);
 }
 
 /**
  * Request Stock / Create Type form mode from RHET kind (preferred) or name.
+ * Freebies (FREEBIE_*) use the same mode as their base kind.
  * @returns {'uniform'|'kit'|'other'}
  */
 export function resolveRequestStockFormMode({ categoryName, categoryKind } = {}) {
   const kind = normalizeCategoryKind(categoryKind);
-  if (isLearningKitCategoryKind(kind)) return 'kit';
-  if (isUniformCategoryKind(kind)) return 'uniform';
-  if (kind === OTHER_CATEGORY_KIND) return 'other';
+  if (kind) {
+    if (isKitCategoryKind(kind)) return 'kit';
+    if (isUniformCategoryKind(kind)) return 'uniform';
+    if (baseCategoryKind(kind) === OTHER_CATEGORY_KIND) return 'other';
+  }
+  // Fallback name heuristics ONLY when categoryKind is missing
   if (isLearningKitCategory(categoryName)) return 'kit';
   if (isUniformLikeCategoryName(categoryName)) return 'uniform';
   return 'other';
@@ -344,7 +385,7 @@ export function resolveRequestStockFormMode({ categoryName, categoryKind } = {})
 /** Shirt / LCA Shirt / LCA_SHIRT — RHET type values are Logo 1 / Logo 2. */
 export function isLcaShirtCategory(categoryName, categoryKind) {
   if (isLcaShirtCategoryKind(categoryKind)) return true;
-  const name = String(categoryName || '').trim().toLowerCase();
+  const name = stripFreebieCategorySuffix(categoryName).toLowerCase();
   return name === 'shirt' || name === 'lca shirt';
 }
 
@@ -558,11 +599,11 @@ function isPeUniform(categoryOrMerchandiseName) {
   return mapped.toLowerCase().includes('pe');
 }
 
-export function mapTypeToInventory(type, merchandiseName = '') {
+export function mapTypeToInventory(type, merchandiseName = '', categoryKind = null) {
   if (!type) return undefined;
   const key = String(type).trim();
   // Exact RHET types pass through — never Polo → Shirt.
-  // LCA_SHIRT uses Logo 1 / Logo 2 (not piece type "Shirt").
+  // LCA_SHIRT / FREEBIE_LCA_SHIRT use Logo 1 / Logo 2 (not piece type "Shirt").
   if (
     [
       'Polo',
@@ -581,7 +622,7 @@ export function mapTypeToInventory(type, merchandiseName = '') {
   ) {
     return key;
   }
-  if (isLcaShirtCategory(merchandiseName)) {
+  if (isLcaShirtCategory(merchandiseName, categoryKind)) {
     return key;
   }
   const typeMap = isPeUniform(merchandiseName) ? PE_UNIFORM_TYPE_MAP : SCHOOL_UNIFORM_TYPE_MAP;
@@ -663,11 +704,18 @@ export function buildInventoryStockRequestItem(requestRow) {
     return omitEmpty(item);
   }
 
-  if (isUniformLikeCategory(categoryName) || isUniformLikeCategory(requestRow.merchandise_name)) {
+  if (
+    isUniformLikeCategory(categoryName, requestRow.category_kind) ||
+    isUniformLikeCategory(requestRow.merchandise_name, requestRow.category_kind)
+  ) {
     const item = {
       categoryName,
       gender: mapGenderToInventory(requestRow.gender),
-      type: mapTypeToInventory(requestRow.type, categoryName || requestRow.merchandise_name),
+      type: mapTypeToInventory(
+        requestRow.type,
+        categoryName || requestRow.merchandise_name,
+        requestRow.category_kind
+      ),
       size: mapSizeToInventory(requestRow.size),
       quantity,
       externalReference,
@@ -794,8 +842,8 @@ export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
           : 'Gender, type, and size are required for uniform categories',
       };
     }
-    // Never map Logo 1/2 → Shirt; pass catalog type through for LCA_SHIRT.
-    const mappedType = mapTypeToInventory(type, inventoryCategoryName);
+    // Never map Logo 1/2 → Shirt; pass catalog type through for LCA_SHIRT / FREEBIE_LCA_SHIRT.
+    const mappedType = mapTypeToInventory(type, inventoryCategoryName, categoryKind);
     return {
       inventory_category_name: inventoryCategoryName,
       inventory_item_name: null,
@@ -829,6 +877,7 @@ export function normalizeMerchandiseRequestInput(body = {}, options = {}) {
     type: null,
     size: null,
     is_uniform: false,
+    category_kind: categoryKind,
   };
 }
 
@@ -842,6 +891,7 @@ export function assertInventoryItemHasMatchKey(item) {
   if (
     isBundleStockRequest({
       categoryName: item.categoryName,
+      categoryKind: item.categoryKind || item.category_kind,
       inventory_components_json: item.components,
     })
   ) {
@@ -862,7 +912,12 @@ export function assertInventoryItemHasMatchKey(item) {
     }
     return null;
   }
-  if (isUniformLikeCategory(item.categoryName, item.categoryKind)) {
+  if (
+    isUniformLikeCategory(
+      item.categoryName,
+      item.categoryKind || item.category_kind
+    )
+  ) {
     if (!item.gender || !item.type || !item.size) {
       return 'Uniform requests require gender, type, and size';
     }
@@ -940,7 +995,11 @@ export function buildInventorySubmitPayload({
 
   const items = rows.map((row) => {
     const item = buildInventoryStockRequestItem(row);
-    const matchError = assertInventoryItemHasMatchKey(item);
+    const matchError = assertInventoryItemHasMatchKey({
+      ...item,
+      // Keep FREEBIE_* / kit kind for validation (not sent to RHET)
+      categoryKind: row.category_kind || item.categoryKind,
+    });
     if (matchError) {
       const err = new Error(matchError);
       err.code = 'INVALID_INVENTORY_ITEM';

@@ -1,11 +1,11 @@
 /**
- * RHET bundle (LEARNING_KIT) BOM helpers — mirror of backend bundleBom.js.
+ * RHET bundle (LEARNING_KIT / TOOL_KIT / FREEBIE_* kit) BOM helpers — mirror of backend bundleBom.js.
  */
 
-import { isLearningKitCategoryKind } from './catalogOptions';
+import { isKitCategoryKind } from './catalogOptions';
 
 export function isRhetBundleCategoryKind(categoryKind) {
-  return isLearningKitCategoryKind(categoryKind);
+  return isKitCategoryKind(categoryKind);
 }
 
 export function isRhetBundleCategory(category) {

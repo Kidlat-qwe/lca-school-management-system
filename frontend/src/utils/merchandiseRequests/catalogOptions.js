@@ -24,31 +24,67 @@ export const UNIFORM_CATEGORY_KINDS = Object.freeze([
 ]);
 
 export const LEARNING_KIT_CATEGORY_KIND = 'LEARNING_KIT';
+export const TOOL_KIT_CATEGORY_KIND = 'TOOL_KIT';
 export const OTHER_CATEGORY_KIND = 'OTHER';
+
+/** RHET Freebies kinds use FREEBIE_ prefix (e.g. FREEBIE_SCHOOL_UNIFORM). */
+export const FREEBIE_CATEGORY_KIND_PREFIX = 'FREEBIE_';
 
 export function normalizeCategoryKind(categoryKind) {
   return String(categoryKind || '').trim().toUpperCase();
 }
 
+/**
+ * Strip FREEBIE_ prefix so Freebies behave like the base Uniform / Shirt / Kit kind.
+ * FREEBIE_SCHOOL_UNIFORM → SCHOOL_UNIFORM, FREEBIE_LEARNING_KIT → LEARNING_KIT.
+ */
+export function baseCategoryKind(categoryKind) {
+  const key = normalizeCategoryKind(categoryKind);
+  if (!key) return '';
+  return key.startsWith(FREEBIE_CATEGORY_KIND_PREFIX)
+    ? key.slice(FREEBIE_CATEGORY_KIND_PREFIX.length)
+    : key;
+}
+
 export function isUniformCategoryKind(categoryKind) {
-  return UNIFORM_CATEGORY_KINDS.includes(normalizeCategoryKind(categoryKind));
+  return UNIFORM_CATEGORY_KINDS.includes(baseCategoryKind(categoryKind));
+}
+
+/** Bundle / kit kinds (Learning Kit, Tool Kit, and FREEBIE_* variants). */
+export function isKitCategoryKind(categoryKind) {
+  const base = baseCategoryKind(categoryKind);
+  return base === LEARNING_KIT_CATEGORY_KIND || base === TOOL_KIT_CATEGORY_KIND;
 }
 
 export function isLearningKitCategoryKind(categoryKind) {
-  return normalizeCategoryKind(categoryKind) === LEARNING_KIT_CATEGORY_KIND;
+  return isKitCategoryKind(categoryKind);
 }
 
 export function isLcaShirtCategoryKind(categoryKind) {
-  return normalizeCategoryKind(categoryKind) === 'LCA_SHIRT';
+  return baseCategoryKind(categoryKind) === 'LCA_SHIRT';
+}
+
+/**
+ * Strip RHET Freebies display suffixes so name heuristics match the base category.
+ * "Shirt - Freebies" → "Shirt", "School Uniform Freebies" → "School Uniform".
+ */
+export function stripFreebieCategorySuffix(categoryName) {
+  return String(categoryName || '')
+    .trim()
+    .replace(/\s*[-–—]\s*freebies?\s*$/i, '')
+    .replace(/\s+freebies?\s*$/i, '')
+    .trim();
 }
 
 /**
  * Name-heuristic fallback when categoryKind is missing.
  * Includes plain "Shirt" (RHET LCA_SHIRT) — name does not end with "uniform".
+ * Freebie display names ("Shirt - Freebies") resolve to the base name first.
  */
 export function isUniformLikeCategoryName(categoryName) {
   if (!categoryName) return false;
-  const name = String(categoryName).trim().toLowerCase();
+  const name = stripFreebieCategorySuffix(categoryName).toLowerCase();
+  if (!name) return false;
   if (isLearningKitMerchandiseName(name)) return false;
   if (name === 'school uniform' || name === 'pe uniform') return true;
   if (
@@ -71,9 +107,10 @@ export function isUniformLikeCategoryName(categoryName) {
 export function isUniformLikeCategory(categoryName, categoryKind) {
   const kind = normalizeCategoryKind(categoryKind);
   if (kind) {
-    if (isLearningKitCategoryKind(kind)) return false;
+    const base = baseCategoryKind(kind);
+    if (isKitCategoryKind(kind)) return false;
     if (isUniformCategoryKind(kind)) return true;
-    if (kind === OTHER_CATEGORY_KIND) return false;
+    if (base === OTHER_CATEGORY_KIND) return false;
   }
   return isUniformLikeCategoryName(categoryName);
 }
@@ -83,9 +120,12 @@ export function isUniformLikeCategory(categoryName, categoryKind) {
  */
 export function resolveRequestStockFormMode({ categoryName, categoryKind } = {}) {
   const kind = normalizeCategoryKind(categoryKind);
-  if (isLearningKitCategoryKind(kind)) return 'kit';
-  if (isUniformCategoryKind(kind)) return 'uniform';
-  if (kind === OTHER_CATEGORY_KIND) return 'other';
+  if (kind) {
+    if (isKitCategoryKind(kind)) return 'kit';
+    if (isUniformCategoryKind(kind)) return 'uniform';
+    if (baseCategoryKind(kind) === OTHER_CATEGORY_KIND) return 'other';
+  }
+  // Fallback name heuristics ONLY when categoryKind is missing
   if (isLearningKitMerchandiseName(categoryName)) return 'kit';
   if (isUniformLikeCategoryName(categoryName)) return 'uniform';
   return 'other';
@@ -94,7 +134,7 @@ export function resolveRequestStockFormMode({ categoryName, categoryKind } = {})
 /** Shirt / LCA_SHIRT — RHET type values are Logo 1 / Logo 2 (UI may label "Logo"). */
 export function isLcaShirtCategory(categoryName, categoryKind) {
   if (isLcaShirtCategoryKind(categoryKind)) return true;
-  const name = String(categoryName || '').trim().toLowerCase();
+  const name = stripFreebieCategorySuffix(categoryName).toLowerCase();
   return name === 'shirt' || name === 'lca shirt';
 }
 

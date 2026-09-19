@@ -402,6 +402,8 @@ async function normalizeIncomingRequestLine(body, { inventoryOn, requested_quant
       inventory_item_name: normalized.inventory_item_name || null,
       inventory_requested_sku: normalized.inventory_requested_sku || null,
       inventory_components_json: normalized.inventory_components_json || null,
+      // Not a DB column — kept on the in-memory row for RHET payload mapping (FREEBIE_*)
+      category_kind: normalized.category_kind || categoryKind || null,
     };
   }
 
@@ -771,6 +773,7 @@ router.post(
       let inventory_item_name = null;
       let inventory_requested_sku = null;
       let inventory_components_json = null;
+      let category_kind = null;
 
       if (inventoryOn) {
         const learningKitRecipe = await resolveKitRecipeForBody(req.body);
@@ -796,6 +799,11 @@ router.post(
         inventory_item_name = normalized.inventory_item_name || null;
         inventory_requested_sku = normalized.inventory_requested_sku || null;
         inventory_components_json = normalized.inventory_components_json || null;
+        category_kind =
+          normalized.category_kind ||
+          req.body.category_kind ||
+          req.body.categoryKind ||
+          null;
       } else {
         // Legacy Superadmin-approval path: local merchandise_name only.
         merchandise_name = String(req.body.merchandise_name || req.body.category_name || '').trim();
@@ -946,7 +954,11 @@ router.post(
         result.rows[0].inventory_components_json = inventory_components_json;
       }
 
-      const requestRow = result.rows[0];
+      const requestRow = {
+        ...result.rows[0],
+        // Not a DB column — needed for FREEBIE_* / kit RHET payload mapping
+        category_kind: category_kind || null,
+      };
       const requestId = requestRow.request_id;
 
       // Branch display name for RHET Stock Requests "Branch" column (required top-level).
@@ -1198,7 +1210,12 @@ router.post(
           inventory_components_json: line.inventory_components_json,
         });
         createdIds.push(row.request_id);
-        requestRows.push(row);
+        // Preserve category_kind from the request body (not a DB column) so
+        // FREEBIE_* / kit kinds map correctly when building the RHET payload.
+        requestRows.push({
+          ...row,
+          category_kind: line.category_kind || null,
+        });
       }
 
       const batchReference = buildBatchReference(requestRows[0].request_id);

@@ -6,9 +6,9 @@ Shared helpers for Admin / Superadmin Merchandise **stock request** and
 | File | Purpose |
 |---|---|
 | `approvedBy.js` | Display label for who approved/rejected a request. |
-| `bundleBom.js` | LEARNING_KIT bundle detection, supplies-only BOM, catalog slot resolution, `categorizeBomSlots`/`getBomKind` (mirror: backend `bundleBom.js`). |
+| `bundleBom.js` | Kit/bundle detection (`LEARNING_KIT` / `TOOL_KIT` / `FREEBIE_*`), supplies-only BOM, catalog slot resolution, `categorizeBomSlots`/`getBomKind` (mirror: backend `bundleBom.js`). |
 | `learningKit.js` | Bundle kit recipes from catalog `components[]`, component validation/serialize for Request Stock. |
-| `catalogOptions.js` | RHET catalog unwrap, stale-cache warning vs blocking error, uniform-like detection, gender/type/size and non-uniform item options for Request Stock. |
+| `catalogOptions.js` | RHET catalog unwrap, stale-cache warning vs blocking error, `baseCategoryKind` / Freebies form mode, gender/type/size and non-uniform item options for Request Stock. |
 | `catalogBundleFilter.js` | Virtual-bundle filter: parent categories (Tool Kit) show kit SKUs only, not raw BOM parts in `components[]`. |
 | `createTypeCategory.js` | Catalog-driven category options + defaults for Add Merchandise Type; stock type names for Promo (no hard-coded category lists). |
 | `trackProgress.js` | Build Pending → Shipped → Delivered / Returned / Rejected steps for Track request modal. |
@@ -31,12 +31,16 @@ My Requests: **Pending** until `stock_return.accepted`, then **Returned**.
    Real failures (empty catalog, 401, no cache) still block Request Stock.
 2. **Create Merchandise Type** and **Request Stock** category dropdowns use
    `getCreateMerchandiseCategoryOptions(catalog)` — exact RHET `categoryName` values only.
-3. Prefer `categories[].categoryKind` for form mode:
-   - `SCHOOL_UNIFORM` / `PE_UNIFORM` / `LCA_SHIRT` → Gender + Type/Logo + Size
+3. Prefer `categories[].categoryKind` for form mode (Freebies use `FREEBIE_` prefix;
+   CMS strips via `baseCategoryKind` so they match the base kind):
+   - `SCHOOL_UNIFORM` / `PE_UNIFORM` / `LCA_SHIRT`
+     (+ `FREEBIE_SCHOOL_UNIFORM` / `FREEBIE_PE_UNIFORM` / `FREEBIE_LCA_SHIRT`)
+     → Gender + Type/Logo + Size
      (Shirt logos from RHET catalog: `ACC`, `Beeli`, `LCA`, or legacy `Logo 1`/`Logo 2`)
    - `OTHER` → concrete catalog item (`itemName` + `sku`)
-   - `LEARNING_KIT` → kit item + `components[]`
+   - `LEARNING_KIT` / `TOOL_KIT` (+ `FREEBIE_LEARNING_KIT`) → kit item + `components[]`
    Name heuristics are fallback only when kind is missing (`Shirt` is still uniform).
+   Never treat unknown Freebies as Item+SKU solely because the kind string is unfamiliar.
 4. Uniform options MUST come from catalog items for that category (no inventing Logo/gender/size).
 5. Submit the whole cart to `POST /merchandise-requests/batch` with shared
    `request_reason` + `items[]` (`category_name` + optional `category_kind` +

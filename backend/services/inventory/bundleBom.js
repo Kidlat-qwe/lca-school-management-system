@@ -1,14 +1,16 @@
 /**
- * RHET bundle (LEARNING_KIT) BOM helpers.
+ * RHET bundle (LEARNING_KIT / TOOL_KIT / FREEBIE_* kit) BOM helpers.
  * Primary source: catalog item components[]; CMS static recipes are fallback only.
  */
 
+import { isKitCategoryKind } from './inventoryFieldMapping.js';
+
 export function isRhetBundleCategoryKind(categoryKind) {
-  return String(categoryKind || '').trim().toUpperCase() === 'LEARNING_KIT';
+  return isKitCategoryKind(categoryKind);
 }
 
 /**
- * True when RHET category is a bundle/kit (LEARNING_KIT kind).
+ * True when RHET category is a bundle/kit (LEARNING_KIT, TOOL_KIT, or FREEBIE_* kit).
  * Accepts a category object or a categoryKind string.
  */
 export function isRhetBundleCategory(category) {
@@ -156,7 +158,7 @@ export function getBomKind(kitItem, catalogCategories) {
 }
 
 /**
- * Detect bundle/kit stock request or fulfill rows (LEARNING_KIT or components[]).
+ * Detect bundle/kit stock request or fulfill rows (kit kinds or components[]).
  */
 export function isBundleStockRequest({
   categoryName,

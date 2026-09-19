@@ -16,9 +16,19 @@ import { resolveRequestStockFormMode } from '../services/inventory/inventoryFiel
 function testBundleKindDetection() {
   assert.equal(isRhetBundleCategory({ categoryKind: 'LEARNING_KIT' }), true);
   assert.equal(isRhetBundleCategory({ categoryName: 'Tool Kit', categoryKind: 'LEARNING_KIT' }), true);
+  assert.equal(isRhetBundleCategory({ categoryKind: 'FREEBIE_LEARNING_KIT' }), true);
+  assert.equal(isRhetBundleCategory({ categoryKind: 'TOOL_KIT' }), true);
+  assert.equal(isRhetBundleCategory({ categoryKind: 'FREEBIE_TOOL_KIT' }), true);
   assert.equal(isRhetBundleCategory({ categoryName: 'Backpack', categoryKind: 'OTHER' }), false);
   assert.equal(
     resolveRequestStockFormMode({ categoryName: 'Tool Kit', categoryKind: 'LEARNING_KIT' }),
+    'kit'
+  );
+  assert.equal(
+    resolveRequestStockFormMode({
+      categoryName: 'Learning Kit Freebies',
+      categoryKind: 'FREEBIE_LEARNING_KIT',
+    }),
     'kit'
   );
 }

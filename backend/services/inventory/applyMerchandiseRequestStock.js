@@ -272,14 +272,17 @@ export async function findExistingMerchandiseStockRow(client, request) {
   );
   const isKit = isBundleStockRequest({
     categoryName: request.inventory_category_name || preferredName,
+    categoryKind: request.category_kind,
     inventory_components_json: request.inventory_components_json,
     merchandise_name: request.merchandise_name,
   });
-  const isUniform =
-    isUniformLikeCategory(preferredName) ||
-    isUniformLikeCategory(request.inventory_category_name);
-  const wantsItemIdentity = Boolean(itemName || itemSku);
   const wantsUniformAttrs = wantsUniformIdentity({ gender, type, size });
+  // FREEBIE_* names may not match name heuristics; gender+type+size still means uniform.
+  const isUniform =
+    isUniformLikeCategory(preferredName, request.category_kind) ||
+    isUniformLikeCategory(request.inventory_category_name, request.category_kind) ||
+    (!isKit && wantsUniformAttrs);
+  const wantsItemIdentity = Boolean(itemName || itemSku);
   const isItemKeyed = isKit || !isUniform;
 
   if (request.merchandise_id) {
@@ -438,10 +441,18 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
     String(request.inventory_category_name || '').trim() || typeName;
   const isKit = isBundleStockRequest({
     categoryName: categoryForAttrs,
+    categoryKind: request.category_kind,
     inventory_components_json: request.inventory_components_json,
     merchandise_name: typeName,
   });
-  const isUniform = isUniformLikeCategory(categoryForAttrs);
+  const wantsUniformAttrs = wantsUniformIdentity({
+    gender: normalizeAttr(request.gender),
+    type: normalizeAttr(request.type),
+    size: normalizeSizeAttr(request.size),
+  });
+  const isUniform =
+    isUniformLikeCategory(categoryForAttrs, request.category_kind) ||
+    (!isKit && wantsUniformAttrs);
   const stockItemName = normalizeAttr(request.inventory_item_name || request.item_name);
   const stockSku = normalizeAttr(
     request.inventory_requested_sku || request.inventory_matched_sku || request.sku
@@ -452,7 +463,10 @@ export async function applyMerchandiseRequestStock(client, request, options = {}
     : null;
   // Learning Kit / non-uniform: keep type NULL (CHECK only allows uniform pieces).
   const merchandiseType = isUniform
-    ? normalizeAttr(mapTypeToInventory(request.type, categoryForAttrs) || request.type)
+    ? normalizeAttr(
+        mapTypeToInventory(request.type, categoryForAttrs, request.category_kind) ||
+          request.type
+      )
     : null;
   const merchandiseSize = isUniform
     ? normalizeSizeAttr(mapSizeToLocal(request.size) || request.size)
@@ -745,7 +759,13 @@ export async function reverseMerchandiseRequestStock(client, request) {
 
   const categoryForAttrs =
     String(request.inventory_category_name || '').trim() || typeName;
-  const isUniform = isUniformLikeCategory(categoryForAttrs);
+  const wantsUniformAttrs = wantsUniformIdentity({
+    gender: normalizeAttr(request.gender),
+    type: normalizeAttr(request.type),
+    size: normalizeSizeAttr(request.size),
+  });
+  const isUniform =
+    isUniformLikeCategory(categoryForAttrs, request.category_kind) || wantsUniformAttrs;
   const stockItemName = normalizeAttr(request.inventory_item_name || request.item_name);
   const stockSku = normalizeAttr(
     request.inventory_requested_sku || request.inventory_matched_sku || request.sku
@@ -755,7 +775,10 @@ export async function reverseMerchandiseRequestStock(client, request) {
     ? normalizeAttr(mapGenderToInventory(request.gender) || request.gender)
     : null;
   const merchandiseType = isUniform
-    ? normalizeAttr(mapTypeToInventory(request.type, categoryForAttrs) || request.type)
+    ? normalizeAttr(
+        mapTypeToInventory(request.type, categoryForAttrs, request.category_kind) ||
+          request.type
+      )
     : null;
   const merchandiseSize = isUniform
     ? normalizeSizeAttr(mapSizeToLocal(request.size) || request.size)

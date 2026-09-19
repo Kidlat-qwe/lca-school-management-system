@@ -44,14 +44,17 @@ Legacy `Approved` displays as Delivered (stock already credited).
 ## RHET matching (structured attributes)
 
 RHET matches uniform stock on exact `categoryName + gender + type + size`, not
-free text. **Request Stock** form mode prefers catalog `categoryKind`:
+free text. **Request Stock** form mode prefers catalog `categoryKind`.
+Freebies kinds (`FREEBIE_*`) strip the prefix via `baseCategoryKind` and use the
+same form mode as the base kind (Uniform / Shirt / Kit) — never fall through to
+Item + SKU only.
 
 | categoryKind | Form mode | Required fields |
 |---|---|---|
-| `SCHOOL_UNIFORM` | Uniform | gender + type + size |
-| `PE_UNIFORM` | Uniform | gender + type + size |
-| `LCA_SHIRT` | Uniform (Shirt) | gender + type (`Logo 1`/`Logo 2`, or RHET labels `ACC`/`Beeli`/`LCA`) + size |
-| `LEARNING_KIT` | Kit | itemName/sku + components[] |
+| `SCHOOL_UNIFORM` / `FREEBIE_SCHOOL_UNIFORM` | Uniform | gender + type + size |
+| `PE_UNIFORM` / `FREEBIE_PE_UNIFORM` | Uniform | gender + type + size |
+| `LCA_SHIRT` / `FREEBIE_LCA_SHIRT` | Uniform (Shirt) | gender + type (`Logo 1`/`Logo 2`, or RHET labels `ACC`/`Beeli`/`LCA`) + size |
+| `LEARNING_KIT` / `TOOL_KIT` / `FREEBIE_LEARNING_KIT` | Kit | itemName/sku + components[] |
 | `OTHER` (or missing + not kit) | Non-uniform | itemName + sku |
 
 Name heuristics are **fallback only** when `categoryKind` is missing
