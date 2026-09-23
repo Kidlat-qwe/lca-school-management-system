@@ -5,6 +5,12 @@ import { apiRequest } from '../../config/api';
 import { useGlobalBranchFilter } from '../../contexts/GlobalBranchFilterContext';
 import FixedTablePagination, { TablePaginationSummary } from '../../components/table/FixedTablePagination';
 import { formatDateManila, formatSessionCode } from '../../utils/dateUtils';
+import {
+  getManualMakeupDateBounds,
+  isMakeupDateWithinManualBounds,
+  findManualMakeupTimeConflicts,
+  getManualMakeupTimeConflictsBySessionId,
+} from '../../utils/suspensionMakeupDateRange';
 import { calculateSessionDate } from '../../utils/sessionCalculation';
 import {
   calculateActivePhase,
@@ -6724,7 +6730,7 @@ const initializePackageMerchSelections = useCallback(
     );
   };
 
-  // Validate makeup schedules are within phase date range
+  // Validate makeup schedules: phase first session → last calendar day of phase's last month
   const validateMakeupSchedules = () => {
     if (makeupSchedules.length === 0) return false;
 
@@ -6744,20 +6750,45 @@ const initializePackageMerchSelections = useCallback(
     
     if (phaseSessions.length === 0) return true;
 
-    const phaseDates = phaseSessions.map(s => new Date(s.scheduled_date));
-    const phaseStartDate = new Date(Math.min(...phaseDates));
-    const phaseEndDate = new Date(Math.max(...phaseDates));
+    const { minYmd, maxYmd } = getManualMakeupDateBounds(phaseSessions);
+    if (!minYmd || !maxYmd) return true;
 
-    // Validate each makeup date is within phase range
+    // Validate each makeup date is within [phase start, end of last month of phase]
     for (const schedule of makeupSchedules) {
-      const makeupDate = new Date(schedule.makeup_date);
-      if (makeupDate < phaseStartDate || makeupDate > phaseEndDate) {
-        appAlert(`Makeup dates must be within the phase date range (${formatDateManila(phaseStartDate)} - ${formatDateManila(phaseEndDate)})`);
+      if (!isMakeupDateWithinManualBounds(schedule.makeup_date, minYmd, maxYmd)) {
+        appAlert(
+          `Makeup dates must be between ${formatDateManila(minYmd)} and ${formatDateManila(maxYmd)} (through the end of the last month of this phase).`
+        );
         return false;
       }
     }
 
+    // Same day OK; overlapping time vs existing sessions / other makeups is not
+    const timeConflict = findManualMakeupTimeConflicts({
+      makeupSchedules,
+      classSessions,
+      excludeSessionIds: selectedSessionsToSuspend.map((s) => s.classsession_id),
+    });
+    if (!timeConflict.ok) {
+      return false;
+    }
+
     return true;
+  };
+
+  const getManualMakeupTimeConflictMap = () =>
+    getManualMakeupTimeConflictsBySessionId({
+      makeupSchedules,
+      classSessions,
+      excludeSessionIds: selectedSessionsToSuspend.map((s) => s.classsession_id),
+    });
+
+  const isManualMakeupCreateBlocked = () => {
+    if (suspensionStep !== 'schedule-makeup') return false;
+    if (Object.keys(getManualMakeupTimeConflictMap()).length > 0) return true;
+    return !makeupSchedules.every(
+      (schedule) => schedule.makeup_date && schedule.makeup_start_time && schedule.makeup_end_time
+    );
   };
 
   // Create suspension with manual makeup schedules
@@ -7229,33 +7260,45 @@ const initializePackageMerchSelections = useCallback(
                         cs.phase_session_number === session.phase_session_number
                       );
 
-                      // Compute display session number: cancelled shows original; active compresses numbering
+                      // Display session number (matches suspension / makeup intent):
+                      // - Cancelled: keep original number (struck through in UI)
+                      // - Active + makeup: renumber chronologically among non-cancelled
+                      //   so makeup for cancelled Session 1 becomes Session 1, next class Session 2, …
                       const displaySessionNumber = (() => {
-                        // If session is cancelled, always show original number
                         if (classSession?.status === 'Cancelled') {
                           return session.phase_session_number;
                         }
-                        
-                        // For active sessions or sessions not yet in database, count non-cancelled sessions before this one
-                        let count = 0;
+
+                        let activeCount = 0;
                         for (const s of mergedSessions) {
-                          // Only count sessions that come before the current session
-                          if (s.phase_session_number < session.phase_session_number) {
-                            const cs = classSessions.find(c => 
-                              c.phase_number === s.phase_number && 
+                          const sIsMakeup = String(s.phasesessiondetail_id || '')
+                            .toLowerCase()
+                            .startsWith('makeup-');
+                          const sCs = classSessions.find((c) => {
+                            if (sIsMakeup) {
+                              return (
+                                String(c.classsession_id) ===
+                                String(s.phasesessiondetail_id).replace(/^makeup-/i, '')
+                              );
+                            }
+                            return (
+                              c.phase_number === s.phase_number &&
                               c.phase_session_number === s.phase_session_number
                             );
-                            // Count only if not cancelled
-                            if (!cs || cs.status !== 'Cancelled') {
-                              count++;
-                            }
-                          } else if (s.phase_session_number === session.phase_session_number) {
-                            // Found current session - return count + 1
-                            return count + 1;
+                          });
+                          const isCurrent =
+                            String(s.phasesessiondetail_id) ===
+                            String(session.phasesessiondetail_id);
+
+                          if (sCs?.status === 'Cancelled') {
+                            if (isCurrent) return session.phase_session_number;
+                            continue;
                           }
+
+                          activeCount += 1;
+                          if (isCurrent) return activeCount;
                         }
-                        
-                        // Fallback: if session not found in mergedSessions, return original
+
                         return session.phase_session_number;
                       })();
 
@@ -8624,6 +8667,7 @@ const initializePackageMerchSelections = useCallback(
                         <option value="Flood">Flood</option>
                         <option value="Holiday">Holiday</option>
                         <option value="Government Mandate">Government Mandate</option>
+                        <option value="Cancelled Class">Cancelled Class</option>
                         <option value="Other">Other</option>
                       </select>
                     </div>
@@ -8814,14 +8858,23 @@ const initializePackageMerchSelections = useCallback(
                         Suspended Sessions: {selectedSessionsToSuspend.length}
                       </h4>
                       <p className="text-xs text-amber-700">
-                        Please schedule makeup sessions for each suspended session. Makeup dates must be within the same phase.
+                        Please schedule makeup sessions for each suspended session. Dates may run through the last day of the phase&apos;s final month (e.g. a Sep–Oct phase allows makeup until Oct 31). Same day as another session is fine; the time must not overlap.
                       </p>
                     </div>
 
                     <div className="space-y-4">
-                      {makeupSchedules.map((schedule, index) => {
+                      {(() => {
+                        const makeupTimeConflictMap = getManualMakeupTimeConflictMap();
+                        return makeupSchedules.map((schedule, index) => {
                         // Get the phase number from the suspended session
                         const phaseNumber = schedule.suspended_session.phase_number;
+                        const phaseSessionsForBounds = classSessions.filter(
+                          (s) => s.phase_number === phaseNumber
+                        );
+                        const { minYmd: makeupMinDate, maxYmd: makeupMaxDate } =
+                          getManualMakeupDateBounds(phaseSessionsForBounds);
+                        const timeConflictMessage =
+                          makeupTimeConflictMap[String(schedule.suspended_session_id)] || '';
                         return (
                           <div key={schedule.suspended_session_id} className="border border-gray-200 rounded-lg p-4">
                             <div className="flex items-start justify-between mb-3">
@@ -8832,6 +8885,11 @@ const initializePackageMerchSelections = useCallback(
                                 <p className="text-xs text-gray-600 mt-1">
                                   Original: {formatDateManila(schedule.suspended_session.scheduled_date)} • {schedule.suspended_session.scheduled_start_time} - {schedule.suspended_session.scheduled_end_time}
                                 </p>
+                                {makeupMinDate && makeupMaxDate && (
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    Allowed: {formatDateManila(makeupMinDate)} – {formatDateManila(makeupMaxDate)}
+                                  </p>
+                                )}
                               </div>
                               <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded">
                                 Suspended
@@ -8846,6 +8904,8 @@ const initializePackageMerchSelections = useCallback(
                                 <input
                                   type="date"
                                   value={schedule.makeup_date}
+                                  min={makeupMinDate || undefined}
+                                  max={makeupMaxDate || undefined}
                                   onChange={(e) => handleMakeupScheduleChange(schedule.suspended_session_id, 'makeup_date', e.target.value)}
                                   className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                                 />
@@ -8859,8 +8919,18 @@ const initializePackageMerchSelections = useCallback(
                                     type="time"
                                     value={schedule.makeup_start_time}
                                     onChange={(e) => handleMakeupScheduleChange(schedule.suspended_session_id, 'makeup_start_time', e.target.value)}
-                                    className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                                    aria-invalid={Boolean(timeConflictMessage)}
+                                    className={`w-full px-2 py-1.5 text-sm rounded-lg focus:ring-2 focus:border-transparent ${
+                                      timeConflictMessage
+                                        ? 'border-2 border-red-500 focus:ring-red-500'
+                                        : 'border border-gray-300 focus:ring-primary-500'
+                                    }`}
                                   />
+                                  {timeConflictMessage ? (
+                                    <p className="mt-1 text-xs text-red-600" role="alert">
+                                      {timeConflictMessage}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div>
                                   <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -8878,7 +8948,8 @@ const initializePackageMerchSelections = useCallback(
                             </div>
                           </div>
                         );
-                      })}
+                      });
+                      })()}
                     </div>
                   </div>
 
@@ -9152,8 +9223,13 @@ const initializePackageMerchSelections = useCallback(
               {(suspensionStep === 'schedule-makeup' || suspensionStep === 'preview-auto') && (
                 <button
                   onClick={handleCreateSuspension}
-                  disabled={creatingSuspension}
-                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  disabled={creatingSuspension || isManualMakeupCreateBlocked()}
+                  title={
+                    isManualMakeupCreateBlocked()
+                      ? 'Resolve overlapping start times before creating the suspension'
+                      : undefined
+                  }
+                  className="px-4 py-2 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-amber-600 transition-colors"
                 >
                   {creatingSuspension ? 'Creating...' : 'Create Suspension'}
                 </button>

@@ -855,6 +855,96 @@ const TeacherClasses = () => {
               return sortedPhases.map(({ phaseNumber, sessions }) => {
                 const isExpanded = expandedPhases.has(phaseNumber);
                 const isActivePhase = phaseNumber === activePhase;
+
+                // Match Superadmin/Admin: merge makeup sessions + sort by scheduled date
+                // so cancelled/suspended rows stay chronological (not pushed to end of phase).
+                const phaseClassSessions = (classSessions || [])
+                  .filter((cs) => Number(cs.phase_number) === Number(phaseNumber))
+                  .sort((a, b) => {
+                    if (a.scheduled_date && b.scheduled_date && a.scheduled_date !== b.scheduled_date) {
+                      return new Date(a.scheduled_date) - new Date(b.scheduled_date);
+                    }
+                    return a.phase_session_number - b.phase_session_number;
+                  });
+
+                const curriculumNumbers = new Set(sessions.map((s) => s.phase_session_number));
+                const phaseSessionsMap = new Map();
+                phaseSessions.forEach((ps) => {
+                  phaseSessionsMap.set(`${ps.phase_number}-${ps.phase_session_number}`, ps);
+                });
+
+                const extraSessions = phaseClassSessions
+                  .filter((cs) => !curriculumNumbers.has(cs.phase_session_number))
+                  .map((cs) => {
+                    const sessionKey = `${cs.phase_number}-${cs.phase_session_number}`;
+                    const phaseSessionData = phaseSessionsMap.get(sessionKey);
+                    return {
+                      phasesessiondetail_id: `makeup-${cs.classsession_id}`,
+                      phase_number: cs.phase_number,
+                      phase_session_number: cs.phase_session_number,
+                      topic: phaseSessionData?.topic || '',
+                      goal: phaseSessionData?.goal || '',
+                      agenda: phaseSessionData?.agenda || '',
+                      enrolled_students:
+                        phaseSessionData?.enrolled_students ?? (cs.enrolled_students ?? 0),
+                    };
+                  });
+
+                const resolveClassSessionForRow = (session) => {
+                  const makeupMatch = String(session?.phasesessiondetail_id || '').match(
+                    /^makeup-(\d+)$/i
+                  );
+                  if (makeupMatch) {
+                    return (
+                      classSessions.find(
+                        (cs) => String(cs.classsession_id) === makeupMatch[1]
+                      ) || null
+                    );
+                  }
+                  const matches = (classSessions || []).filter(
+                    (cs) =>
+                      Number(cs.phase_number) === Number(session.phase_number) &&
+                      Number(cs.phase_session_number) === Number(session.phase_session_number)
+                  );
+                  if (matches.length <= 1) return matches[0] || null;
+                  return (
+                    matches.find((cs) => cs.status === 'Cancelled') ||
+                    matches.find((cs) => cs.status === 'Scheduled') ||
+                    matches[0]
+                  );
+                };
+
+                const getSessionSortMeta = (session) => {
+                  const cs = resolveClassSessionForRow(session);
+                  const date =
+                    cs?.scheduled_date ||
+                    (selectedClassForDetails.start_date && sessionsPerPhase
+                      ? calculateSessionDate(
+                          selectedClassForDetails.start_date,
+                          daysOfWeek,
+                          session.phase_number,
+                          session.phase_session_number,
+                          sessionsPerPhase,
+                          selectedClassForDetails.number_of_phase
+                        )
+                      : null);
+                  const startTime = cs?.scheduled_start_time || '';
+                  return { date, startTime };
+                };
+
+                const mergedSessions = [...sessions, ...extraSessions].sort((a, b) => {
+                  const aMeta = getSessionSortMeta(a);
+                  const bMeta = getSessionSortMeta(b);
+                  if (aMeta.date && bMeta.date && aMeta.date !== bMeta.date) {
+                    return String(aMeta.date).localeCompare(String(bMeta.date));
+                  }
+                  if (aMeta.date && !bMeta.date) return -1;
+                  if (!aMeta.date && bMeta.date) return 1;
+                  if (aMeta.startTime && bMeta.startTime && aMeta.startTime !== bMeta.startTime) {
+                    return aMeta.startTime.localeCompare(bMeta.startTime);
+                  }
+                  return a.phase_session_number - b.phase_session_number;
+                });
                 
                 return (
                   <div key={phaseNumber} className={`bg-white rounded-lg shadow border-2 transition-colors ${
@@ -864,7 +954,7 @@ const TeacherClasses = () => {
                       phaseNumber={phaseNumber}
                       isExpanded={isExpanded}
                       isActivePhase={isActivePhase}
-                      sessionCount={sessions.length}
+                      sessionCount={mergedSessions.length}
                       onToggleExpand={() => {
                         const newExpanded = new Set(expandedPhases);
                         if (isExpanded) {
@@ -912,11 +1002,33 @@ const TeacherClasses = () => {
                               </tr>
                             </thead>
                             <tbody className="bg-[#ffffff] divide-y divide-gray-200">
-                              {sessions.map((session) => {
-                                const classSession = classSessions.find(cs => 
-                                  cs.phase_number === session.phase_number && 
-                                  cs.phase_session_number === session.phase_session_number
-                                );
+                              {mergedSessions.map((session) => {
+                                const classSession = resolveClassSessionForRow(session);
+
+                                const displaySessionNumber = (() => {
+                                  if (classSession?.status === 'Cancelled') {
+                                    return session.phase_session_number;
+                                  }
+                                  let activeCount = 0;
+                                  for (const s of mergedSessions) {
+                                    const cs = resolveClassSessionForRow(s);
+                                    const isCurrent =
+                                      String(s.phasesessiondetail_id) ===
+                                      String(session.phasesessiondetail_id);
+                                    if (cs?.status === 'Cancelled') {
+                                      if (isCurrent) return session.phase_session_number;
+                                      continue;
+                                    }
+                                    activeCount += 1;
+                                    if (isCurrent) return activeCount;
+                                  }
+                                  return session.phase_session_number;
+                                })();
+
+                                const isCancelled = classSession?.status === 'Cancelled';
+                                const rowTextClass = isCancelled
+                                  ? 'text-gray-400 line-through'
+                                  : 'text-gray-900';
 
                                 const sessionDate = classSession?.scheduled_date 
                                   ? classSession.scheduled_date
@@ -933,36 +1045,43 @@ const TeacherClasses = () => {
 
                                 const sessionStartTime = classSession?.scheduled_start_time || null;
                                 const sessionEndTime = classSession?.scheduled_end_time || null;
+                                const sessionMenuKey = String(
+                                  session.phasesessiondetail_id ||
+                                    `${session.phase_number}-${session.phase_session_number}`
+                                );
 
                                 return (
-                                  <tr key={session.phasesessiondetail_id} className={classSession?.status === 'Cancelled' ? 'bg-gray-100 opacity-60' : ''}>
+                                  <tr
+                                    key={sessionMenuKey}
+                                    className={isCancelled ? 'bg-gray-100 opacity-60' : ''}
+                                  >
                                     <td className="px-6 py-4 whitespace-nowrap">
-                                      <div className="text-sm font-medium text-gray-900">
+                                      <div className={`text-sm font-medium ${rowTextClass}`}>
                                         {classSession?.class_code || '-'}
                                       </div>
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap">
-                                      <div className="text-sm font-medium text-gray-900">
-                                        Phase {session.phase_number} - Session {session.phase_session_number}
+                                      <div className={`text-sm font-medium ${rowTextClass}`}>
+                                        Phase {session.phase_number} - Session {displaySessionNumber}
                                       </div>
                                     </td>
                                     <td className="px-6 py-4">
-                                      <div className="text-sm text-gray-900">
+                                      <div className={`text-sm ${rowTextClass}`}>
                                         {session.topic || '-'}
                                       </div>
                                     </td>
                                     <td className="px-6 py-4">
-                                      <div className="text-sm text-gray-900">
+                                      <div className={`text-sm ${rowTextClass}`}>
                                         {session.goal || '-'}
                                       </div>
                                     </td>
                                     <td className="px-6 py-4">
-                                      <div className="text-sm text-gray-900">
+                                      <div className={`text-sm ${rowTextClass}`}>
                                         {session.agenda || '-'}
                                       </div>
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-center">
-                                      <div className="text-sm text-gray-900">
+                                      <div className={`text-sm ${rowTextClass}`}>
                                         {session.enrolled_students !== undefined && session.enrolled_students !== null
                                           ? session.enrolled_students
                                           : '0'}
@@ -991,11 +1110,11 @@ const TeacherClasses = () => {
                                           
                                           return (
                                             <div>
-                                              <div className="text-sm font-medium text-gray-900">
+                                              <div className={`text-sm font-medium ${rowTextClass}`}>
                                                 {formatDate(sessionDate)}
                                               </div>
                                               {displayStartTime && displayEndTime && (
-                                                <div className="text-sm text-gray-600 font-normal">
+                                                <div className={`text-sm font-normal ${isCancelled ? 'text-gray-400' : 'text-gray-600'}`}>
                                                   {formatTime(displayStartTime)} - {formatTime(displayEndTime)}
                                                 </div>
                                               )}
@@ -1060,8 +1179,7 @@ const TeacherClasses = () => {
                                               e.stopPropagation();
                                               return;
                                             }
-                                            const sessionKey = `${session.phase_number}-${session.phase_session_number}`;
-                                            handleSessionMenuClick(sessionKey, e);
+                                            handleSessionMenuClick(sessionMenuKey, e);
                                           }}
                                           disabled={classSession?.status === 'Cancelled'}
                                           className={`p-2 rounded-full transition-colors ${
@@ -1098,32 +1216,50 @@ const TeacherClasses = () => {
 
         {/* Session Action Menu Overlay */}
         {openSessionMenuId && viewMode === 'detail' && selectedClassForDetails && (() => {
-          const [phaseNum, sessionNum] = openSessionMenuId.split('-');
-          
-          const session = phaseSessions.find(s => 
-            s.phase_number === parseInt(phaseNum) && 
-            s.phase_session_number === parseInt(sessionNum)
-          );
-          
-          const classSession = classSessions.find(cs => 
-            cs.phase_number === parseInt(phaseNum) && 
-            cs.phase_session_number === parseInt(sessionNum)
-          );
+          const makeupMatch = String(openSessionMenuId).match(/^makeup-(\d+)$/i);
+          let session = null;
+          let classSession = null;
+
+          if (makeupMatch) {
+            classSession =
+              classSessions.find((cs) => String(cs.classsession_id) === makeupMatch[1]) || null;
+            if (classSession) {
+              session = {
+                phase_number: classSession.phase_number,
+                phase_session_number: classSession.phase_session_number,
+                phasesessiondetail_id: openSessionMenuId,
+              };
+            }
+          } else {
+            const [phaseNum, sessionNum] = openSessionMenuId.split('-');
+            session = phaseSessions.find(
+              (s) =>
+                s.phase_number === parseInt(phaseNum, 10) &&
+                s.phase_session_number === parseInt(sessionNum, 10)
+            );
+            const matches = classSessions.filter(
+              (cs) =>
+                cs.phase_number === parseInt(phaseNum, 10) &&
+                cs.phase_session_number === parseInt(sessionNum, 10)
+            );
+            classSession =
+              matches.find((cs) => cs.status !== 'Cancelled') || matches[0] || null;
+          }
           
           let sessionDate = null;
           if (classSession?.scheduled_date) {
             sessionDate = classSession.scheduled_date;
-          } else if (selectedClassForDetails.start_date && daysOfWeek && daysOfWeek.length > 0) {
-            const sessionsInPhase = phaseSessions.filter(s => s.phase_number === parseInt(phaseNum));
-            const sessionsPerPhase = sessionsInPhase.length;
+          } else if (selectedClassForDetails.start_date && daysOfWeek && daysOfWeek.length > 0 && session) {
+            const sessionsInPhase = phaseSessions.filter(s => s.phase_number === Number(session.phase_number));
+            const sessionsPerPhaseForMenu = sessionsInPhase.length;
             
-            if (sessionsPerPhase > 0) {
+            if (sessionsPerPhaseForMenu > 0) {
               sessionDate = calculateSessionDate(
                 selectedClassForDetails.start_date,
                 daysOfWeek,
-                parseInt(phaseNum),
-                parseInt(sessionNum),
-                sessionsPerPhase,
+                Number(session.phase_number),
+                Number(session.phase_session_number),
+                sessionsPerPhaseForMenu,
                 selectedClassForDetails.number_of_phase
               );
             }

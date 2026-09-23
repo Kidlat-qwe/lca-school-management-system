@@ -12,15 +12,16 @@ Helpers for teacher lesson plan CRUD and Superadmin/Admin verification.
 `fetchMissedLessonPlans` / `mapMissedLessonPlanRow` compare overdue `classsessionstbl` rows to submitted plans.
 
 - **Window**: `since <= scheduled_date <` Asia/Manila today
-- **Default `since`**: `LESSON_PLAN_MISSED_SINCE_DEFAULT` in `lib/lessonPlans` (**2026-09-19**); UI **Track from** can override per request
+- **Default `since`**: `LESSON_PLAN_MISSED_SINCE_DEFAULT` in `lib/lessonPlans` (**2026-09-25**); UI **Track from** can override per request
 - **Draft**: does not count as submitted
-- **Match**: teacher + `class_id` + phase number + session number
+- **Match**: teacher + `class_id` + (saved session `class_code` / subject, or phase+session numbers; Week plans match by subject or session number)
+- **Makeup**: overdue `Rescheduled` / suspension-linked sessions are included; cancelled originals are not
 - **Clears miss**: `submitted`, `revision_requested`, `awaiting_reflection`, `completed`
 
-### `submitted_at`
+### Draft create/save
 
-- **Draft create/save**: `submitted_at` stays `NULL` (not stamped).
-- **First submit** (`draft` → `submitted`, or create with status `submitted`): set to `NOW()`.
+- **Draft create/save**: `submitted_at` stays `NULL` (not stamped). Partial drafts are allowed (missing class/topic/sections OK); `lesson_date` defaults to Asia/Manila today when blank.
+- **First submit** (`draft` → `submitted`, or create with status `submitted`): set to `NOW()`; full validation required.
 - **Resubmit after revision** (`revision_requested` → `submitted`): keep the original `submitted_at` (do not overwrite).
 
 ### Teacher's Reflection
@@ -35,7 +36,7 @@ LCA labels: **Successes**, **Amazing Moments**, **Challenges**, **Improvements**
 
 ### Form fields
 
-Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class code** options come from the teacher's designated classes only (`classestbl.teacher_id` or `classteacherstbl`). Class Code is the **session** `class_code` for the selected Phase/Session (View Class Details). On save, that code is stored in `subject` and Phase/Session are stored as display strings (`Phase N`, `Session N`). List/API resolve Class Code from phase+session match, then saved `subject`, then first session code fallback.
+Aligned to the LCA Lesson Plan PDF (plus `grade_level` for program folder browsing). **Grade level** and **class code** options come from the teacher's designated classes only (`classestbl.teacher_id` or `classteacherstbl`). Class Code is the **session** `class_code` for the selected Phase/Session (View Class Details). On save, that code is stored in `subject`. Phase/Session are stored as display strings (`Phase N`, `Session N`); for **Kindergarten** and **Grade School**, curriculum **Week** is stored in `phase` as `Week N` (1–44) while Class Code still reflects schedule Phase + Session. List/API resolve Class Code from saved `subject` first, then phase+session match (skipped for Week), then first session code fallback.
 
 ### Head Teacher review
 
@@ -56,7 +57,7 @@ DepEd letterhead: LCA seal **left** · Republika / DepEd / Region / Schools Divi
 | Field | Source |
 |-------|--------|
 | Region line | Branch `deped_region` → e.g. `REGION III` |
-| Division office line | Branch `deped_division` → e.g. `SCHOOLS DIVISION OFFICE OF BULACAN` |
+| Division line | Branch `deped_division` → e.g. `SCHOOLS DIVISION OF BULACAN` |
 | School name | Always `LITTLE CHAMPIONS ACADEMY INC.` |
 | School ID | Always `411093` (app constant; not shown on letterhead) |
 

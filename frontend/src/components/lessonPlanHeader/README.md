@@ -11,7 +11,7 @@ Center lines (match official format; gothic via `UnifrakturCook`):
 1. Republika ng Pilipinas  
 2. Department of Education  
 3. `{REGION}` — from branch `deped_region` (e.g. `REGION III`)  
-4. `SCHOOLS DIVISION OFFICE OF {DIVISION}` — from branch `deped_division`  
+4. `SCHOOLS DIVISION OF {DIVISION}` — from branch `deped_division`  
 5. `LITTLE CHAMPIONS ACADEMY INC.` (fixed)
 
 ## Assets

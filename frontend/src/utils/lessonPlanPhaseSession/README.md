@@ -1,14 +1,35 @@
 # Lesson plan phase / session helpers
 
-Used by `teacherLessonPlans.jsx` to populate Class Code, Phase, and Session from `GET /classes/:id/sessions`.
+Used by `teacherLessonPlans.jsx` to populate Class Code, Phase/Week, and Session from `GET /classes/:id/sessions`.
 
-- After **Grade Level** is chosen, Class Code / Phase / Session stay empty until the teacher picks a Class Code (no auto-default).
-- **Class Code** uses a custom dropdown (`LessonPlanClassCodeSelect`) that opens **below** the field and highlights the first option on open. Options are per-session `class_code` values (same as **Classes → View Class Details**), without the schedule date in the label.
-- Selecting a **Class Code** sets `class_id` + **Phase** + **Session** to that session’s values.
-- Changing Phase defaults Session to the first upcoming session in that phase (Class Code selection follows via `class_id|phase-session`).
-- Past sessions (`scheduled_date` before today, Manila) are hidden unless editing an existing plan.
-- **Lesson date** auto-fills from `scheduled_date` once a session is selected.
+## Grade-level behavior
 
-Form state stores internal keys (`phase`: `"1"`, `session`: `"1-2"`, class code value: `"94|1-2"`). Save converts phase/session to API strings (`Phase 1`, `Session 2 — Topic`).
+| Grade level | Field after Class Code | Saved `phase` value |
+|-------------|------------------------|---------------------|
+| Nursery, Pre Kindergarten, others | **Phase** (from schedule) | `Phase N` |
+| **Kindergarten**, **Grade School** (and Grade 1–6) | **Week** (1–44) | `Week N` |
 
-`buildLessonPlanClassCodeValue` accepts either a bare session number or a full session key so form values (`session: "1-6"`) match option values.
+## Cancelled / Makeup sessions (Class Code list)
+
+Class Code options include:
+
+| Status | Visible | Selectable | Secondary label |
+|--------|---------|------------|-----------------|
+| **Cancelled** (suspended original) | Yes (even if past) | No | `Cancelled · Phase X - Session Y` |
+| **Rescheduled** (makeup) | Yes | Yes | `Makeup · Phase X - Session Y` |
+| Scheduled (upcoming) | Yes | Yes | `Phase X - Session Y` |
+
+Display session numbers match **Class Details**: cancelled keep the original number; active + makeup are renumbered chronologically within each class+phase (makeup for cancelled Session 1 → Session 1).
+
+Option values include `classsession_id` so cancelled and makeup rows stay unique even when DB session numbers differ from display numbers.
+
+## Form flow
+
+1. **Grade Level** → filters Class list  
+2. **Class** → filters Class Code list (Class Code is a full-width row **below** Class)
+3. **Class Code** → sets schedule Phase / Session (and week grades still pick Week separately)  
+4. Past **Scheduled** sessions are hidden unless editing; **Cancelled** and **Makeup** stay listed for context.
+5. **Phase** / **Session** / **Week** dropdown option text is **numbers only** (e.g. `1`, `2`); Session may append the schedule date in parentheses.
+6. For **Kindergarten** / **Grade School** (Week grades), the **Session** dropdown shows **dates only** (no session number).
+
+Helpers: `isLessonPlanWeekGradeLevel`, `isLessonPlanMakeupSession`, `isLessonPlanCancelledSession`, `buildLessonPlanDisplaySessionNumberMap`, `formatLessonPlanPhaseSessionLabel`, `LESSON_PLAN_WEEK_OPTIONS`.

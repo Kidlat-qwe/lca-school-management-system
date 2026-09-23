@@ -5,6 +5,7 @@ import { apiRequest } from '../../../config/api';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useGlobalBranchFilter } from '../../../contexts/GlobalBranchFilterContext';
 import { appAlert, appConfirm } from '../../../utils/appAlert';
+import { downloadLessonPlanPdf } from '../../../utils/downloadLessonPlanPdf';
 import { LessonPlanHeader } from '../../../components/lessonPlanHeader';
 import LessonPlanSubmissionsTable from '../../../components/lessonPlanSubmissionsTable';
 import LessonPlanMissedTable from '../../../components/lessonPlanMissedTable';
@@ -64,9 +65,9 @@ const ASSESSMENT_SECTIONS = [
 const MATERIALS_SECTIONS = [['Materials Needed To Prepare', 'materials_needed']];
 
 const PROCEDURE_SECTIONS = [
-  ['Preliminaries — Activity & Goal', 'preliminaries_activity'],
-  ['Lesson Proper — Activity & Goal', 'lesson_proper_activity'],
-  ['Conclusion — Activity & Goal', 'conclusion_activity'],
+  ['Preliminaries', 'preliminaries_activity'],
+  ['Lesson Proper', 'lesson_proper_activity'],
+  ['Conclusion', 'conclusion_activity'],
 ];
 
 const CLASS_SECTIONS = [
@@ -601,6 +602,15 @@ export default function SuperadminLessonPlans() {
     setSelectedPlan(plan);
   };
 
+  const handleDownloadPlan = async (plan) => {
+    if (!plan?.lesson_plan_id) return;
+    try {
+      await downloadLessonPlanPdf(plan.lesson_plan_id, plan);
+    } catch (err) {
+      await appAlert(err.message || 'Failed to download lesson plan PDF');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -759,6 +769,7 @@ export default function SuperadminLessonPlans() {
           timestampMode={reviewTab === 'verified' ? 'verified' : 'submitted'}
           showTeacher
           onView={openReviewPlan}
+          onDownload={handleDownloadPlan}
           onSelect={openReviewPlan}
         />
       )}
@@ -871,10 +882,16 @@ export default function SuperadminLessonPlans() {
                           {group.heading}
                         </h4>
                       ) : null}
-                      {group.sections.map(([title, key]) => (
+                      {group.sections.map(([title, key]) => {
+                        const sectionTitle =
+                          key === 'phase' &&
+                          /^Week\s*\d+/i.test(String(selectedPlan.phase || '').trim())
+                            ? 'Week'
+                            : title;
+                        return (
                         <ReviewSection
                           key={key}
-                          title={title}
+                          title={sectionTitle}
                           fieldKey={key}
                           content={
                             key === 'class_id'
@@ -886,7 +903,8 @@ export default function SuperadminLessonPlans() {
                           onToggleField={handleToggleField}
                           html={isLessonPlanRichTextField(key)}
                         />
-                      ))}
+                        );
+                      })}
                     </div>
                   ))}
 

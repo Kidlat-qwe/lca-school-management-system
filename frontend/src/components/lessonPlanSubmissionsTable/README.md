@@ -19,7 +19,7 @@ Responsive submissions table for teacher and verifier Lesson Plans, styled like 
 | Grade Level | `grade_level` |
 | Status | `status` badge |
 | Submitted At / Verified At | `submitted_at` by default; pass `timestampMode="verified"` to show `verified_at` as **Verified At** (Asia/Manila, date + time on two lines) |
-| Action | Eye icon → `onView(plan)` |
+| Action | Eye icon → `onView(plan)`; download icon → `onDownload(plan)` (PDF) |
 
 ```jsx
 import LessonPlanSubmissionsTable from '../components/lessonPlanSubmissionsTable';
@@ -32,6 +32,7 @@ import LessonPlanSubmissionsTable from '../components/lessonPlanSubmissionsTable
   timestampMode="submitted"
   showTeacher
   onView={(plan) => setViewPlan(plan)}
+  onDownload={(plan) => handleDownload(plan)}
   onSelect={(plan) => handleSelectPlan(plan)}
 />
 ```

@@ -1,6 +1,7 @@
 /**
  * Class Code picker for teacher lesson plans.
  * Menu always opens below the trigger and highlights the first option.
+ * Shows Cancelled (visible, not selectable) and Makeup badges.
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -22,14 +23,26 @@ export default function LessonPlanClassCodeSelect({
   const [highlightIndex, setHighlightIndex] = useState(0);
   const [menuStyle, setMenuStyle] = useState(null);
 
+  const selectableOptions = options.filter((o) => o.selectable !== false);
   const selected = options.find((o) => o.value === value) || null;
+
+  const formatOptionFullLabel = (opt) => {
+    if (!opt) return '';
+    const base = `${opt.label || ''}${opt.secondary_label ? ` (${opt.secondary_label})` : ''}`;
+    const date = String(opt.scheduled_date || '').trim();
+    if (date) return `${base} — ${date}`;
+    return base;
+  };
+
   const displayLabel = selected
-    ? `${selected.label}${selected.secondary_label ? ` (${selected.secondary_label})` : ''}`
+    ? formatOptionFullLabel(selected)
     : loading
       ? 'Loading class codes…'
       : options.length
         ? placeholder
         : emptyHint;
+
+  const selectedTooltip = selected ? formatOptionFullLabel(selected) : '';
 
   const placeMenuBelow = () => {
     const el = rootRef.current;
@@ -46,7 +59,8 @@ export default function LessonPlanClassCodeSelect({
 
   useLayoutEffect(() => {
     if (!open) return undefined;
-    setHighlightIndex(0);
+    const firstSelectable = options.findIndex((o) => o.selectable !== false);
+    setHighlightIndex(firstSelectable >= 0 ? firstSelectable : 0);
     placeMenuBelow();
     const onReposition = () => placeMenuBelow();
     window.addEventListener('resize', onReposition);
@@ -55,7 +69,7 @@ export default function LessonPlanClassCodeSelect({
       window.removeEventListener('resize', onReposition);
       window.removeEventListener('scroll', onReposition, true);
     };
-  }, [open]);
+  }, [open, options]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -75,14 +89,27 @@ export default function LessonPlanClassCodeSelect({
   }, [open, highlightIndex]);
 
   const pick = (opt) => {
-    if (!opt || disabled) return;
+    if (!opt || disabled || opt.selectable === false) return;
     onChange?.(opt);
     setOpen(false);
   };
 
   const openMenu = () => {
-    setHighlightIndex(0);
+    const firstSelectable = options.findIndex((o) => o.selectable !== false);
+    setHighlightIndex(firstSelectable >= 0 ? firstSelectable : 0);
     setOpen(true);
+  };
+
+  const moveHighlight = (delta) => {
+    if (!options.length) return;
+    let next = highlightIndex;
+    for (let i = 0; i < options.length; i += 1) {
+      next = (next + delta + options.length) % options.length;
+      if (options[next]?.selectable !== false) {
+        setHighlightIndex(next);
+        return;
+      }
+    }
   };
 
   const onKeyDown = (e) => {
@@ -97,7 +124,9 @@ export default function LessonPlanClassCodeSelect({
         openMenu();
         return;
       }
-      pick(options[highlightIndex] || options[0]);
+      const opt = options[highlightIndex];
+      if (opt?.selectable !== false) pick(opt);
+      else if (selectableOptions[0]) pick(selectableOptions[0]);
       return;
     }
     if (e.key === 'ArrowDown') {
@@ -106,7 +135,7 @@ export default function LessonPlanClassCodeSelect({
         openMenu();
         return;
       }
-      setHighlightIndex((i) => Math.min(i + 1, options.length - 1));
+      moveHighlight(1);
       return;
     }
     if (e.key === 'ArrowUp') {
@@ -115,8 +144,34 @@ export default function LessonPlanClassCodeSelect({
         openMenu();
         return;
       }
-      setHighlightIndex((i) => Math.max(i - 1, 0));
+      moveHighlight(-1);
     }
+  };
+
+  const statusBadge = (opt, isHighlighted) => {
+    if (opt.is_cancelled) {
+      return (
+        <span
+          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            isHighlighted ? 'bg-white/20 text-white' : 'bg-red-100 text-red-800'
+          }`}
+        >
+          Cancelled
+        </span>
+      );
+    }
+    if (opt.is_makeup) {
+      return (
+        <span
+          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+            isHighlighted ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-900'
+          }`}
+        >
+          Makeup
+        </span>
+      );
+    }
+    return null;
   };
 
   const menu =
@@ -135,23 +190,39 @@ export default function LessonPlanClassCodeSelect({
               options.map((opt, index) => {
                 const isHighlighted = index === highlightIndex;
                 const isSelected = opt.value === value;
-                const text = `${opt.label}${opt.secondary_label ? ` (${opt.secondary_label})` : ''}`;
+                const isDisabled = opt.selectable === false;
+                const text = formatOptionFullLabel(opt);
                 return (
-                  <li key={opt.value} role="option" aria-selected={isSelected}>
+                  <li
+                    key={opt.value}
+                    role="option"
+                    aria-selected={isSelected}
+                    aria-disabled={isDisabled}
+                    title={text}
+                  >
                     <button
                       type="button"
                       data-highlight={isHighlighted ? 'true' : undefined}
-                      className={`block w-full truncate px-3 py-2 text-left text-sm ${
-                        isHighlighted
-                          ? 'bg-[#1e3a8a] text-white'
-                          : isSelected
-                            ? 'bg-[#eff6ff] text-[#1e3a8a]'
-                            : 'text-[#111111] hover:bg-gray-50'
+                      disabled={isDisabled}
+                      title={text}
+                      className={`flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm ${
+                        isDisabled
+                          ? 'cursor-not-allowed text-gray-400 line-through opacity-80'
+                          : isHighlighted
+                            ? 'bg-[#1e3a8a] text-white'
+                            : isSelected
+                              ? 'bg-[#eff6ff] text-[#1e3a8a]'
+                              : 'text-[#111111] hover:bg-gray-50'
                       }`}
-                      onMouseEnter={() => setHighlightIndex(index)}
+                      onMouseEnter={() => {
+                        if (!isDisabled) setHighlightIndex(index);
+                      }}
                       onClick={() => pick(opt)}
                     >
-                      {text}
+                      <span className="min-w-0 flex-1 truncate" title={text}>
+                        {text}
+                      </span>
+                      {statusBadge(opt, isHighlighted && !isDisabled)}
                     </button>
                   </li>
                 );
@@ -170,18 +241,22 @@ export default function LessonPlanClassCodeSelect({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
+        title={selectedTooltip || undefined}
         onClick={() => {
           if (disabled) return;
           if (open) setOpen(false);
           else openMenu();
         }}
         onKeyDown={onKeyDown}
-        className="flex w-full min-w-0 items-center justify-between gap-2 rounded-lg border border-[#d8d8d8] bg-transparent px-3 py-2.5 text-left text-base font-normal text-[#111111] focus:border-[#ff9f40] focus:outline-none focus:shadow-[0_0_0_3px_rgba(255,159,64,0.15)] disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex w-full min-w-0 items-start justify-between gap-2 rounded-lg border border-[#d8d8d8] bg-transparent px-3 py-2.5 text-left text-base font-normal text-[#111111] focus:border-[#ff9f40] focus:outline-none focus:shadow-[0_0_0_3px_rgba(255,159,64,0.15)] disabled:cursor-not-allowed disabled:opacity-60"
       >
-        <span className={`min-w-0 truncate ${selected ? '' : 'text-gray-500'}`}>
+        <span
+          className={`min-w-0 flex-1 break-words whitespace-normal ${selected ? '' : 'text-gray-500'}`}
+          title={selectedTooltip || undefined}
+        >
           {displayLabel}
         </span>
-        <span className="shrink-0 text-gray-400" aria-hidden>
+        <span className="mt-0.5 shrink-0 text-gray-400" aria-hidden>
           ▾
         </span>
       </button>

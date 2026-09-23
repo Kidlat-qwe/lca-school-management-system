@@ -147,16 +147,29 @@ export default function LessonPlanMissedTable({
                       </div>
                     </td>
                     <td className="px-3 py-4">
-                      <div className="truncate text-sm text-gray-900" title={classCode}>
-                        {classCode}
+                      <div className="min-w-0">
+                        <div className="truncate text-sm text-gray-900" title={classCode}>
+                          {classCode}
+                        </div>
+                        {row.is_makeup ? (
+                          <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                            Makeup
+                          </span>
+                        ) : null}
                       </div>
                     </td>
                     <td className="px-3 py-4">
                       <div
                         className="truncate text-sm text-gray-900"
-                        title={phaseSession}
+                        title={
+                          row.is_makeup && phaseSession !== '—'
+                            ? `Makeup · ${phaseSession}`
+                            : phaseSession
+                        }
                       >
-                        {phaseSession}
+                        {row.is_makeup && phaseSession !== '—'
+                          ? `Makeup · ${phaseSession}`
+                          : phaseSession}
                       </div>
                     </td>
                     <td className="px-3 py-4">

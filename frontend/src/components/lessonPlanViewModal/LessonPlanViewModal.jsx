@@ -16,13 +16,6 @@ import {
 import { formatLessonPlanDateDisplay } from '../../utils/lessonPlanPhaseSession';
 
 /** Display title + plan field key + revision flag field key (verifier may use class_id). */
-const META_SECTIONS = [
-  ['Lesson Topic', 'topic', 'topic'],
-  ['Phase', 'phase', 'phase'],
-  ['Session', 'session', 'session'],
-  ['Class Code', 'class_label', 'class_id'],
-];
-
 const EARLY_GOALS_SECTIONS = [
   ['Early Learning Goals', 'early_learning_goals', 'early_learning_goals'],
 ];
@@ -37,18 +30,18 @@ const ASSESSMENT_SECTIONS = [
 ];
 
 const MATERIALS_SECTIONS = [
-  ['Materials Needed To Prepare', 'materials_needed', 'materials_needed'],
+  ['Materials Needed', 'materials_needed', 'materials_needed'],
 ];
 
 const PROCEDURE_SECTIONS = [
-  ['Preliminaries — Activity & Goal', 'preliminaries_activity', 'preliminaries_activity'],
-  ['Lesson Proper — Activity & Goal', 'lesson_proper_activity', 'lesson_proper_activity'],
-  ['Conclusion — Activity & Goal', 'conclusion_activity', 'conclusion_activity'],
+  ['Preliminaries', 'preliminaries_activity', 'preliminaries_activity'],
+  ['Lesson Proper', 'lesson_proper_activity', 'lesson_proper_activity'],
+  ['Conclusion', 'conclusion_activity', 'conclusion_activity'],
 ];
 
 const CLASS_SECTIONS = [
-  ['Class — Considerations', 'class1_considerations', 'class1_considerations'],
-  ['Class — Adjustments', 'class1_adjustments', 'class1_adjustments'],
+  ['Considerations', 'class1_considerations', 'class1_considerations'],
+  ['Adjustments', 'class1_adjustments', 'class1_adjustments'],
 ];
 
 const REFLECTION_SECTIONS = [
@@ -134,10 +127,39 @@ function escapeHtml(text) {
     .replace(/\n/g, '<br />');
 }
 
+function displayNumberOnly(value, { week = false } = {}) {
+  const raw = String(value || '').trim();
+  if (!raw) return '—';
+  if (week) {
+    const w = raw.match(/Week\s*(\d+)/i);
+    if (w) return w[1];
+  }
+  const session = raw.match(/Session\s*(\d+)/i);
+  if (session) return session[1];
+  const phase = raw.match(/Phase\s*(\d+)/i);
+  if (phase) return phase[1];
+  const bare = raw.match(/^(\d+)/);
+  return bare ? bare[1] : raw;
+}
+
 /**
- * @param {{ plan: object|null, open: boolean, onClose: () => void, onEdit?: (plan: object) => void }} props
+ * @param {{
+ *   plan: object|null,
+ *   open: boolean,
+ *   onClose: () => void,
+ *   onEdit?: (plan: object) => void,
+ *   onDelete?: (plan: object) => void | Promise<void>,
+ *   deleting?: boolean,
+ * }} props
  */
-export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
+export default function LessonPlanViewModal({
+  plan,
+  open,
+  onClose,
+  onEdit,
+  onDelete,
+  deleting = false,
+}) {
   useEffect(() => {
     if (!open) return undefined;
     const prev = document.body.style.overflow;
@@ -157,6 +179,7 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
   const canEditPlan = ['draft', 'revision_requested', 'awaiting_reflection'].includes(
     plan.status
   );
+  const canDeleteDraft = plan.status === 'draft' && typeof onDelete === 'function';
   const editButtonLabel =
     plan.status === 'awaiting_reflection' ? 'Complete Reflection' : 'Edit';
   const showHeadTeacher = HEAD_TEACHER_SECTIONS.some(([_, key]) => !isRichTextEmpty(plan[key]));
@@ -183,15 +206,27 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
               <button
                 type="button"
                 onClick={() => onEdit(plan)}
-                className="rounded-lg border border-[#ffddc9] bg-[#ffddc9] px-3 py-1.5 text-sm font-semibold text-[#333333] hover:bg-[#fff0e6]"
+                disabled={deleting}
+                className="rounded-lg border border-[#ffddc9] bg-[#ffddc9] px-3 py-1.5 text-sm font-semibold text-[#333333] hover:bg-[#fff0e6] disabled:opacity-50"
               >
                 {editButtonLabel}
+              </button>
+            ) : null}
+            {canDeleteDraft ? (
+              <button
+                type="button"
+                onClick={() => onDelete(plan)}
+                disabled={deleting}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-sm font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+              >
+                {deleting ? 'Deleting...' : 'Delete'}
               </button>
             ) : null}
             <button
               type="button"
               onClick={onClose}
-              className="flex h-9 w-9 items-center justify-center rounded-lg text-[28px] font-bold leading-none text-[#d32f2f] hover:bg-red-50 hover:text-red-800"
+              disabled={deleting}
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-[28px] font-bold leading-none text-[#d32f2f] hover:bg-red-50 hover:text-red-800 disabled:opacity-50"
               aria-label="Close"
             >
               ×
@@ -232,6 +267,10 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
 
             <RevisionFeedbackSummary plan={plan} />
 
+            {(() => {
+              const weekMode = /^Week\s*\d+/i.test(String(plan.phase || '').trim());
+              const phaseOrWeekLabel = weekMode ? 'Week' : 'Phase';
+              return (
             <div className="mb-2 grid grid-cols-1 gap-x-[34px] gap-y-3 sm:grid-cols-2">
               <p className="text-[16px] text-[#111111]">
                 <span className="font-medium">Lesson Date</span>{' '}
@@ -245,29 +284,47 @@ export default function LessonPlanViewModal({ plan, open, onClose, onEdit }) {
                 <span className="font-medium">Grade Level</span>{' '}
                 <span className="font-normal">{plan.grade_level || '—'}</span>
               </p>
-              <p className="text-[16px] text-[#111111]">
+              <p className="col-span-full text-[16px] text-[#111111]">
+                <span className="font-medium">Class</span>{' '}
+                <span className="font-normal break-words">
+                  {plan.class_name || '—'}
+                </span>
+              </p>
+              <p className="col-span-full text-[16px] text-[#111111]">
                 <span className="font-medium">Class Code</span>{' '}
-                <span className="font-normal">
-                  {plan.class_label || plan.class_code || plan.subject || '—'}
+                <span className="font-normal break-words">
+                  {plan.class_code || plan.class_label || plan.subject || '—'}
                 </span>
               </p>
               <p className="text-[16px] text-[#111111]">
-                <span className="font-medium">Phase</span>{' '}
-                <span className="font-normal">{plan.phase || '—'}</span>
+                <span className="font-medium">{phaseOrWeekLabel}</span>{' '}
+                <span className="font-normal">
+                  {displayNumberOnly(plan.phase, { week: weekMode })}
+                </span>
               </p>
-              <p className="col-span-full text-[16px] text-[#111111] sm:col-span-1">
+              <p className="text-[16px] text-[#111111]">
                 <span className="font-medium">Session</span>{' '}
-                <span className="font-normal">{plan.session || '—'}</span>
+                <span className="font-normal">{displayNumberOnly(plan.session)}</span>
+              </p>
+              <p className="col-span-full text-[16px] text-[#111111]">
+                <span className="font-medium">Topic</span>{' '}
+                <span className="font-normal">{plan.topic || '—'}</span>
               </p>
             </div>
+              );
+            })()}
+
+            <FieldRevisionNotes plan={plan} fieldKey="topic" />
+            <FieldRevisionNotes plan={plan} fieldKey="phase" />
+            <FieldRevisionNotes plan={plan} fieldKey="session" />
+            <FieldRevisionNotes plan={plan} fieldKey="class_id" />
 
             {[
-              { heading: null, sections: META_SECTIONS },
               { heading: '1. Early Learning Goals', sections: EARLY_GOALS_SECTIONS },
               { heading: '2. Learning Objectives', sections: OBJECTIVES_SECTIONS },
               { heading: '3. Assessment', sections: ASSESSMENT_SECTIONS },
-              { heading: '4. Materials', sections: MATERIALS_SECTIONS },
-              { heading: '5. Procedure', sections: PROCEDURE_SECTIONS },
+              { heading: '4. Materials Needed To Prepare', sections: MATERIALS_SECTIONS },
+              { heading: '5. General Lesson Overview', sections: PROCEDURE_SECTIONS },
               {
                 heading: '6. Class-Specific Adjustments',
                 sections: CLASS_SECTIONS,

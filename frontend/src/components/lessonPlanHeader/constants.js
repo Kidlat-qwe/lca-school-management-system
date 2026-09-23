@@ -38,19 +38,21 @@ export function formatLetterheadRegion(region) {
 }
 
 /**
- * Normalize division office line
- * (e.g. "Bulacan" → "SCHOOLS DIVISION OFFICE OF BULACAN").
+ * Normalize division line
+ * (e.g. "Bulacan" → "SCHOOLS DIVISION OF BULACAN").
  * @param {string} division
  */
 export function formatLetterheadDivisionOffice(division) {
   const raw = String(division || '').trim();
-  if (!raw) return 'SCHOOLS DIVISION OFFICE OF BULACAN';
+  if (!raw) return 'SCHOOLS DIVISION OF BULACAN';
   const upper = raw.toUpperCase();
-  if (upper.includes('SCHOOLS DIVISION')) return upper;
-  if (upper.startsWith('DIVISION OF ') || upper.startsWith('DIVISION OFFICE')) {
-    return `SCHOOLS DIVISION OFFICE OF ${upper.replace(/^DIVISION (OFFICE )?OF\s+/i, '')}`;
+  if (upper.includes('SCHOOLS DIVISION')) {
+    return upper.replace(/\bOFFICE\s+/g, '').replace(/\s{2,}/g, ' ').trim();
   }
-  return `SCHOOLS DIVISION OFFICE OF ${upper}`;
+  if (upper.startsWith('DIVISION OF ') || upper.startsWith('DIVISION OFFICE')) {
+    return `SCHOOLS DIVISION OF ${upper.replace(/^DIVISION (OFFICE )?OF\s+/i, '')}`;
+  }
+  return `SCHOOLS DIVISION OF ${upper}`;
 }
 
 /**

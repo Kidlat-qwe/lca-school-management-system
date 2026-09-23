@@ -6,6 +6,7 @@ import { query, getClient } from '../config/database.js';
 import { generateClassCode } from '../utils/classCodeGenerator.js';
 import { sendSuspensionEmail } from '../utils/emailService.js';
 import { formatLongDateDisplay } from '../utils/dateUtils.js';
+import { findManualMakeupTimeConflicts } from '../utils/suspensionMakeupConflicts/index.js';
 
 const router = express.Router();
 
@@ -14,7 +15,15 @@ router.use(verifyFirebaseToken);
 router.use(requireBranchAccess);
 
 // Valid suspension reasons
-const VALID_REASONS = ['Typhoon', 'Earthquake', 'Flood', 'Holiday', 'Government Mandate', 'Other'];
+const VALID_REASONS = [
+  'Typhoon',
+  'Earthquake',
+  'Flood',
+  'Holiday',
+  'Government Mandate',
+  'Cancelled Class',
+  'Other',
+];
 
 /**
  * GET /api/sms/suspensions
@@ -361,6 +370,69 @@ router.post(
       );
       const classData = classInfo.rows[0];
 
+      // Manual makeup: allow dates from phase start through last calendar day of the phase's last month
+      // (e.g. Phase 1 spanning Sep–Oct → makeup allowed until Oct 31).
+      if (makeupStrategy === 'manual') {
+        const phaseSessionsResult = await client.query(
+          `SELECT scheduled_date
+           FROM classsessionstbl
+           WHERE class_id = $1 AND phase_number = $2
+             AND scheduled_date IS NOT NULL`,
+          [classData.class_id, phases[0]]
+        );
+        const phaseYmds = phaseSessionsResult.rows
+          .map((r) => {
+            const d = r.scheduled_date;
+            if (d instanceof Date && !Number.isNaN(d.getTime())) {
+              return d.toISOString().slice(0, 10);
+            }
+            const raw = String(d || '').trim();
+            return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : '';
+          })
+          .filter(Boolean)
+          .sort();
+
+        if (phaseYmds.length > 0) {
+          const minYmd = phaseYmds[0];
+          const lastSessionYmd = phaseYmds[phaseYmds.length - 1];
+          const [y, m] = lastSessionYmd.split('-').map(Number);
+          const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+          const maxYmd = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+
+          for (const schedule of makeupSchedules) {
+            const makeupYmd = String(schedule.makeup_date || '').slice(0, 10);
+            if (!makeupYmd || makeupYmd < minYmd || makeupYmd > maxYmd) {
+              await client.query('ROLLBACK');
+              return res.status(400).json({
+                success: false,
+                message: `Makeup dates must be between ${minYmd} and ${maxYmd} (through the end of the last month of this phase).`,
+              });
+            }
+          }
+        }
+
+        // Same day OK; overlapping time vs other active sessions / batch makeups is not
+        const existingSessionsResult = await client.query(
+          `SELECT classsession_id, phase_number, phase_session_number,
+                  scheduled_date, scheduled_start_time, scheduled_end_time, status
+           FROM classsessionstbl
+           WHERE class_id = $1`,
+          [classData.class_id]
+        );
+        const timeConflict = findManualMakeupTimeConflicts({
+          makeupSchedules,
+          classSessions: existingSessionsResult.rows,
+          excludeSessionIds: selected_session_ids,
+        });
+        if (!timeConflict.ok) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            success: false,
+            message: timeConflict.message,
+          });
+        }
+      }
+
       // --- Build makeup schedules for automatic strategy: add-last-phase ---
       if (makeupStrategy === 'add-last-phase') {
         console.log(`🧮 Generating automatic makeup schedules for strategy="add-last-phase"...`);
@@ -505,6 +577,35 @@ router.post(
       }
       console.log(`✅ ${makeupSchedules.length} makeup session(s) created successfully`);
 
+      // Manual makeup past the prior class end_date: extend classestbl.end_date so enrollment/floor stay consistent
+      if (makeupStrategy === 'manual' && makeupSchedules.length > 0) {
+        const makeupYmds = makeupSchedules
+          .map((s) => String(s.makeup_date || '').slice(0, 10))
+          .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+          .sort();
+        const latestMakeupYmd = makeupYmds[makeupYmds.length - 1];
+        if (latestMakeupYmd) {
+          const classEndResult = await client.query(
+            `SELECT end_date FROM classestbl WHERE class_id = $1`,
+            [classData.class_id]
+          );
+          const currentEndRaw = classEndResult.rows[0]?.end_date;
+          let currentEndYmd = '';
+          if (currentEndRaw instanceof Date && !Number.isNaN(currentEndRaw.getTime())) {
+            currentEndYmd = currentEndRaw.toISOString().slice(0, 10);
+          } else if (currentEndRaw) {
+            const raw = String(currentEndRaw).trim();
+            if (/^\d{4}-\d{2}-\d{2}/.test(raw)) currentEndYmd = raw.slice(0, 10);
+          }
+          if (!currentEndYmd || latestMakeupYmd > currentEndYmd) {
+            await client.query(
+              `UPDATE classestbl SET end_date = $1 WHERE class_id = $2`,
+              [latestMakeupYmd, classData.class_id]
+            );
+            console.log(`📅 Class end_date extended to ${latestMakeupYmd} (manual makeup)`);
+          }
+        }
+      }
 
       // Send notifications to enrolled students
       console.log(`📢 Creating notifications for enrolled students...`);

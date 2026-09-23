@@ -45,6 +45,25 @@ function EyeIcon({ className = 'h-5 w-5' }) {
   );
 }
 
+function DownloadIcon({ className = 'h-5 w-5' }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+      />
+    </svg>
+  );
+}
+
 function formatPhaseSession(plan) {
   const phase = String(plan.phase || '').trim();
   const session = String(plan.session || '').trim();
@@ -68,6 +87,7 @@ function formatTimestampParts(value) {
  *   showingLabel?: string,
  *   activePlanId?: number|string|null,
  *   onView: (plan: object) => void,
+ *   onDownload?: (plan: object) => void,
  *   onSelect?: (plan: object) => void,
  *   timestampMode?: 'submitted' | 'verified',
  *   showTeacher?: boolean,
@@ -80,6 +100,7 @@ export default function LessonPlanSubmissionsTable({
   showingLabel = '',
   activePlanId = null,
   onView,
+  onDownload,
   onSelect,
   timestampMode = 'submitted',
   showTeacher = false,
@@ -246,15 +267,28 @@ export default function LessonPlanSubmissionsTable({
                       )}
                     </td>
                     <td className="px-3 py-4 text-right text-sm font-medium">
-                      <button
-                        type="button"
-                        onClick={() => onView?.(plan)}
-                        className="inline-flex rounded-full p-2 text-gray-600 transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F7C844]"
-                        aria-label={`View lesson plan ${plan.topic || plan.lesson_plan_id}`}
-                        title="View lesson plan"
-                      >
-                        <EyeIcon />
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => onView?.(plan)}
+                          className="inline-flex rounded-full p-2 text-gray-600 transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F7C844]"
+                          aria-label={`View lesson plan ${plan.topic || plan.lesson_plan_id}`}
+                          title="View lesson plan"
+                        >
+                          <EyeIcon />
+                        </button>
+                        {onDownload ? (
+                          <button
+                            type="button"
+                            onClick={() => onDownload(plan)}
+                            className="inline-flex rounded-full p-2 text-gray-600 transition-colors hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F7C844]"
+                            aria-label={`Download lesson plan ${plan.topic || plan.lesson_plan_id}`}
+                            title="Download PDF"
+                          >
+                            <DownloadIcon />
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );

@@ -89,7 +89,7 @@ Use the **branch dropdown in the yellow app header** on Lesson Plan Review. Empt
 
 ### Missed tab filter
 
-- **Track from** — start date for overdue history (default go-live: **2026-09-19**). Widen or narrow as needed.
+- **Track from** — start date for overdue history (default go-live: **2026-09-25**). Widen or narrow as needed.
 
 Admin verifiers do not get a branch dropdown; the API already limits them to their branch.
 
@@ -172,7 +172,7 @@ Important:
 - A teacher **draft** does **not** clear a miss — only submit (or later workflow statuses) does.
 - This tab is a **compliance log**, not a place to approve. Teachers clear items by submitting from their Lesson Plans → Missed → **Create**.
 
-Default tracking start is **2026-09-19** so older class schedules from before the feature do not flood the list.
+Default tracking start is **2026-09-25** so older class schedules from before the feature do not flood the list.
 
 ---
 

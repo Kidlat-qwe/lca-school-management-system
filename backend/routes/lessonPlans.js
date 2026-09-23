@@ -26,6 +26,7 @@ import {
   validateRevisionFeedbackPayload,
   isConfiguredLessonPlanAdminVerifier,
 } from '../lib/lessonPlans/index.js';
+import { generateLessonPlanPdfBuffer } from '../lib/lessonPlans/generateLessonPlanPdf/index.js';
 
 const router = express.Router();
 
@@ -52,11 +53,13 @@ const SELECT_PLAN = `
     lcp.program_name AS linked_program_name,
     (
       COALESCE(
+        NULLIF(TRIM(lp.subject), ''),
         (
           SELECT cs.class_code
           FROM classsessionstbl cs
           WHERE cs.class_id = lp.class_id
             AND NULLIF(TRIM(cs.class_code), '') IS NOT NULL
+            AND lp.phase !~* '^[[:space:]]*Week'
             AND NULLIF(substring(lp.phase from '[0-9]+'), '') IS NOT NULL
             AND NULLIF(
               (regexp_match(lp.session_label, '[Ss]ession[[:space:]]*([0-9]+)'))[1],
@@ -71,7 +74,6 @@ const SELECT_PLAN = `
           ORDER BY cs.classsession_id ASC
           LIMIT 1
         ),
-        NULLIF(TRIM(lp.subject), ''),
         (
           SELECT cs.class_code
           FROM classsessionstbl cs
@@ -562,8 +564,61 @@ router.get(
 );
 
 /**
+ * GET /api/sms/lesson-plans/:id/pdf
+ * Download lesson plan PDF (teacher owner, Superadmin, or configured Admin verifier).
+ */
+router.get(
+  '/:id/pdf',
+  requireRole('Teacher', 'Superadmin', 'Admin'),
+  [param('id').isInt(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const result = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
+      const row = result.rows[0];
+      if (!row) {
+        return res.status(404).json({ success: false, message: 'Lesson plan not found' });
+      }
+      if (
+        req.user.userType === 'Teacher' &&
+        Number(row.teacher_user_id) !== Number(req.user.userId || req.user.user_id)
+      ) {
+        return res.status(403).json({ success: false, message: 'Access denied' });
+      }
+      if (req.user.userType === 'Superadmin' || req.user.userType === 'Admin') {
+        const ctx = await getVerifierContext(req);
+        const access = assertVerifierMayAccessPlan(ctx, row);
+        if (!access.ok) {
+          return res.status(access.status).json({
+            success: false,
+            message: access.message,
+          });
+        }
+      }
+
+      const plan = mapLessonPlanRow(row);
+      const pdfBuffer = await generateLessonPlanPdfBuffer(plan);
+      const safeTopic = String(plan.topic || 'lesson-plan')
+        .replace(/[^a-zA-Z0-9-_]+/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 40)
+        .replace(/^-|-$/g, '') || 'lesson-plan';
+      const filename = `lesson-plan-${id}-${safeTopic}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', pdfBuffer.length);
+      return res.send(pdfBuffer);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/sms/lesson-plans
  * Teacher creates a draft (or submitted).
+ * Drafts allow partial content; submit requires a complete plan.
  */
 router.post(
   '/',
@@ -571,7 +626,12 @@ router.post(
   async (req, res, next) => {
     try {
       const payload = normalizeLessonPlanBody(req.body);
-      const errors = validateLessonPlanPayload(payload, { requireAll: true });
+      const status = req.body.status === 'submitted' ? 'submitted' : 'draft';
+      const isDraft = status === 'draft';
+      const errors = validateLessonPlanPayload(payload, {
+        requireAll: !isDraft,
+        allowPartial: isDraft,
+      });
       if (errors.length) {
         return res.status(400).json({ success: false, message: errors.join('; ') });
       }
@@ -582,15 +642,17 @@ router.post(
         query,
         payload,
         branchId,
-        teacherId
+        teacherId,
+        { allowMissingClass: isDraft }
       );
       if (!enriched.ok) {
         return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
       }
 
-      const status = req.body.status === 'submitted' ? 'submitted' : 'draft';
       // Reflections stay empty until verifier approves and lesson date unlocks them.
-      const cols = lessonPlanWriteColumns(clearReflectionFields(enriched.payload));
+      const cols = lessonPlanWriteColumns(clearReflectionFields(enriched.payload), {
+        draftDefaults: isDraft,
+      });
 
       const result = await query(
         `
@@ -752,7 +814,11 @@ router.put(
           ...req.body,
         })
       );
-      const errors = validateLessonPlanPayload(payload, { requireAll: true });
+      // Draft / revision saves allow partial content; full validation remains on submit.
+      const errors = validateLessonPlanPayload(payload, {
+        requireAll: false,
+        allowPartial: true,
+      });
       if (errors.length) {
         return res.status(400).json({ success: false, message: errors.join('; ') });
       }
@@ -762,12 +828,13 @@ router.put(
         query,
         payload,
         branchId,
-        teacherId
+        teacherId,
+        { allowMissingClass: true }
       );
       if (!enriched.ok) {
         return res.status(400).json({ success: false, message: enriched.errors.join('; ') });
       }
-      const cols = lessonPlanWriteColumns(enriched.payload);
+      const cols = lessonPlanWriteColumns(enriched.payload, { draftDefaults: true });
 
       await query(
         `
@@ -854,6 +921,46 @@ router.put(
 
       const updated = await query(`${SELECT_PLAN} WHERE lp.lesson_plan_id = $1`, [id]);
       res.json({ success: true, data: mapLessonPlanRow(updated.rows[0]) });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/sms/lesson-plans/:id
+ * Teacher may delete only their own draft plans.
+ */
+router.delete(
+  '/:id',
+  requireRole('Teacher'),
+  [param('id').isInt(), handleValidationErrors],
+  async (req, res, next) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const teacherId = req.user.userId || req.user.user_id;
+      const existing = await query(
+        `SELECT lesson_plan_id, status, teacher_user_id
+         FROM lessonplanstbl
+         WHERE lesson_plan_id = $1 AND teacher_user_id = $2`,
+        [id, teacherId]
+      );
+      if (!existing.rows[0]) {
+        return res.status(404).json({ success: false, message: 'Lesson plan not found' });
+      }
+      if (existing.rows[0].status !== 'draft') {
+        return res.status(400).json({
+          success: false,
+          message: 'Only draft lesson plans can be deleted',
+        });
+      }
+
+      await query(`DELETE FROM lessonplanstbl WHERE lesson_plan_id = $1 AND teacher_user_id = $2`, [
+        id,
+        teacherId,
+      ]);
+
+      res.json({ success: true, message: 'Draft lesson plan deleted' });
     } catch (error) {
       next(error);
     }

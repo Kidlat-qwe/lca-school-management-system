@@ -2,7 +2,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../../config/api';
 import { useAuth } from '../../contexts/AuthContext';
-import { appAlert } from '../../utils/appAlert';
+import { appAlert, appConfirm } from '../../utils/appAlert';
+import { downloadLessonPlanPdf } from '../../utils/downloadLessonPlanPdf';
 import { LessonPlanHeader } from '../../components/lessonPlanHeader';
 import LessonPlanClassCodeSelect from '../../components/lessonPlanClassCodeSelect';
 import LessonPlanSubmissionsTable from '../../components/lessonPlanSubmissionsTable';
@@ -27,7 +28,11 @@ import {
   buildLessonPlanSessionOptions,
   buildSessionKey,
   findLessonPlanSession,
+  formatLessonPlanClassOptionLabel,
+  isLessonPlanWeekGradeLevel,
+  LESSON_PLAN_WEEK_OPTIONS,
   parseLessonPlanPhaseSessionForm,
+  resolveSchedulePhaseSessionFromPlan,
   resolveSelectedSessionClassCode,
   formatLessonPlanDateDisplay,
 } from '../../utils/lessonPlanPhaseSession';
@@ -36,7 +41,9 @@ const createEmptyForm = () => ({
   lesson_date: new Date().toISOString().slice(0, 10),
   grade_level: '',
   class_id: '',
+  classsession_id: '',
   phase: '',
+  week: '',
   session: '',
   topic: '',
   early_learning_goals: '',
@@ -58,12 +65,14 @@ const createEmptyForm = () => ({
 });
 
 const populateFormFromPlan = (plan) => {
-  const { phase, session } = parseLessonPlanPhaseSessionForm(plan);
+  const { phase, week, session } = parseLessonPlanPhaseSessionForm(plan);
   return {
   lesson_date: plan.lesson_date ? String(plan.lesson_date).slice(0, 10) : '',
   grade_level: plan.grade_level || '',
   class_id: plan.class_id != null ? String(plan.class_id) : '',
+  classsession_id: '',
   phase,
+  week: week || '',
   session,
   topic: plan.topic || '',
   early_learning_goals: plan.early_learning_goals || '',
@@ -127,7 +136,14 @@ function isLessonPlanSubmitReady(formData = {}) {
   }
   if (!String(formData.grade_level || '').trim()) return false;
   if (!String(formData.class_id || '').trim()) return false;
-  if (!String(formData.phase || '').trim()) return false;
+  const usesWeek = isLessonPlanWeekGradeLevel(formData.grade_level);
+  if (usesWeek) {
+    if (!String(formData.week || '').trim()) return false;
+    // Schedule phase still required so Class Code / Session stay linked.
+    if (!String(formData.phase || '').trim()) return false;
+  } else if (!String(formData.phase || '').trim()) {
+    return false;
+  }
   if (!String(formData.session || '').trim()) return false;
   if (!String(formData.topic || '').trim()) return false;
   return LESSON_PLAN_SECTION_REQUIRED_FIELDS.every((key) => !isRichTextEmpty(formData[key]));
@@ -164,6 +180,7 @@ export default function TeacherLessonPlans() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [viewPlan, setViewPlan] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [formDirty, setFormDirty] = useState(false);
   const [formData, setFormData] = useState(createEmptyForm);
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('');
@@ -172,6 +189,7 @@ export default function TeacherLessonPlans() {
   const [loading, setLoading] = useState(true);
   const [missedLoading, setMissedLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingPlan, setDeletingPlan] = useState(false);
   const [error, setError] = useState('');
   const [classSessions, setClassSessions] = useState([]);
   const [classSessionsLoading, setClassSessionsLoading] = useState(false);
@@ -180,6 +198,7 @@ export default function TeacherLessonPlans() {
   const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
   const formScrollRef = useRef(null);
   const reflectionSectionRef = useRef(null);
+  const saveLessonPlanRef = useRef(null);
   const [reflectionBlink, setReflectionBlink] = useState(false);
 
   const scrollFormToTop = useCallback(() => {
@@ -222,6 +241,11 @@ export default function TeacherLessonPlans() {
 
   const gradeLevelOptions = useMemo(() => meta?.grade_levels || [], [meta]);
 
+  const usesWeekGrade = useMemo(
+    () => isLessonPlanWeekGradeLevel(formData.grade_level),
+    [formData.grade_level]
+  );
+
   const classOptions = useMemo(() => {
     if (!formData.grade_level) return [];
     const filtered = branchClasses.filter((cls) =>
@@ -238,23 +262,34 @@ export default function TeacherLessonPlans() {
   }, [branchClasses, formData.grade_level, formData.class_id]);
 
   const classCodeOptions = useMemo(() => {
+    if (!formData.class_id) return [];
     const keepValue =
       formData.class_id && formData.phase && formData.session
-        ? buildLessonPlanClassCodeValue(formData.class_id, formData.phase, formData.session)
+        ? buildLessonPlanClassCodeValue(
+            formData.class_id,
+            formData.phase,
+            formData.session,
+            formData.classsession_id
+          )
         : '';
-    // All grade sessions, each stamped with its class_id (View Class Details codes).
+    // Sessions for the selected class only (Class filter → Class Code).
+    const fromGrade = gradeSessions.filter(
+      (row) => String(row.class_id) === String(formData.class_id)
+    );
     const source =
-      gradeSessions.length > 0
-        ? gradeSessions
+      fromGrade.length > 0
+        ? fromGrade
         : classSessions.map((row) => ({ ...row, class_id: formData.class_id }));
     return buildLessonPlanClassCodeOptions(source, {
       todayYmd: manilaToday,
       keepValue,
+      classId: formData.class_id,
     });
   }, [
     classSessions,
     gradeSessions,
     formData.class_id,
+    formData.classsession_id,
     formData.phase,
     formData.session,
     manilaToday,
@@ -263,8 +298,46 @@ export default function TeacherLessonPlans() {
 
   const selectedClassCodeValue = useMemo(() => {
     if (!formData.class_id || !formData.phase || !formData.session) return '';
-    return buildLessonPlanClassCodeValue(formData.class_id, formData.phase, formData.session);
-  }, [formData.class_id, formData.phase, formData.session]);
+    const exact = buildLessonPlanClassCodeValue(
+      formData.class_id,
+      formData.phase,
+      formData.session,
+      formData.classsession_id
+    );
+    if (classCodeOptions.some((o) => o.value === exact)) return exact;
+    // Edit restore: match by class + phase/session when classsession_id was not saved on the form.
+    const fuzzy = classCodeOptions.find(
+      (o) =>
+        o.selectable !== false &&
+        String(o.class_id) === String(formData.class_id) &&
+        String(o.phase) === String(formData.phase) &&
+        String(o.session) === String(formData.session)
+    );
+    return fuzzy?.value || exact;
+  }, [
+    classCodeOptions,
+    formData.class_id,
+    formData.classsession_id,
+    formData.phase,
+    formData.session,
+  ]);
+
+  const selectedClassCodeOption = useMemo(
+    () => classCodeOptions.find((o) => o.value === selectedClassCodeValue) || null,
+    [classCodeOptions, selectedClassCodeValue]
+  );
+
+  // Keep classsession_id in sync once Class Code options resolve (edit / draft reopen).
+  useEffect(() => {
+    if (!formOpen || !selectedClassCodeOption?.classsession_id) return;
+    const nextId = String(selectedClassCodeOption.classsession_id);
+    setFormData((prev) => {
+      if (String(prev.classsession_id || '') === nextId) return prev;
+      return { ...prev, classsession_id: nextId };
+    });
+  }, [formOpen, selectedClassCodeOption?.classsession_id]);
+
+  const selectedIsMakeup = Boolean(selectedClassCodeOption?.is_makeup);
 
   const phaseOptions = useMemo(
     () =>
@@ -295,10 +368,16 @@ export default function TeacherLessonPlans() {
   );
 
   const selectedClassLabel = useMemo(() => {
-    const sessionCode = resolveSelectedSessionClassCode(classSessions, formData.session);
-    if (sessionCode) return sessionCode;
-    return selectedPlan?.class_label || selectedPlan?.subject || '';
-  }, [classSessions, formData.session, selectedPlan]);
+    const cls = branchClasses.find((c) => String(c.class_id) === String(formData.class_id));
+    if (cls) {
+      return (
+        formatLessonPlanClassOptionLabel(cls) ||
+        cls.class_name ||
+        `Class ${cls.class_id}`
+      );
+    }
+    return selectedPlan?.class_name || selectedPlan?.class_label || '';
+  }, [branchClasses, formData.class_id, selectedPlan]);
 
   const filterGradeOptions = useMemo(() => {
     const fromMeta = Array.isArray(meta?.grade_levels) ? meta.grade_levels : [];
@@ -542,9 +621,49 @@ export default function TeacherLessonPlans() {
     };
   }, [formData.class_id, gradeSessions]);
 
-  // Grade Level only loads Class Code options — do not auto-select Class Code / Phase / Session.
-  // Phase + Session fill only after the teacher picks a Class Code (see onChange below).
+  // Restore schedule Phase / Session / classsession from saved plan once sessions load.
+  useEffect(() => {
+    if (!formOpen || !selectedPlan) return;
+    if (formData.phase && formData.session && formData.classsession_id) return;
+    if (!classSessions.length && !gradeSessions.length) return;
+    const source =
+      classSessions.length > 0
+        ? classSessions
+        : gradeSessions.filter(
+            (row) => String(row.class_id) === String(formData.class_id)
+          );
+    const resolved = resolveSchedulePhaseSessionFromPlan(selectedPlan, source);
+    if (!resolved.phase && !resolved.session && !resolved.classsession_id) return;
+    setFormData((prev) => {
+      const nextPhase = prev.phase || resolved.phase || '';
+      const nextSession = prev.session || resolved.session || '';
+      const nextCsId = prev.classsession_id || resolved.classsession_id || '';
+      if (
+        prev.phase === nextPhase &&
+        prev.session === nextSession &&
+        String(prev.classsession_id || '') === String(nextCsId || '')
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        phase: nextPhase,
+        session: nextSession,
+        classsession_id: nextCsId,
+      };
+    });
+  }, [
+    formOpen,
+    selectedPlan,
+    formData.phase,
+    formData.session,
+    formData.classsession_id,
+    formData.class_id,
+    classSessions,
+    gradeSessions,
+  ]);
 
+  // Week-based plans: week number already parsed from phase; schedule phase may still need resolve above.
   useEffect(() => {
     if (!formData.session || !selectedSessionDateYmd) return;
     setFormData((prev) => {
@@ -554,9 +673,19 @@ export default function TeacherLessonPlans() {
   }, [formData.session, selectedSessionDateYmd]);
 
   const closeFormModal = useCallback(() => {
+    if (saving) return;
+    // Auto-save draft when the teacher closes mid-edit (X, backdrop, Escape).
+    const canAutoDraft =
+      formDirty &&
+      (!selectedPlan || ['draft', 'revision_requested'].includes(selectedPlan.status));
+    if (canAutoDraft) {
+      void saveLessonPlanRef.current?.({ submit: false, silent: true });
+      return;
+    }
     setFormOpen(false);
     setError('');
-  }, []);
+    setFormDirty(false);
+  }, [saving, formDirty, selectedPlan]);
 
   useEffect(() => {
     if (!formOpen) return undefined;
@@ -585,6 +714,7 @@ export default function TeacherLessonPlans() {
   }, [formOpen, selectedPlan?.lesson_plan_id, selectedPlan?.status, scrollToTeacherReflection]);
 
   const handleInputChange = (field, value) => {
+    setFormDirty(true);
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
@@ -593,6 +723,7 @@ export default function TeacherLessonPlans() {
     setSelectedPlan(null);
     setFormData(createEmptyForm());
     setError('');
+    setFormDirty(false);
     setFormOpen(true);
     scrollFormToTop();
   };
@@ -611,11 +742,14 @@ export default function TeacherLessonPlans() {
       lesson_date: String(missed.scheduled_date || missed.lesson_date || '').slice(0, 10),
       grade_level: missed.grade_level || '',
       class_id: missed.class_id != null ? String(missed.class_id) : '',
+      classsession_id:
+        missed.classsession_id != null ? String(missed.classsession_id) : '',
       phase: phaseNum,
       session: sessionKey,
       topic: missed.topic || '',
     });
     setError('');
+    setFormDirty(true);
     setFormOpen(true);
     scrollFormToTop();
   };
@@ -632,6 +766,7 @@ export default function TeacherLessonPlans() {
     }
     setFormData(nextForm);
     setError('');
+    setFormDirty(false);
     setFormOpen(true);
     if (plan?.status === 'awaiting_reflection') {
       scrollToTeacherReflection();
@@ -672,16 +807,19 @@ export default function TeacherLessonPlans() {
     setSelectedPlan(null);
     setFormData(createEmptyForm());
     setError('');
+    setFormDirty(false);
   };
 
-  const saveLessonPlan = async ({ submit = false } = {}) => {
+  const saveLessonPlan = async ({ submit = false, silent = false } = {}) => {
     try {
       setSaving(true);
       setError('');
 
       if (submit && !isLessonPlanSubmitReady(formData)) {
         setError(
-          'Complete lesson date, grade level, class, phase, session, topic, and all fields in sections 1–6 before submitting.'
+          usesWeekGrade
+            ? 'Complete lesson date, grade level, class, week, session, topic, and all fields in sections 1–6 before submitting.'
+            : 'Complete lesson date, grade level, class, phase, session, topic, and all fields in sections 1–6 before submitting.'
         );
         scrollFormToTop();
         return;
@@ -689,13 +827,18 @@ export default function TeacherLessonPlans() {
 
       const phaseSessionFields = buildLessonPlanPhaseSessionPayload(formData, classSessions);
       const selectedSessionClassCode =
-        resolveSelectedSessionClassCode(classSessions, formData.session) ||
+        resolveSelectedSessionClassCode(
+          classSessions,
+          formData.session,
+          formData.classsession_id
+        ) ||
         classCodeOptions.find((o) => o.value === selectedClassCodeValue)?.class_code ||
         '';
 
       // Reflections are never saved during draft/submit — unlocked after verifier approval (awaiting_reflection).
+      const { week: _week, classsession_id: _classsessionId, ...formFields } = formData;
       const payload = {
-        ...formData,
+        ...formFields,
         ...phaseSessionFields,
         class_id: formData.class_id ? Number(formData.class_id) : null,
         // Persist the Class Code shown in the form (session-scoped).
@@ -733,18 +876,61 @@ export default function TeacherLessonPlans() {
       }
       await fetchPlans();
       closeFormAfterSave();
-      await appAlert(
-        submit
-          ? 'Lesson plan submitted for verification'
-          : wasUpdate
-            ? 'Lesson plan saved'
-            : 'Lesson plan saved as draft'
-      );
+      if (!silent) {
+        await appAlert(
+          submit
+            ? 'Lesson plan submitted for verification'
+            : wasUpdate
+              ? 'Lesson plan saved'
+              : 'Lesson plan saved as draft'
+        );
+      }
     } catch (err) {
       setError(err.message || 'Failed to save lesson plan');
       if (submit) scrollFormToTop();
     } finally {
       setSaving(false);
+    }
+  };
+  saveLessonPlanRef.current = saveLessonPlan;
+
+  const handleDownloadPlan = async (plan) => {
+    if (!plan?.lesson_plan_id) return;
+    try {
+      await downloadLessonPlanPdf(plan.lesson_plan_id, plan);
+    } catch (err) {
+      await appAlert(err.message || 'Failed to download lesson plan PDF');
+    }
+  };
+
+  const handleDeleteDraftPlan = async (plan) => {
+    if (!plan?.lesson_plan_id || plan.status !== 'draft') return;
+    const topicLabel = String(plan.topic || '').trim() || 'Untitled draft';
+    const confirmed = await appConfirm({
+      title: 'Delete draft?',
+      message: `Delete draft lesson plan “${topicLabel}”? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      destructive: true,
+      variant: 'error',
+    });
+    if (!confirmed) return;
+
+    try {
+      setDeletingPlan(true);
+      setError('');
+      await apiRequest(`/lesson-plans/${plan.lesson_plan_id}`, { method: 'DELETE' });
+      setViewPlan(null);
+      if (selectedPlan?.lesson_plan_id === plan.lesson_plan_id) {
+        closeFormAfterSave();
+      }
+      await fetchPlans();
+      await appAlert('Draft lesson plan deleted');
+    } catch (err) {
+      setError(err.message || 'Failed to delete draft lesson plan');
+      await appAlert(err.message || 'Failed to delete draft lesson plan');
+    } finally {
+      setDeletingPlan(false);
     }
   };
 
@@ -982,6 +1168,7 @@ export default function TeacherLessonPlans() {
           }
           activePlanId={formOpen ? selectedPlan?.lesson_plan_id : null}
           onView={handleViewPlan}
+          onDownload={handleDownloadPlan}
           onSelect={handleSelectPlan}
         />
       )}
@@ -1064,12 +1251,15 @@ export default function TeacherLessonPlans() {
                 value={formData.grade_level}
                 onChange={(e) => {
                   const gradeLevel = e.target.value;
-                  // Changing grade clears Class Code / Phase / Session — teacher picks Class Code next.
+                  setFormDirty(true);
+                  // Changing grade clears Class / Class Code / Phase / Week / Session.
                   setFormData((prev) => ({
                     ...prev,
                     grade_level: gradeLevel,
                     class_id: '',
+                    classsession_id: '',
                     phase: '',
+                    week: '',
                     session: '',
                     topic: '',
                   }));
@@ -1089,26 +1279,73 @@ export default function TeacherLessonPlans() {
               </select>
             </label>
 
+            <label className={`${fieldLabelCls} col-span-full`}>
+              <span className="shrink-0">Class</span>
+              <select
+                disabled={!canEdit || loading || !formData.grade_level}
+                value={formData.class_id}
+                onChange={(e) => {
+                  const classId = e.target.value;
+                  setFormDirty(true);
+                  // Class filter first — clear Class Code / Phase / Week / Session.
+                  setFormData((prev) => ({
+                    ...prev,
+                    class_id: classId,
+                    classsession_id: '',
+                    phase: '',
+                    week: '',
+                    session: '',
+                    topic: '',
+                  }));
+                }}
+                className={fieldControlCls}
+                title={selectedClassLabel || undefined}
+              >
+                <option value="">
+                  {!formData.grade_level
+                    ? 'Select grade level first'
+                    : classOptions.length
+                      ? 'Select class'
+                      : 'No classes for this grade'}
+                </option>
+                {classOptions.map((cls) => (
+                  <option key={cls.class_id} value={String(cls.class_id)}>
+                    {formatLessonPlanClassOptionLabel(cls) ||
+                      cls.class_name ||
+                      `Class ${cls.class_id}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <div className={`${fieldLabelCls} col-span-full`}>
               <span className="shrink-0">Class Code</span>
               <LessonPlanClassCodeSelect
                 options={classCodeOptions}
                 value={selectedClassCodeValue}
                 disabled={
-                  !canEdit || loading || !formData.grade_level || gradeSessionsLoading
+                  !canEdit ||
+                  loading ||
+                  !formData.class_id ||
+                  gradeSessionsLoading ||
+                  classSessionsLoading
                 }
-                loading={gradeSessionsLoading}
+                loading={gradeSessionsLoading || classSessionsLoading}
                 emptyHint={
                   !formData.grade_level
                     ? 'Select grade level first'
-                    : 'No upcoming class codes for this grade'
+                    : !formData.class_id
+                      ? 'Select class first'
+                      : 'No upcoming class codes for this class'
                 }
                 placeholder="Select class code"
                 onChange={(opt) => {
-                  // Class Code is the source of truth — Phase / Session follow it.
+                  setFormDirty(true);
+                  // Class Code sets schedule Phase / Session for the selected class.
                   setFormData((prev) => ({
                     ...prev,
-                    class_id: String(opt.class_id || ''),
+                    class_id: String(opt.class_id || prev.class_id || ''),
+                    classsession_id: String(opt.classsession_id || ''),
                     phase: String(opt.phase || ''),
                     session: String(opt.session || ''),
                     lesson_date: opt.scheduled_date || prev.lesson_date,
@@ -1118,24 +1355,98 @@ export default function TeacherLessonPlans() {
               />
             </div>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class_id" />
+            {selectedIsMakeup ? (
+              <p className="col-span-full -mt-1 mb-1 text-[12px] text-amber-800">
+                Makeup class session — this lesson plan is for the rescheduled date and class code.
+              </p>
+            ) : null}
+
+            {usesWeekGrade ? (
+              <label className={fieldLabelCls}>
+                <span className="shrink-0">Week</span>
+                <select
+                  disabled={!canEdit || !formData.class_id || classSessionsLoading}
+                  value={formData.week}
+                  onChange={(e) => handleInputChange('week', e.target.value)}
+                  className={fieldControlCls}
+                >
+                  <option value="">
+                    {!formData.class_id
+                      ? 'Select class first'
+                      : !selectedClassCodeValue
+                        ? 'Select class code first'
+                        : 'Select week'}
+                  </option>
+                  {LESSON_PLAN_WEEK_OPTIONS.map((weekNum) => (
+                    <option key={weekNum} value={String(weekNum)}>
+                      {weekNum}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className={fieldLabelCls}>
+                <span className="shrink-0">Phase</span>
+                <select
+                  disabled={!canEdit || !formData.class_id || classSessionsLoading}
+                  value={formData.phase}
+                  onChange={(e) => {
+                    const phase = e.target.value;
+                    setFormDirty(true);
+                    const nextSession = buildLessonPlanSessionOptions(classSessions, phase, {
+                      todayYmd: manilaToday,
+                    })[0];
+                    const row = nextSession
+                      ? findLessonPlanSession(classSessions, nextSession.key)
+                      : null;
+                    setFormData((prev) => ({
+                      ...prev,
+                      phase,
+                      session: nextSession?.key || '',
+                      classsession_id: nextSession?.classsession_id || '',
+                      lesson_date: row?.scheduled_date
+                        ? String(row.scheduled_date).slice(0, 10)
+                        : prev.lesson_date,
+                      topic: String(row?.topic || '').trim() || prev.topic,
+                    }));
+                  }}
+                  className={fieldControlCls}
+                >
+                  <option value="">
+                    {!formData.class_id
+                      ? 'Select class first'
+                      : !selectedClassCodeValue
+                        ? 'Select class code first'
+                        : classSessionsLoading
+                          ? 'Loading phases…'
+                          : phaseOptions.length
+                            ? 'Select phase'
+                            : 'No upcoming phases for this class'}
+                  </option>
+                  {phaseOptions.map((phaseNum) => (
+                    <option key={phaseNum} value={String(phaseNum)}>
+                      {phaseNum}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <FieldRevisionNotes plan={selectedPlan} fieldKey="phase" />
 
             <label className={fieldLabelCls}>
-              <span className="shrink-0">Phase</span>
+              <span className="shrink-0">Session</span>
               <select
-                disabled={!canEdit || !formData.class_id || classSessionsLoading}
-                value={formData.phase}
+                disabled={!canEdit || !formData.phase || classSessionsLoading}
+                value={formData.session}
                 onChange={(e) => {
-                  const phase = e.target.value;
-                  const nextSession = buildLessonPlanSessionOptions(classSessions, phase, {
-                    todayYmd: manilaToday,
-                  })[0];
-                  const row = nextSession
-                    ? findLessonPlanSession(classSessions, nextSession.key)
-                    : null;
+                  const sessionKey = e.target.value;
+                  setFormDirty(true);
+                  const opt = sessionOptions.find((o) => o.key === sessionKey);
+                  const row = findLessonPlanSession(classSessions, sessionKey);
                   setFormData((prev) => ({
                     ...prev,
-                    phase,
-                    session: nextSession?.key || '',
+                    session: sessionKey,
+                    classsession_id: opt?.classsession_id || '',
                     lesson_date: row?.scheduled_date
                       ? String(row.scheduled_date).slice(0, 10)
                       : prev.lesson_date,
@@ -1146,52 +1457,22 @@ export default function TeacherLessonPlans() {
               >
                 <option value="">
                   {!formData.class_id
-                    ? 'Select class code first'
-                    : classSessionsLoading
-                      ? 'Loading phases…'
-                      : phaseOptions.length
-                        ? 'Select phase'
-                        : 'No upcoming phases for this class'}
-                </option>
-                {phaseOptions.map((phaseNum) => (
-                  <option key={phaseNum} value={String(phaseNum)}>
-                    Phase {phaseNum}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <FieldRevisionNotes plan={selectedPlan} fieldKey="phase" />
-
-            <label className={fieldLabelCls}>
-              <span className="shrink-0">Session</span>
-              <select
-                disabled={!canEdit || !formData.phase || classSessionsLoading}
-                value={formData.session}
-                onChange={(e) => {
-                  const sessionKey = e.target.value;
-                  const row = findLessonPlanSession(classSessions, sessionKey);
-                  setFormData((prev) => ({
-                    ...prev,
-                    session: sessionKey,
-                    lesson_date: row?.scheduled_date
-                      ? String(row.scheduled_date).slice(0, 10)
-                      : prev.lesson_date,
-                    topic: String(row?.topic || '').trim() || prev.topic,
-                  }));
-                }}
-                className={fieldControlCls}
-              >
-                <option value="">
-                  {!formData.phase
-                    ? 'Select class code first'
-                    : sessionOptions.length
-                      ? 'Select session'
-                      : 'No upcoming sessions for this phase'}
+                    ? 'Select class first'
+                    : !formData.phase
+                      ? 'Select class code first'
+                      : sessionOptions.length
+                        ? 'Select session'
+                        : 'No upcoming sessions for this phase'}
                 </option>
                 {sessionOptions.map((opt) => (
                   <option key={opt.key} value={opt.key}>
-                    {opt.label}
-                    {opt.scheduled_date_label ? ` (${opt.scheduled_date_label})` : ''}
+                    {usesWeekGrade
+                      ? opt.scheduled_date_label ||
+                        opt.scheduled_date ||
+                        String(opt.display_session_number ?? opt.phase_session_number)
+                      : `${opt.display_session_number ?? opt.phase_session_number}${
+                          opt.scheduled_date_label ? ` (${opt.scheduled_date_label})` : ''
+                        }`}
                   </option>
                 ))}
               </select>
@@ -1199,7 +1480,9 @@ export default function TeacherLessonPlans() {
             <FieldRevisionNotes plan={selectedPlan} fieldKey="session" />
             {selectedSessionDateLabel ? (
               <p className="col-span-full -mt-1 mb-1 text-[12px] text-[#444444]">
-                Lesson date auto-filled from session schedule ({selectedSessionDateLabel}).
+                {selectedIsMakeup
+                  ? `Lesson date auto-filled from makeup session schedule (${selectedSessionDateLabel}).`
+                  : `Lesson date auto-filled from session schedule (${selectedSessionDateLabel}).`}
               </p>
             ) : null}
 
@@ -1307,13 +1590,13 @@ export default function TeacherLessonPlans() {
             ].map(([prefix, title]) => (
               <Fragment key={prefix}>
                 <label className={blockLabelCls}>
-                  {title} — Activity &amp; Goal
+                  {title}
                   <RichTextEditor
                     id={`lesson-plan-${prefix}-activity`}
                     disabled={!canEdit}
                     value={formData[`${prefix}_activity`]}
                     onChange={(html) => handleInputChange(`${prefix}_activity`, html)}
-                    placeholder={`${title} activity and goal`}
+                    placeholder={`Enter ${title.toLowerCase()} details`}
                     minHeight="120px"
                   />
                 </label>
@@ -1502,8 +1785,10 @@ export default function TeacherLessonPlans() {
       <LessonPlanViewModal
         open={Boolean(viewPlan)}
         plan={viewPlan}
-        onClose={() => setViewPlan(null)}
+        onClose={() => !deletingPlan && setViewPlan(null)}
         onEdit={(plan) => handleSelectPlan(plan)}
+        onDelete={handleDeleteDraftPlan}
+        deleting={deletingPlan}
       />
     </div>
   );

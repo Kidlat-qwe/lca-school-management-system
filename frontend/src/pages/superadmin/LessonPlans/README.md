@@ -28,7 +28,7 @@ Matches the teacher Lesson Plans table layout (`LessonPlanSubmissionsTable`):
 | Status | `status` |
 | Submitted At | `submitted_at` (Pending / Revision tabs; Asia/Manila) |
 | Verified At | `verified_at` (**Verified** tab only; replaces Submitted At) |
-| Action | Eye → open review modal |
+| Action | Eye → open review modal; download → PDF |
 
 ### Tabs
 
@@ -42,7 +42,7 @@ Matches the teacher Lesson Plans table layout (`LessonPlanSubmissionsTable`):
 ### Missed tab
 
 - Shows overdue expected lesson plans within the **Track from** window (`scheduled_date >= since` and before today, Asia/Manila).
-- Default `since` comes from code constant `LESSON_PLAN_MISSED_SINCE_DEFAULT` (**2026-09-19**) so months before the feature do not flood the list. Change **Track from** on the Missed tab to widen/narrow.
+- Default `since` comes from code constant `LESSON_PLAN_MISSED_SINCE_DEFAULT` (**2026-09-25**) so months before the feature do not flood the list. Change **Track from** on the Missed tab to widen/narrow.
 - Draft plans do **not** clear a miss.
 - Columns: Scheduled Date, Teacher, Topic, Class Code, Phase and Session, Grade Level, Days Overdue.
 - Component: `LessonPlanMissedTable`. Superadmin branch filter applies via `branch_id`.
@@ -75,7 +75,7 @@ Body fields follow the LCA Lesson Plan PDF order and are flaggable in revision m
 - Early Learning Goals; Objective 1–3
 - Assessment Method / Criteria
 - Materials Needed To Prepare
-- Procedure: Preliminaries, Lesson Proper, Conclusion (activity & goal each; time fields removed from UI)
+- Procedure: Preliminaries, Lesson Proper, Conclusion (time fields removed from UI)
 - Class-Specific Adjustments: considerations and adjustments for the selected class
 - Teacher's Reflection (read-only): Successes, Amazing Moments, Challenges, Improvements
 - **Head Teacher's Review and Feedback** (editable on Approve; read-only after): Overall Assessment, Specific Feedback, Next Steps — also shown read-only to the teacher after approval
