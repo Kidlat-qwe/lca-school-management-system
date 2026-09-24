@@ -416,7 +416,19 @@ const isMatrixCellRemovedOnOrBeforeBillingMonth = (cell, monthKey) => {
  * Clear enrolled-status badges for billing months on/after soft-removal.
  * Does not alter explicit dropped markers. Runs before payment-lifecycle overlay
  * so Active/Inactive is not anchored on a removed "new"/"re-enrolled" cell.
+ *
+ * Exception — upsell merge anchors (`matrix_merged_upsell_anchor`): keep mark +
+ * label (e.g. "new") so the Month Re-enrollment table still shows the caption
+ * and the cell counts in the re-enrollment rate denominator after stop-lower-
+ * billing. Total Active still excludes these via removed_at.
  */
+const statusToMatrixDisplayLabel = (status) => {
+  const key = String(status || '').trim().toLowerCase();
+  if (key === 're_enrolled') return 're-enrolled';
+  if (key === 'dropped') return 'dropped';
+  return key || null;
+};
+
 const clearEnrolledMatrixCellsRemovedOnOrBeforeBillingMonth = (students, periods, periodKey = 'months') => {
   for (const student of students || []) {
     const bucket = periodKey === 'months' ? student.months : student.phases;
@@ -428,6 +440,16 @@ const clearEnrolledMatrixCellsRemovedOnOrBeforeBillingMonth = (students, periods
       const status = String(cell.status || '').toLowerCase();
       if (!ENROLLED_STATUSES_LIST.includes(status)) continue;
       if (!isMatrixCellRemovedOnOrBeforeBillingMonth(cell, period.key)) continue;
+
+      // Upsell stop: keep historical enrolled badges on the lower-program row.
+      if (student.matrix_merged_upsell_anchor) {
+        if (!cell.label) {
+          cell.label = statusToMatrixDisplayLabel(status);
+        }
+        cell.retained_after_upsell_stop = true;
+        continue;
+      }
+
       cell.mark = '-';
       cell.label = null;
       cell.cleared_after_removal = true;
@@ -5946,7 +5968,13 @@ export const countMonthMatrixStatusLabels = (students, monthKey) => {
     const cell = student.months?.[monthKey];
     if (!cell?.label) continue;
     if (cell.cleared_after_removal) continue;
-    if (isMatrixCellRemovedOnOrBeforeBillingMonth(cell, monthKey)) continue;
+    // Soft-removed badges kept on upsell-merge rows still count (visible + rate denom).
+    if (
+      isMatrixCellRemovedOnOrBeforeBillingMonth(cell, monthKey) &&
+      !cell.retained_after_upsell_stop
+    ) {
+      continue;
+    }
 
     switch (cell.label) {
       case 'new':
