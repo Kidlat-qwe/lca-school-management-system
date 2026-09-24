@@ -794,7 +794,9 @@ router.post(
 
 /**
  * POST /api/sms/classes/move-student
- * Move an enrolled student from one class to another (same program only, phase preserved).
+ * Move an enrolled student from one class to another
+ * (same program, same level_tag, same branch; phase preserved).
+ * Cross-level moves are rejected — use Enroll Student (upsell) instead.
  * Body: { student_id, source_class_id, target_class_id }
  * Access: Superadmin, Admin
  */
@@ -823,13 +825,13 @@ router.post(
 
       const [sourceClassResult, targetClassResult, studentResult] = await Promise.all([
         client.query(
-          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students
+          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students, c.level_tag
            FROM classestbl c
            WHERE c.class_id = $1`,
           [source_class_id]
         ),
         client.query(
-          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students
+          `SELECT c.class_id, c.program_id, c.branch_id, c.max_students, c.level_tag
            FROM classestbl c
            WHERE c.class_id = $1`,
           [target_class_id]
@@ -862,6 +864,17 @@ router.post(
         return res.status(400).json({
           success: false,
           message: 'Can only move to a class with the same program.',
+        });
+      }
+
+      const sourceLevel = String(sourceClass.level_tag || '').trim().toLowerCase();
+      const targetLevel = String(targetClass.level_tag || '').trim().toLowerCase();
+      if (sourceLevel !== targetLevel) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'Cannot move to a different level. Use Enroll Student for level-ups (upsell).',
         });
       }
 
