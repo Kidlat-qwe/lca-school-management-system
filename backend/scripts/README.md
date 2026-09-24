@@ -19,6 +19,15 @@ node backend/scripts/checkClassHolidaySkip.js --production --class-id 172
 node backend/scripts/checkClassHolidaySkip.js --production --json
 ```
 
+### `dryRunForceHolidaySkipSessions.js`
+
+Dry-run only: preview forcing holiday skip (session date shifts) and check other Sat/Sun schedules for same-room / time conflicts. Does **not** write.
+
+```bash
+node backend/scripts/dryRunForceHolidaySkipSessions.js --production --class-id 172
+node backend/scripts/dryRunForceHolidaySkipSessions.js --production --class-name "VMP_Playgroup_SS_1:00PM"
+```
+
 ### `generateInstallmentInvoiceByEmail.js`
 
 Generate the **next installment invoice** for students listed in `TARGET_STUDENT_EMAILS`
