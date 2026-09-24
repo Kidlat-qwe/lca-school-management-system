@@ -3,7 +3,10 @@ import { body, param, query as queryValidator } from 'express-validator';
 import { verifyFirebaseToken, requireRole, requireBranchAccess } from '../middleware/auth.js';
 import { handleValidationErrors } from '../middleware/validation.js';
 import { query, getClient } from '../config/database.js';
-import { deactivateInstallmentProfileForClassDrop } from '../utils/billingNotificationEligibility.js';
+import {
+  deactivateInstallmentProfileForClassDrop,
+  cancelPendingInstallmentInvoicesForClassDrop,
+} from '../utils/billingNotificationEligibility.js';
 import { determineEnrollmentStatus } from '../utils/enrollmentStatus.js';
 import { queueFirstEnrollmentWelcomeEmail } from '../utils/firstEnrollmentWelcomeEmail/index.js';
 import { findOpenInstallmentChainForAbsolutePhase } from '../utils/rejoinDroppedPhaseSettlement/index.js';
@@ -1063,6 +1066,166 @@ router.get(
       });
     } catch (error) {
       next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/sms/students/class/:classId/stop-lower-billing/:studentId
+ *
+ * Upsell helper: unenroll a student from a lower-program class and stop its
+ * recurring installment billing.
+ *
+ * Steps (atomic transaction):
+ *   1. Soft-drop active enrollment rows (same logic as DELETE /class/:classId/drop/:studentId)
+ *   2. Deactivate installment profile → stops future invoice generation
+ *   3. Cancel pending/overdue installment invoices → no unpaid outstanding charges
+ *
+ * Called by the enroll wizard when staff choose "Stop [lower level] billing + unenroll"
+ * before confirming enrollment in the higher-level class.
+ *
+ * Body: optional { reason: string }
+ * Access: Superadmin, Admin
+ */
+router.post(
+  '/class/:classId/stop-lower-billing/:studentId',
+  [
+    param('classId').isInt().withMessage('Class ID must be an integer'),
+    param('studentId').isInt().withMessage('Student ID must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    const client = await getClient();
+    try {
+      const classId   = parseInt(req.params.classId,   10);
+      const studentId = parseInt(req.params.studentId, 10);
+      const reason    = String(req.body?.reason || '').trim() || 'Unenrolled — student upselling to higher program';
+
+      await client.query('BEGIN');
+
+      // --- 1. Soft-drop enrollment rows (same logic as manual drop) ---
+      const { rows } = await client.query(
+        `SELECT classstudent_id, phase_number, program_enrollment_status, removed_at, enrolled_at
+         FROM classstudentstbl
+         WHERE student_id = $1 AND class_id = $2
+         ORDER BY COALESCE(phase_number, 0) ASC, classstudent_id ASC`,
+        [studentId, classId]
+      );
+
+      const ACTIVE_STATUSES = new Set(['new', 're_enrolled', 'upsell', 'rejoin']);
+      const activeRows  = rows.filter((r) => ACTIVE_STATUSES.has(r.program_enrollment_status) && r.removed_at == null);
+      const pendingRows = rows.filter((r) => r.program_enrollment_status === 'pending_enrollment' && r.removed_at == null);
+
+      if (activeRows.length === 0 && pendingRows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'No active or pending enrollment found for this student in the specified class.',
+        });
+      }
+
+      if (activeRows.length > 0) {
+        const highestActivePhase = Math.max(...activeRows.map((r) => Number(r.phase_number) || 0));
+        const highestPhaseRows   = activeRows.filter((r) => Number(r.phase_number) === highestActivePhase);
+        const earlierActiveRows  = activeRows.filter((r) => Number(r.phase_number) !== highestActivePhase);
+
+        const highestHasOpenRemaining = await phaseHasOpenInstallmentRemaining(
+          client, studentId, classId, highestActivePhase
+        );
+
+        // Soft-remove earlier phases — keep historical status
+        if (earlierActiveRows.length > 0) {
+          await client.query(
+            `UPDATE classstudentstbl
+             SET removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, earlierActiveRows.map((r) => r.classstudent_id)]
+          );
+        }
+
+        if (highestHasOpenRemaining) {
+          // Partial/unpaid remaining → drop this phase
+          await client.query(
+            `UPDATE classstudentstbl
+             SET program_enrollment_status = 'dropped',
+                 removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, highestPhaseRows.map((r) => r.classstudent_id)]
+          );
+        } else {
+          // Fully settled → soft-remove highest phase and insert next-phase drop marker
+          await client.query(
+            `UPDATE classstudentstbl
+             SET removed_at     = CURRENT_TIMESTAMP,
+                 removed_reason = $1,
+                 removed_by     = $2
+             WHERE classstudent_id = ANY($3::int[])`,
+            [reason, req.user.userId || null, highestPhaseRows.map((r) => r.classstudent_id)]
+          );
+
+          const dropPhase = highestActivePhase + 1;
+          const existingDropPhase = rows.find((r) => Number(r.phase_number) === dropPhase);
+          if (!existingDropPhase) {
+            const markerEnrolledAt = activeRows.reduce((latest, row) => {
+              if (!row.enrolled_at) return latest;
+              if (!latest) return row.enrolled_at;
+              return new Date(row.enrolled_at) > new Date(latest) ? row.enrolled_at : latest;
+            }, null);
+            await client.query(
+              `INSERT INTO classstudentstbl
+                 (student_id, class_id, enrolled_by, phase_number,
+                  program_enrollment_status, enrolled_at, removed_at, removed_reason, removed_by)
+               VALUES ($1, $2, $3, $4, 'dropped',
+                 COALESCE($5::timestamptz, CURRENT_TIMESTAMP - INTERVAL '1 second'),
+                 CURRENT_TIMESTAMP, $6, $7)`,
+              [studentId, classId, 'System (Upsell stop-lower-billing)', dropPhase,
+               markerEnrolledAt, reason, req.user.userId || null]
+            );
+          }
+        }
+      }
+
+      // Drop any pending_enrollment rows
+      if (pendingRows.length > 0) {
+        await client.query(
+          `UPDATE classstudentstbl
+           SET program_enrollment_status = 'dropped',
+               enrolled_at    = COALESCE(enrolled_at, CURRENT_TIMESTAMP - INTERVAL '1 second'),
+               removed_at     = CURRENT_TIMESTAMP,
+               removed_reason = $1,
+               removed_by     = $2
+           WHERE classstudent_id = ANY($3::int[])`,
+          [reason, req.user.userId || null, pendingRows.map((r) => r.classstudent_id)]
+        );
+      }
+
+      // --- 2. Deactivate installment profile (stops future invoice generation) ---
+      await deactivateInstallmentProfileForClassDrop(client, { studentId, classId });
+
+      // --- 3. Cancel pending/overdue installment invoices ---
+      const invoicesCancelled = await cancelPendingInstallmentInvoicesForClassDrop(
+        client, { studentId, classId }
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        success: true,
+        message: 'Student unenrolled from lower-program class and billing stopped.',
+        class_id: classId,
+        student_id: studentId,
+        invoices_cancelled: invoicesCancelled,
+      });
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      next(error);
+    } finally {
+      client.release();
     }
   }
 );

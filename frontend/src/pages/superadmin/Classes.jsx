@@ -42,6 +42,7 @@ import {
 import { getEnrollmentAckReceiptLineTotal } from '../../utils/enrollmentAckReceiptList';
 import EnrollmentAckReceiptPickerTable from '../../components/enrollment/EnrollmentAckReceiptPickerTable';
 import ClassPhaseHeader from '../../components/class/ClassPhaseHeader';
+import UpsellLowerChoiceStep from '../../components/class/UpsellLowerChoiceStep';
 import ClassPhaseAttendanceSummaryModal from '../../components/class/ClassPhaseAttendanceSummaryModal';
 import ClassStatusToggle from '../../components/class/ClassStatusToggle';
 import ClassReactivateAssignTeacherModal from '../../components/class/ClassReactivateAssignTeacherModal';
@@ -191,7 +192,11 @@ const Classes = () => {
   const [noteDraft, setNoteDraft] = useState('');
   const [agendaDraft, setAgendaDraft] = useState('');
   const [isEnrollModalOpen, setIsEnrollModalOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'merchandise-config', 'review'
+  const [enrollStep, setEnrollStep] = useState('enrollment-option'); // 'enrollment-option', 'ack-receipt-selection', 'package-selection', 'installment-setup', 'student-selection', 'upsell-lower-choice', 'merchandise-config', 'review'
+  // Upsell lower-choice step state
+  const [upsellLowerMap, setUpsellLowerMap] = useState({}); // { [studentId]: [{ class_id, class_name, level_tag, has_installment }] }
+  const [upsellLowerChoices, setUpsellLowerChoices] = useState({}); // { [studentId]: 'continue' | 'stop' }
+  const [upsellLowerLoading, setUpsellLowerLoading] = useState(false);
   const [selectedClassForEnrollment, setSelectedClassForEnrollment] = useState(null);
   const [enrollmentPhaseContext, setEnrollmentPhaseContext] = useState({
     classId: null,
@@ -3865,6 +3870,10 @@ const initializePackageMerchSelections = useCallback(
     setAckReceiptsLoading(false);
     setAckReceiptsError('');
     setAckSearchTerm('');
+    // Reset upsell lower-choice step state
+    setUpsellLowerMap({});
+    setUpsellLowerChoices({});
+    setUpsellLowerLoading(false);
     setDebouncedAckSearch('');
     setSelectedAckReceipt(null);
     closeRejoinModal();
@@ -4849,6 +4858,32 @@ const initializePackageMerchSelections = useCallback(
     const errors = [];
 
     try {
+      // --- Upsell: stop lower-program billing for students who chose 'stop' ---
+      for (const student of selectedStudents) {
+        if ((upsellLowerChoices[student.user_id] ?? 'continue') === 'stop') {
+          const lowerClasses = upsellLowerMap[student.user_id] ?? [];
+          for (const lc of lowerClasses) {
+            try {
+              await apiRequest(
+                `/students/class/${lc.class_id}/stop-lower-billing/${student.user_id}`,
+                {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    reason: 'Unenrolled — student upselling to higher program',
+                  }),
+                }
+              );
+            } catch (stopErr) {
+              console.error(
+                `Failed to stop lower billing for student ${student.user_id} class ${lc.class_id}:`,
+                stopErr
+              );
+              // Non-blocking: log but continue with enroll
+            }
+          }
+        }
+      }
+
       // Enroll each student
       for (const student of selectedStudents) {
         try {
@@ -10910,7 +10945,7 @@ const initializePackageMerchSelections = useCallback(
           onClick={closeEnrollModal}
         >
           <div 
-            className={`bg-white rounded-lg shadow-xl relative z-[101] w-full max-h-[90vh] flex flex-col overflow-hidden ${enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'max-w-7xl' : 'max-w-6xl'}`}
+            className={`bg-white rounded-lg shadow-xl relative z-[101] w-full max-h-[90vh] flex flex-col overflow-hidden ${enrollStep === 'student-selection' || enrollStep === 'upsell-lower-choice' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'max-w-7xl' : 'max-w-6xl'}`}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -10922,6 +10957,7 @@ const initializePackageMerchSelections = useCallback(
                   {enrollStep === 'ack-receipt-selection' && 'Select Acknowledgement Receipt'}
                   {enrollStep === 'package-selection' && 'Select Package'}
                   {enrollStep === 'installment-setup' && 'Installment Enrollment Setup'}
+                  {enrollStep === 'upsell-lower-choice' && 'Lower-Program Enrollment'}
                   {(enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review') && 'Add students to package'}
                 </h2>
                 <p className="text-xs text-gray-500 mt-0.5">
@@ -10945,7 +10981,7 @@ const initializePackageMerchSelections = useCallback(
             </div>
 
             {/* Modal Body */}
-            <div className={`p-3 sm:p-4 flex-1 min-h-0 ${enrollStep === 'student-selection' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'overflow-y-auto lg:overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
+            <div className={`p-3 sm:p-4 flex-1 min-h-0 ${enrollStep === 'student-selection' || enrollStep === 'upsell-lower-choice' || enrollStep === 'merchandise-config' || enrollStep === 'review' ? 'overflow-y-auto lg:overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
               {/* Step 0: View Enrolled Students */}
               {enrollStep === 'view' && (
                 <div className="space-y-4">
@@ -11761,6 +11797,20 @@ const initializePackageMerchSelections = useCallback(
                     );
                   })()}
                 </div>
+              )}
+
+              {/* Upsell lower-choice step */}
+              {enrollStep === 'upsell-lower-choice' && (
+                <UpsellLowerChoiceStep
+                  students={selectedStudents}
+                  lowerProgramMap={upsellLowerMap}
+                  choices={upsellLowerChoices}
+                  onChoiceChange={(studentId, value) =>
+                    setUpsellLowerChoices((prev) => ({ ...prev, [studentId]: value }))
+                  }
+                  onBack={() => setEnrollStep('student-selection')}
+                  onContinue={() => setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'review')}
+                />
               )}
 
               {/* Step 3: Student Selection */}
@@ -13658,10 +13708,16 @@ const initializePackageMerchSelections = useCallback(
                         });
                         setEnrollStep('enrollment-option');
                       }
-                    } else if (enrollStep === 'merchandise-config') {
+                    } else if (enrollStep === 'upsell-lower-choice') {
                       setEnrollStep('student-selection');
+                    } else if (enrollStep === 'merchandise-config') {
+                      setEnrollStep(Object.keys(upsellLowerMap).length > 0 ? 'upsell-lower-choice' : 'student-selection');
                     } else if (enrollStep === 'review') {
-                      setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'student-selection');
+                      if (needsEnrollMerchandiseConfig) {
+                        setEnrollStep('merchandise-config');
+                      } else {
+                        setEnrollStep(Object.keys(upsellLowerMap).length > 0 ? 'upsell-lower-choice' : 'student-selection');
+                      }
                     }
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
@@ -13710,13 +13766,45 @@ const initializePackageMerchSelections = useCallback(
                     
                     // Installment settings are loaded from system Settings › Invoice Schedule
                     // No manual validation needed; fields are auto-populated on toggle
+
+                    // Probe for lower-program enrollments (upsell detection)
+                    if (selectedClassForEnrollment && selectedStudents.length > 0) {
+                      setUpsellLowerLoading(true);
+                      try {
+                        const lowerMap = {};
+                        const defaultChoices = {};
+                        await Promise.all(
+                          selectedStudents.map(async (student) => {
+                            try {
+                              const result = await apiRequest(
+                                `/classes/${selectedClassForEnrollment.class_id}/lower-program-enrollments?student_id=${student.user_id}`
+                              );
+                              if (result?.data?.length > 0) {
+                                lowerMap[student.user_id] = result.data;
+                                defaultChoices[student.user_id] = 'continue';
+                              }
+                            } catch {
+                              // Non-blocking — if probe fails, skip upsell step
+                            }
+                          })
+                        );
+                        setUpsellLowerMap(lowerMap);
+                        setUpsellLowerChoices(defaultChoices);
+                        if (Object.keys(lowerMap).length > 0) {
+                          setEnrollStep('upsell-lower-choice');
+                          return;
+                        }
+                      } finally {
+                        setUpsellLowerLoading(false);
+                      }
+                    }
                     
                     setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'review');
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
-                  disabled={selectedStudents.length === 0}
+                  disabled={selectedStudents.length === 0 || upsellLowerLoading}
                 >
-                  Continue
+                  {upsellLowerLoading ? 'Checking...' : 'Continue'}
                 </button>
               )}
               {enrollStep === 'merchandise-config' && (
@@ -13769,6 +13857,17 @@ const initializePackageMerchSelections = useCallback(
                   disabled={selectedStudents.length === 0}
                 >
                   Review order
+                </button>
+              )}
+              {enrollStep === 'upsell-lower-choice' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'review');
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium text-gray-900 bg-[#F7C844] hover:bg-[#F5B82E] rounded-lg transition-colors"
+                >
+                  Continue
                 </button>
               )}
               {enrollStep === 'installment-setup' && (

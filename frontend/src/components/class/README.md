@@ -54,6 +54,26 @@ Modal showing phase attendance as a student × session matrix (spreadsheet-style
 
 Backend logic: `backend/utils/phaseAttendanceSummaryService.js`
 
+## UpsellLowerChoiceStep
+
+Enroll-wizard step injected between **student-selection** and **merchandise-config / review** when a student being enrolled into a **higher-level** class already has an active enrollment in a **lower-level** class.
+
+- Rendered only when the `GET /classes/:id/lower-program-enrollments?student_id=X` probe returns at least one lower-class entry for any selected student.
+- Shows one card per affected student with:
+  - A table of their active lower-level class(es) and whether an installment plan is active.
+  - Two radio-style choice buttons (default = **Continue**):
+    - **Continue [Level] billing** — nothing changes in the lower class.
+    - **Stop [Level] billing + unenroll** — unenrolls student from lower class, deactivates installment profile, and cancels pending/overdue invoices.
+- On submit (`handleEnrollSubmit`), for each student with choice `'stop'`, the wizard calls `POST /students/class/:lowerClassId/stop-lower-billing/:studentId` before the normal enroll POST.
+
+**Backend APIs used:**
+- `GET /classes/:id/lower-program-enrollments?student_id=X` — probe for lower-level enrollments
+- `POST /students/class/:classId/stop-lower-billing/:studentId` — stop and unenroll
+
+**Props:** `students`, `lowerProgramMap`, `choices`, `onChoiceChange`, `onBack`, `onContinue`
+
+Used by: `frontend/src/pages/superadmin/Classes.jsx`, `frontend/src/pages/admin/adminClasses.jsx`
+
 ## ClassSessionAttendanceModal
 
 Shared modal for taking or viewing attendance for a single class session. Used on operational dashboards (`OperationalAttendanceCard`, `OperationalAttendanceModal`, `OperationalAttendanceShortcuts`) and can be reused anywhere a session ID is available.

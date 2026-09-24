@@ -28,6 +28,8 @@ import {
   PROGRAM_ENROLLMENT_STATUS,
   ACTIVE_ENROLLMENT_STATUSES,
   syncInstallmentProfileAfterRejoinPayment,
+  PROGRAM_LEVEL_ORDER,
+  levelTagIndex,
 } from '../utils/enrollmentStatus.js';
 import { enrollStudentForFullPaymentPhases } from '../utils/fullPaymentPhaseEnrollment.js';
 import {
@@ -9164,6 +9166,77 @@ router.post(
       });
     } catch (error) {
       console.error('Error checking teacher conflicts:', error);
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/sms/classes/:id/lower-program-enrollments?student_id=X
+ *
+ * Probe used by the enroll wizard upsell-lower-choice step.
+ * Returns other classes where the given student is actively enrolled
+ * AND whose level_tag is strictly lower in the program hierarchy than
+ * the class being enrolled in (:id).
+ *
+ * Response: { success: true, data: [{ class_id, class_name, level_tag, has_installment }] }
+ *
+ * Access: Superadmin, Admin
+ */
+router.get(
+  '/:id/lower-program-enrollments',
+  [
+    param('id').isInt().withMessage('Class ID must be an integer'),
+    queryValidator('student_id').isInt().withMessage('student_id query param must be an integer'),
+    handleValidationErrors,
+  ],
+  requireRole('Superadmin', 'Admin'),
+  async (req, res, next) => {
+    try {
+      const classId = parseInt(req.params.id, 10);
+      const studentId = parseInt(req.query.student_id, 10);
+
+      // Resolve level_tag of the target (higher) class
+      const targetClassResult = await query(
+        `SELECT level_tag FROM classestbl WHERE class_id = $1`,
+        [classId]
+      );
+      if (targetClassResult.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Class not found.' });
+      }
+      const targetLevelTag = targetClassResult.rows[0].level_tag || null;
+      const targetIdx = levelTagIndex(targetLevelTag);
+
+      // If target class has no known level or is at the bottom, no lower programs possible
+      if (targetIdx <= 0) {
+        return res.json({ success: true, data: [] });
+      }
+
+      // Find other active enrollments for this student in classes with a lower level_tag
+      const lowerEnrollmentsResult = await query(
+        `SELECT
+           c.class_id,
+           COALESCE(c.class_name, c.level_tag) AS class_name,
+           c.level_tag,
+           EXISTS (
+             SELECT 1
+             FROM installmentinvoiceprofilestbl ip
+             WHERE ip.student_id = $1
+               AND ip.class_id   = c.class_id
+               AND ip.is_active  = true
+           ) AS has_installment
+         FROM classstudentstbl cs
+         INNER JOIN classestbl c ON cs.class_id = c.class_id
+         WHERE cs.student_id = $1
+           AND cs.class_id  != $2
+           AND cs.program_enrollment_status IN ('new', 're_enrolled', 'upsell', 'rejoin')
+           AND cs.removed_at IS NULL
+           AND c.level_tag = ANY($3::text[])`,
+        [studentId, classId, PROGRAM_LEVEL_ORDER.slice(0, targetIdx)]
+      );
+
+      return res.json({ success: true, data: lowerEnrollmentsResult.rows });
+    } catch (error) {
       next(error);
     }
   }

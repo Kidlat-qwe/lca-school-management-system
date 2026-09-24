@@ -232,6 +232,36 @@ export async function deactivateInstallmentProfileForClassDrop(client, { student
 }
 
 /**
+ * Cancel all pending/overdue installment invoices for a student in a class.
+ * Called alongside deactivateInstallmentProfileForClassDrop when stopping a
+ * lower-program billing plan during an upsell.
+ *
+ * Only invoices linked to an installment profile (installmentinvoiceprofiles_id IS NOT NULL)
+ * with status Pending or Overdue are cancelled; paid invoices are preserved.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {{ studentId: number, classId: number }} params
+ * @returns {Promise<number>} count of cancelled invoices
+ */
+export async function cancelPendingInstallmentInvoicesForClassDrop(client, { studentId, classId }) {
+  const sid = Number(studentId);
+  const cid = Number(classId);
+  if (!sid || !cid) return 0;
+
+  const res = await client.query(
+    `UPDATE invoicestbl i
+     SET    status = 'Cancelled'
+     FROM   installmentinvoiceprofilestbl ip
+     WHERE  ip.installmentinvoiceprofiles_id = i.installmentinvoiceprofiles_id
+       AND  ip.student_id = $1
+       AND  ip.class_id   = $2
+       AND  i.status IN ('Pending', 'Overdue')`,
+    [sid, cid]
+  );
+  return res.rowCount || 0;
+}
+
+/**
  * Pause all installment profiles for an inactive class (records preserved).
  *
  * @param {import('pg').PoolClient} client
