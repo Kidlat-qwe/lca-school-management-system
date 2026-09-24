@@ -4,6 +4,21 @@ This directory contains utility scripts for managing and maintaining the Physica
 
 ## Available Scripts
 
+### `checkClassHolidaySkip.js`
+
+Read-only check: whether a class’s sessions correctly skipped holidays (`custom_holidaystbl`).
+
+Compares actual `classsessionstbl` dates to schedules generated with and without holiday skip. Lists any sessions that fall on a holiday. Does **not** modify data.
+
+```bash
+# Default class name VMP_Playgroup_SS_1:00PM (use --production for prod DB)
+node backend/scripts/checkClassHolidaySkip.js --production
+
+node backend/scripts/checkClassHolidaySkip.js --production --class-name "VMP_Playgroup"
+node backend/scripts/checkClassHolidaySkip.js --production --class-id 172
+node backend/scripts/checkClassHolidaySkip.js --production --json
+```
+
 ### `generateInstallmentInvoiceByEmail.js`
 
 Generate the **next installment invoice** for students listed in `TARGET_STUDENT_EMAILS`
@@ -560,6 +575,25 @@ Default dry-run.
 node scripts/mergeMistakenMerchandiseTypes.js --dry-run
 node scripts/mergeMistakenMerchandiseTypes.js --apply
 ```
+
+### `repairStockRequestShippedSync.js`
+
+When RHET shows **Arranged Delivery** / SHIPPED but CMS stayed **Pending**
+(missed webhook or status alias), sync the local row onto the **Shipped** tab
+so Branch Admin can **Confirm received**. Does **not** credit stock and does
+**not** call RHET `/deliver` — Confirm received does both.
+
+Defaults to `request_id=85` / `PSMS-85` (ID Lace / `lca_id_lace` incident).
+Dry-run by default; pass `--apply` to write.
+
+```bash
+node scripts/repairStockRequestShippedSync.js --production
+node scripts/repairStockRequestShippedSync.js --production --request-id=85
+node scripts/repairStockRequestShippedSync.js --production --request-id=85 --apply
+node scripts/repairStockRequestShippedSync.js --production --request-id=85 --inventory-request-id=<uuid> --apply
+```
+
+After apply: CMS → Merchandise → My Requests → **Shipped** → Confirm received.
 
 ### `repairInventoryFulfillment.js`
 
