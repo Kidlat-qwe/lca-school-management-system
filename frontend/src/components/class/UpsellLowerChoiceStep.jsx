@@ -22,17 +22,15 @@ import React from 'react';
  *   lowerProgramMap: Record<number, LowerClass[]>,
  *   choices: Record<number, 'continue' | 'stop'>,
  *   onChoiceChange: (studentId: number, value: 'continue' | 'stop') => void,
- *   onBack: () => void,
- *   onContinue: () => void,
  * }} props
+ *
+ * Navigation (Back / Continue / Cancel) is handled by the parent enroll modal footer.
  */
 export default function UpsellLowerChoiceStep({
   students = [],
   lowerProgramMap = {},
   choices = {},
   onChoiceChange,
-  onBack,
-  onContinue,
 }) {
   // Only show rows for students that actually have lower-program data
   const relevantStudents = students.filter(
@@ -176,24 +174,6 @@ export default function UpsellLowerChoiceStep({
             </div>
           );
         })}
-      </div>
-
-      {/* ---- Navigation ---- */}
-      <div className="flex items-center justify-between pt-2">
-        <button
-          type="button"
-          onClick={onBack}
-          className="px-4 py-2 text-sm font-medium text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-        >
-          Back
-        </button>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="px-5 py-2 text-sm font-semibold text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 transition-colors"
-        >
-          Continue
-        </button>
       </div>
     </div>
   );

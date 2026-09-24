@@ -70,7 +70,9 @@ Enroll-wizard step injected between **student-selection** and **merchandise-conf
 - `GET /classes/:id/lower-program-enrollments?student_id=X` — probe for lower-level enrollments
 - `POST /students/class/:classId/stop-lower-billing/:studentId` — stop and unenroll
 
-**Props:** `students`, `lowerProgramMap`, `choices`, `onChoiceChange`, `onBack`, `onContinue`
+**Props:** `students`, `lowerProgramMap`, `choices`, `onChoiceChange`
+
+Navigation uses the parent enroll modal footer (Back / Continue / Cancel).
 
 Used by: `frontend/src/pages/superadmin/Classes.jsx`, `frontend/src/pages/admin/adminClasses.jsx`
 

@@ -11808,8 +11808,6 @@ const initializePackageMerchSelections = useCallback(
                   onChoiceChange={(studentId, value) =>
                     setUpsellLowerChoices((prev) => ({ ...prev, [studentId]: value }))
                   }
-                  onBack={() => setEnrollStep('student-selection')}
-                  onContinue={() => setEnrollStep(needsEnrollMerchandiseConfig ? 'merchandise-config' : 'review')}
                 />
               )}
 
