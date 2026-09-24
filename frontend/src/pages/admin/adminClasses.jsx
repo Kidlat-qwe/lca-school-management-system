@@ -13319,7 +13319,7 @@ const resolvedBranchId =
               {enrollStep === 'student-selection' && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     if (selectedStudents.length === 0) {
                       appAlert('Please select a student to continue');
                       return;
