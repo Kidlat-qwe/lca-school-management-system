@@ -3065,10 +3065,9 @@ const initializePackageMerchSelections = useCallback(
     setMoveTargetClasses([]);
     try {
       const branchId = sourceClass.branch_id;
-      const programId = sourceClass.program_id;
       const sourceClassId = sourceClass.class_id;
       const sourceLevel = String(sourceClass.level_tag || '').trim().toLowerCase();
-      const response = await apiRequest(`/classes?branch_id=${branchId}&program_id=${programId}&limit=100`);
+      const response = await apiRequest(`/classes?branch_id=${branchId}&limit=200`);
       const allClasses = response.data || [];
       const targets = allClasses.filter(
         (c) =>
@@ -14970,14 +14969,14 @@ const resolvedBranchId =
             </div>
             <div className="px-6 py-4 overflow-y-auto flex-1 space-y-4">
               <p className="text-sm text-gray-600">
-                Move <span className="font-semibold text-gray-900">{studentToMove.full_name}</span> from this class to another (same program and level). Phase preserved. For a higher level, use Enroll Student (upsell).
+                Move <span className="font-semibold text-gray-900">{studentToMove.full_name}</span> from this class to another (same level). Phase preserved. For a higher level, use Enroll Student (upsell).
               </p>
               <div>
                 <label htmlFor="move-target-class-admin" className="block text-sm font-medium text-gray-700 mb-1">Target class <span className="text-red-500">*</span></label>
                 {loadingMoveTargetClasses ? (
                   <div className="py-3 text-sm text-gray-500">Loading classes...</div>
                 ) : moveTargetClasses.length === 0 ? (
-                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">No other active classes in the same program, level, and branch.</div>
+                  <div className="py-3 text-sm text-amber-700 bg-amber-50 rounded-lg px-3">No other active classes in the same level and branch.</div>
                 ) : (
                   <select
                     id="move-target-class-admin"

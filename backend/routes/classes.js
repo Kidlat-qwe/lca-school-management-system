@@ -795,7 +795,7 @@ router.post(
 /**
  * POST /api/sms/classes/move-student
  * Move an enrolled student from one class to another
- * (same program, same level_tag, same branch; phase preserved).
+ * (same level_tag + same branch; phase preserved).
  * Cross-level moves are rejected — use Enroll Student (upsell) instead.
  * Body: { student_id, source_class_id, target_class_id }
  * Access: Superadmin, Admin
@@ -859,30 +859,22 @@ router.post(
       const targetClass = targetClassResult.rows[0];
       const student = studentResult.rows[0];
 
-      if (sourceClass.program_id !== targetClass.program_id) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message: 'Can only move to a class with the same program.',
-        });
-      }
-
-      const sourceLevel = String(sourceClass.level_tag || '').trim().toLowerCase();
-      const targetLevel = String(targetClass.level_tag || '').trim().toLowerCase();
-      if (sourceLevel !== targetLevel) {
-        await client.query('ROLLBACK');
-        return res.status(400).json({
-          success: false,
-          message:
-            'Cannot move to a different level. Use Enroll Student for level-ups (upsell).',
-        });
-      }
-
       if (sourceClass.branch_id !== targetClass.branch_id) {
         await client.query('ROLLBACK');
         return res.status(400).json({
           success: false,
           message: 'Source and target class must be in the same branch.',
+        });
+      }
+
+      const sourceLevel = String(sourceClass.level_tag || '').trim().toLowerCase();
+      const targetLevel = String(targetClass.level_tag || '').trim().toLowerCase();
+      if (!sourceLevel || sourceLevel !== targetLevel) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message:
+            'Cannot move to a different level. Use Enroll Student for level-ups (upsell).',
         });
       }
 
