@@ -133,3 +133,33 @@ export function isFiuuAutopayOtpEnabled() {
 export function getFiuuAutopayChannel() {
   return trim(process.env.FIUU_AUTOPAY_CHANNEL) || 'creditAN';
 }
+
+/**
+ * HPP field name that requests FIUU tokenization (1-click / Recurring token).
+ * FIUU Support (Production): send `token_status=1` (or `mpstokenstatus=1`).
+ * Override with FIUU_TOKEN_STATUS_FIELD=mpstokenstatus if needed.
+ */
+export function getFiuuTokenStatusFieldName() {
+  const custom = trim(process.env.FIUU_TOKEN_STATUS_FIELD);
+  if (custom === 'mpstokenstatus' || custom === 'token_status') return custom;
+  return 'token_status';
+}
+
+/**
+ * Apply or clear FIUU tokenization request fields on HPP form payload.
+ * Without this, Captured Card pays may succeed but `extraP.token` / Recurring → Token stay empty.
+ * @param {Record<string, unknown>} formFields
+ * @param {{ enable: boolean }} options
+ */
+export function applyFiuuTokenizationRequestFields(formFields, { enable }) {
+  const next =
+    formFields && typeof formFields === 'object' && !Array.isArray(formFields)
+      ? { ...formFields }
+      : {};
+  delete next.token_status;
+  delete next.mpstokenstatus;
+  if (enable) {
+    next[getFiuuTokenStatusFieldName()] = '1';
+  }
+  return next;
+}

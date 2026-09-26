@@ -362,6 +362,7 @@ router.get(
   [
     queryValidator('branch_id').optional().isInt().withMessage('branch_id must be an integer'),
     queryValidator('program_id').optional().isInt().withMessage('program_id must be an integer'),
+    queryValidator('status').optional().isIn(['Active', 'Inactive', 'Suspended']).withMessage('status must be Active, Inactive, or Suspended'),
     queryValidator('search').optional().isString(),
     queryValidator('page').optional().isInt({ min: 1 }),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }),
@@ -373,6 +374,10 @@ router.get(
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
       const offset = (page - 1) * limit;
       const search = String(req.query.search || '').trim();
+      const statusFilter =
+        req.query.status != null && String(req.query.status).trim() !== ''
+          ? String(req.query.status).trim()
+          : null;
       const programId =
         req.query.program_id != null && String(req.query.program_id).trim() !== ''
           ? Number(req.query.program_id)
@@ -403,6 +408,10 @@ router.get(
         params.push(`%${search}%`);
         where += ` AND (u.full_name ILIKE $${params.length} OR u.email ILIKE $${params.length})`;
       }
+      if (statusFilter) {
+        params.push(statusFilter);
+        where += ` AND COALESCE(u.status, 'Active') = $${params.length}`;
+      }
       if (programId) {
         params.push(programId);
         where += ` AND EXISTS (
@@ -427,6 +436,7 @@ router.get(
       params.push(offset);
       const teachersRes = await query(
         `SELECT u.user_id, u.full_name, u.email, u.phone_number, u.branch_id,
+                COALESCE(u.status, 'Active') AS status, u.substitute_teacher_id,
                 b.branch_name, b.branch_nickname
          FROM userstbl u
          LEFT JOIN branchestbl b ON b.branch_id = u.branch_id

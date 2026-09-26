@@ -10,6 +10,7 @@ import {
   isFiuuConfigured,
   isFiuuAutopayOtpEnabled,
   getFiuuAutopayChannel,
+  applyFiuuTokenizationRequestFields,
   resolveFiuuChannelPath,
 } from './config.js';
 import {
@@ -432,6 +433,8 @@ export async function applyParentAutodebitDecisionOnPayToken(
   // FIUU Support: use creditAN (not CREDIT) for debit-friendly Card / tokenization tests.
   // Also ensure billing mobile is present — empty bill_mobile causes MIT "Token not found"
   // when FIUU stores a phone on the tokenization profile.
+  // FIUU Support (Production): HPP must include token_status=1 (or mpstokenstatus=1)
+  // or Captured pays may omit extraP.token / Recurring → Token stays empty.
   if (accepted) {
     const amount = formFields.amount;
     const orderid = formFields.orderid || row.orderid;
@@ -439,7 +442,9 @@ export async function applyParentAutodebitDecisionOnPayToken(
     const autopayChannel = getFiuuAutopayChannel();
     formFields.channel = autopayChannel;
     formFields.vcode = buildPaymentVcode({ amount, orderid, currency });
+    formFields = applyFiuuTokenizationRequestFields(formFields, { enable: true });
     meta.channel = autopayChannel;
+    meta.fiuu_token_status_requested = true;
 
     if (!String(formFields.bill_mobile || '').trim() && row.student_id) {
       try {
@@ -458,6 +463,9 @@ export async function applyParentAutodebitDecisionOnPayToken(
     ) {
       formFields.bill_mobile = String(meta.autopay_otp_contact).trim();
     }
+  } else {
+    formFields = applyFiuuTokenizationRequestFields(formFields, { enable: false });
+    meta.fiuu_token_status_requested = false;
   }
 
   await query(

@@ -24,6 +24,27 @@ Routes: `../users.js` mounted at `/api/sms/users`.
 | `GET` | `/users` | Superadmin, Admin | List users; includes `status` and `substitute_teacher_id` |
 | `PUT` | `/users/:id` | Superadmin, Admin (or own profile for non-status fields) | Update user; admins may set `status` / `substitute_teacher_id` |
 
+### `GET /users` list filters
+
+| Query param | Values | Notes |
+| --- | --- | --- |
+| `user_type` | `Teacher`, `Admin`, … | Restrict by role |
+| `status` | `Active`, `Inactive`, `Suspended` | Optional. Omit = all statuses. Uses `COALESCE(status, 'Active')` |
+| `branch_id` | integer | Optional branch filter |
+| `search` | string | Name / email / phone / LRN |
+| `page`, `limit` | integers | Pagination (`limit` max 100) |
+
+**Postman examples (teachers by status):**
+
+```http
+GET /api/sms/users?user_type=Teacher&limit=100
+GET /api/sms/users?user_type=Teacher&status=Active&limit=100
+GET /api/sms/users?user_type=Teacher&status=Inactive&limit=100
+GET /api/sms/users?user_type=Teacher&status=Suspended&limit=100
+```
+
+CMS Personnel continues to call `/users` without `status` (unchanged behavior).
+
 ### `PUT /users/:id` status rules
 
 - Only Superadmin / Admin may change `status` or `substitute_teacher_id`

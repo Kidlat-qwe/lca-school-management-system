@@ -40,8 +40,29 @@ export function isDeliveredRemoteStatus(status) {
   return s === 'DELIVERED' || s === 'FULFILLED';
 }
 
+/** RHET statuses that mean "in transit / arranged" — CMS Shipped tab (no stock yet). */
 export function isShippedRemoteStatus(status) {
-  return normalizeRemoteStatus(status) === 'SHIPPED';
+  const s = normalizeRemoteStatus(status).replace(/[\s-]+/g, '_');
+  return (
+    s === 'SHIPPED' ||
+    s === 'ARRANGED_DELIVERY' ||
+    s === 'ARRANGED' ||
+    s === 'IN_TRANSIT' ||
+    s === 'OUT_FOR_DELIVERY'
+  );
+}
+
+/**
+ * Normalize RHET shipped-like statuses to canonical SHIPPED for CMS storage.
+ * RHET UI label "Arranged Delivery" → ARRANGED_DELIVERY / similar.
+ */
+export function canonicalizeRemoteInventoryStatus(status) {
+  const raw = normalizeRemoteStatus(status);
+  if (!raw) return null;
+  if (raw === 'FULFILLED' || raw === 'APPROVED') return 'DELIVERED';
+  if (raw === 'FAILED') return 'REJECTED';
+  if (isShippedRemoteStatus(raw)) return 'SHIPPED';
+  return raw.replace(/[\s-]+/g, '_');
 }
 
 export function isReturnedRemoteStatus(status) {
@@ -56,7 +77,14 @@ export function isRejectedRemoteStatus(status) {
 export function isShippedEvent(payload) {
   const event = normalizeEventName(payload?.event);
   const status = normalizeRemoteStatus(payload?.status);
-  return status === 'SHIPPED' || event.includes('shipped') || event.endsWith('.shipped');
+  if (isShippedRemoteStatus(status)) return true;
+  return (
+    event.includes('shipped') ||
+    event.endsWith('.shipped') ||
+    event.includes('arranged_delivery') ||
+    event.includes('arranged-delivery') ||
+    event.includes('arranged.delivery')
+  );
 }
 
 export function isDeliveredEvent(payload) {
@@ -123,12 +151,21 @@ export function inferInventoryStatusFromPayload(payload) {
     if (status === 'FAILED') return 'REJECTED';
     if (status === 'APPROVED') return 'DELIVERED';
     if (status === 'RECEIVED') return 'RECEIVED';
-    return status;
+    // RHET "Arranged Delivery" and aliases → SHIPPED (CMS Shipped tab)
+    if (isShippedRemoteStatus(status)) return 'SHIPPED';
+    return status.replace(/[\s-]+/g, '_');
   }
 
   if (event.includes('delivered') || event.endsWith('.delivered')) return 'DELIVERED';
   if (event.includes('fulfilled') || event.endsWith('.fulfilled')) return 'DELIVERED';
-  if (event.includes('shipped') || event.endsWith('.shipped')) return 'SHIPPED';
+  if (
+    event.includes('shipped') ||
+    event.endsWith('.shipped') ||
+    event.includes('arranged_delivery') ||
+    event.includes('arranged-delivery')
+  ) {
+    return 'SHIPPED';
+  }
   if (event.includes('returned') || event.endsWith('.returned')) return 'RETURNED';
   if (event.includes('rejected') || event.endsWith('.rejected')) return 'REJECTED';
   if (event.includes('failed') || event.endsWith('.failed')) return 'REJECTED';

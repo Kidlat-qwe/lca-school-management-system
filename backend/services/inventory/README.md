@@ -167,7 +167,7 @@ for normal fulfills — that script is one-time legacy cleanup only.
 `POST /api/webhooks/inventory` (`backend/routes/inventoryWebhooks.js`):
 
 - Auth: `X-Integration-Key` / `Bearer` matching CMS integration key
-- `SHIPPED` → local **Shipped**; **no** branch stock add
+- `SHIPPED` / `ARRANGED_DELIVERY` (RHET UI “Arranged Delivery”) → local **Shipped**; **no** branch stock add
 - `DELIVERED` → local **Delivered** + add branch stock (idempotent)
 - Legacy `FULFILLED` / `stock_request.fulfilled` → same as delivered (credit once)
 - `RETURNED` → local **Returned**; reverse branch qty if `wasDelivered`

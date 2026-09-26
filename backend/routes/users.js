@@ -24,6 +24,7 @@ router.get(
     queryValidator('user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid user type'),
     queryValidator('display_role').optional().isIn(['Superadmin', 'Admin', 'Superfinance', 'Finance', 'Teacher']).withMessage('Invalid display_role'),
     queryValidator('exclude_user_type').optional().isIn(['Superadmin', 'Admin', 'Finance', 'Teacher', 'Student']).withMessage('Invalid exclude_user_type'),
+    queryValidator('status').optional().isIn(['Active', 'Inactive', 'Suspended']).withMessage('Status must be Active, Inactive, or Suspended'),
     queryValidator('search').optional().isString().withMessage('Search must be a string'),
     queryValidator('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
     queryValidator('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
@@ -31,7 +32,7 @@ router.get(
   ],
   async (req, res, next) => {
     try {
-      const { branch_id, user_type, display_role, exclude_user_type, search, page = 1, limit = 20 } = req.query;
+      const { branch_id, user_type, display_role, exclude_user_type, status, search, page = 1, limit = 20 } = req.query;
       const offset = (page - 1) * limit;
 
       // Check if last_login column exists
@@ -124,6 +125,18 @@ router.get(
         params.push(`%${String(search).trim()}%`);
       }
 
+      // Optional personnel status filter (Active / Inactive / Suspended)
+      if (status) {
+        if (hasStatusColumn) {
+          paramCount++;
+          sql += ` AND COALESCE(status, 'Active') = $${paramCount}`;
+          params.push(status);
+        } else if (status !== 'Active') {
+          // Pre-migration 150: all accounts behave as Active
+          sql += ` AND 1=0`;
+        }
+      }
+
       // For non-superadmin users, filter by their branch
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {
         paramCount++;
@@ -179,6 +192,16 @@ router.get(
           OR COALESCE(lrn, '') ILIKE $${countParamCount}
         )`;
         countParams.push(`%${String(search).trim()}%`);
+      }
+
+      if (status) {
+        if (hasStatusColumn) {
+          countParamCount++;
+          countSql += ` AND COALESCE(status, 'Active') = $${countParamCount}`;
+          countParams.push(status);
+        } else if (status !== 'Active') {
+          countSql += ` AND 1=0`;
+        }
       }
 
       if (req.user.userType !== 'Superadmin' && req.user.branchId) {

@@ -50,6 +50,7 @@ import {
   isShippedRemoteStatus,
   isStockCreditedLocalStatus,
   normalizeRemoteStatus,
+  inferInventoryStatusFromPayload,
 } from '../services/inventory/stockRequestLifecycle.js';
 import {
   applyQuantityAdjustmentUpdate,
@@ -1702,8 +1703,10 @@ router.post(
       const remote = await getStockRequest(request.inventory_request_id);
       const remoteStatus = normalizeRemoteStatus(remote.data?.status);
       const processedBy = pickApproverName(remote.data || remote);
-      const storeStatus =
-        remoteStatus === 'FULFILLED' ? 'DELIVERED' : remoteStatus || null;
+      const storeStatus = inferInventoryStatusFromPayload({
+        status: remote.data?.status,
+        event: remote.data?.event,
+      });
 
       const qtyPatch = buildQuantityAdjustmentPatch(request, remote.data || {});
       if (qtyPatch && !isStockCreditedLocalStatus(request.status)) {

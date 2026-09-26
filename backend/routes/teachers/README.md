@@ -13,6 +13,20 @@ Routes: `../teachers.js` mounted at `/api/sms/teachers`.
 | `POST` | `/teachers/:id/turnover/preview` | Superadmin, Admin | Dry-run schedule fit per class (shown as soon as destination teacher is selected) |
 | `POST` | `/teachers/:id/turnover` | Superadmin, Admin | Move selected classes to another teacher |
 
+### `GET /teachers` query filters
+
+| Param | Values | Notes |
+| --- | --- | --- |
+| `status` | `Active`, `Inactive`, `Suspended` | Optional personnel status filter (`COALESCE(u.status, 'Active')`) |
+| `branch_id` | integer | Optional (Admin forced to own branch) |
+| `program_id` | integer | Teachers with an active class in that program |
+| `search` | string | Name or email |
+| `page`, `limit` | integers | Pagination |
+
+Also returns `status` and `substitute_teacher_id` on each teacher row.
+
+For Personnel-style lists (any user type), prefer `GET /users?user_type=Teacher&status=...`.
+
 History is stored in `teacher_class_historytbl` (migration `118_create_teacher_class_historytbl.sql`). Turnover writes end dates; open assignments are backfilled from `classteacherstbl` on history load.
 
 ## Available substitutes (`GET /teachers/:id/available-substitutes`)

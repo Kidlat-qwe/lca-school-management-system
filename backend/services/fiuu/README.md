@@ -15,6 +15,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
     - Email: parent **enters email** → OTP in email → enter code on `/go` (same UX as SMS).
   - Consent + token bound to **one** installment profile / class.
   - AutoPay HPP channel defaults to **`creditAN`** (FIUU Support guidance for debit-friendly Card / tokenization). Override with `FIUU_AUTOPAY_CHANNEL=CREDIT` to use classic CREDIT.
+  - When AutoPay is accepted on `/go`, HPP also sends **`token_status=1`** (FIUU Support: required for Production tokenization so `extraP.token` is returned). Override field name with `FIUU_TOKEN_STATUS_FIELD=mpstokenstatus` if FIUU asks for `mpstokenstatus=1` instead.
   - When `FIUU_AUTOPAY_MIT_ENABLED=true`, the installment invoice scheduler charges the saved token via FIUU Recurring API (MIT) after generating each due invoice for that profile.
   - MIT failure → CMS emails a normal Pay now link as fallback.
 
@@ -24,9 +25,10 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 2. Env vars — see `.env.example` (`FIUU_*`, `EMAIL_LOGO_URL`, etc.).
 3. Webhooks: notify / callback / return as before (MIT results use the same CallbackURL).
 4. Enable **Tokenization** + **Recurring** on the MID (email `support@fiuu.com`). Without Recurring enabled, HPP may still return `extraP.token`, but MIT RecordType `T` fails with **Token not found**.
-5. Default Recurring URL is `https://pay.fiuu.com/RMS/API/Recurring/input_v7.php` (same host as HPP). Override with `FIUU_RECURRING_URL` only if FIUU instructs otherwise.
-6. Set `FIUU_AUTOPAY_MIT_ENABLED=true` only after Dev UAT of token save + MIT charge.
-7. Run `149_add_fiuu_token_billing_snapshot.sql` (or `node backend/scripts/applyFiuuTokenBillingSnapshotMigration.js`). MIT billing name/email/mobile must match tokenization; empty `bill_mobile` on HPP is a common cause of FIUU **Token not found** (`T02`).
+5. AutoPay Card HPP must send **`token_status=1`** (FIUU Support). Without it, Captured pays may omit `extraP.token` and Recurring → Token stays empty even when Tokenization is Enabled in the portal.
+6. Default Recurring URL is `https://pay.fiuu.com/RMS/API/Recurring/input_v7.php` (same host as HPP). Override with `FIUU_RECURRING_URL` only if FIUU instructs otherwise.
+7. Set `FIUU_AUTOPAY_MIT_ENABLED=true` only after Dev UAT of token save + MIT charge.
+8. Run `149_add_fiuu_token_billing_snapshot.sql` (or `node backend/scripts/applyFiuuTokenBillingSnapshotMigration.js`). MIT billing name/email/mobile must match tokenization; empty `bill_mobile` on HPP is a common cause of FIUU **Token not found** (`T02`).
 
 ## Order ID / CustID
 
@@ -46,6 +48,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | Scope | One installment profile / class |
 | Dual consent | Client accepts Terms on pay link |
 | Channel | AutoPay HPP uses `FIUU_AUTOPAY_CHANNEL` (default `creditAN`; set `CREDIT` to revert) |
+| Tokenize request | AutoPay HPP includes `token_status=1` (or `mpstokenstatus=1` via `FIUU_TOKEN_STATUS_FIELD`) so FIUU returns `extraP.token` |
 | Charge trigger | After `processDueInstallmentInvoices` / catch-up generate |
 | API | Recurring v7 RecordType `T` → `FIUU_RECURRING_URL` |
 | Checksum | `md5(RecordType+MerchantID+SubMerchant+Token+OrderID+Currency+Amount+Verifykey)` |
@@ -61,6 +64,7 @@ Backend module connecting PSMS invoice and acknowledgement-receipt payments to [
 | `FIUU_AUTOPAY_MIT_ENABLED` | `true` to charge on invoice generation |
 | `FIUU_AUTOPAY_CHANNEL` | AutoPay HPP channel (`creditAN` default; `CREDIT` to revert) |
 | `FIUU_AUTOPAY_OTP_ENABLED` | `false` to skip SMS/email OTP on AutoPay enrollment (default on) |
+| `FIUU_TOKEN_STATUS_FIELD` | HPP tokenize flag name: `token_status` (default) or `mpstokenstatus` |
 | `FIUU_RECURRING_URL` | Optional override of Recurring `input_v7.php` |
 | `FIUU_SUB_MERCHANT_ID` | Optional; usually empty |
 | `FIUU_SANDBOX` | Selects sandbox recurring URL when override unset |

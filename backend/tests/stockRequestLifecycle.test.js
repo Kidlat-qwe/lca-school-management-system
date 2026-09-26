@@ -10,6 +10,7 @@ import {
   isRejectedEvent,
   isReturnedEvent,
   isShippedEvent,
+  isShippedRemoteStatus,
   isStockCreditedLocalStatus,
   inferInventoryStatusFromPayload,
   resolveWasDelivered,
@@ -19,6 +20,18 @@ function testRemoteDeliveredAliases() {
   assert.equal(isDeliveredRemoteStatus('DELIVERED'), true);
   assert.equal(isDeliveredRemoteStatus('FULFILLED'), true);
   assert.equal(isDeliveredRemoteStatus('SHIPPED'), false);
+}
+
+function testShippedAliases() {
+  assert.equal(isShippedRemoteStatus('SHIPPED'), true);
+  assert.equal(isShippedRemoteStatus('ARRANGED_DELIVERY'), true);
+  assert.equal(isShippedRemoteStatus('Arranged Delivery'), true);
+  assert.equal(isShippedRemoteStatus('IN_TRANSIT'), true);
+  assert.equal(isShippedRemoteStatus('DELIVERED'), false);
+  assert.equal(
+    isShippedEvent({ event: 'stock_request.arranged_delivery', status: 'ARRANGED_DELIVERY' }),
+    true
+  );
 }
 
 function testEventClassification() {
@@ -34,6 +47,8 @@ function testInferStatus() {
   assert.equal(inferInventoryStatusFromPayload({ event: 'stock_request.fulfilled' }), 'DELIVERED');
   assert.equal(inferInventoryStatusFromPayload({ status: 'FULFILLED' }), 'DELIVERED');
   assert.equal(inferInventoryStatusFromPayload({ event: 'stock_request.shipped' }), 'SHIPPED');
+  assert.equal(inferInventoryStatusFromPayload({ status: 'ARRANGED_DELIVERY' }), 'SHIPPED');
+  assert.equal(inferInventoryStatusFromPayload({ status: 'Arranged Delivery' }), 'SHIPPED');
   assert.equal(inferInventoryStatusFromPayload({ status: 'FAILED' }), 'REJECTED');
 }
 
@@ -53,6 +68,7 @@ function testWasDelivered() {
 }
 
 testRemoteDeliveredAliases();
+testShippedAliases();
 testEventClassification();
 testInferStatus();
 testStockCredited();
