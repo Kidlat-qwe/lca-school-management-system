@@ -11,6 +11,7 @@ const router = express.Router();
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const ASSET_MAP = {
+  'welcome-email.jpg': 'lca-welcome-email-page.jpg',
   'welcome-letterhead.jpg': 'lca-welcome-email-header.jpg',
   'welcome-letterhead-full.jpg': 'lca-welcome-email-bg.jpg',
   'welcome-header.jpg': 'lca-welcome-email-header.jpg',

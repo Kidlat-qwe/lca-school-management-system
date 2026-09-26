@@ -99,6 +99,8 @@ export function buildFirstEnrollmentTemplateVariables(emailId, context = {}) {
 
 /**
  * Resolve subject + HTML from Settings template, falling back to hardcoded builders.
+ * Onboarding always uses the designed page image (raster of LCA EMAIL.pdf) — Gmail
+ * cannot display PDF inline, and Settings text bodies are treated as stale.
  * @returns {Promise<{ subject: string, html: string, plainText: string, enabled: boolean, source: string, skipped?: boolean }>}
  */
 export async function resolveSequenceEmailContent({
@@ -110,7 +112,6 @@ export async function resolveSequenceEmailContent({
   const templateKey = EMAIL_ID_TO_TEMPLATE_KEY[emailId];
   if (templateKey) {
     try {
-      // Detect stale welcome-only Settings body before variable substitution.
       if (emailId === 'onboarding') {
         const tpl = await loadEffectiveTemplate(client, templateKey, branchId);
         if (!tpl.enabled) {
@@ -123,16 +124,14 @@ export async function resolveSequenceEmailContent({
             source: 'settings_disabled',
           };
         }
-        if (isStaleShortOnboardingBody(tpl.body)) {
-          const legacy = buildSequenceEmail('onboarding', context);
-          return {
-            enabled: true,
-            subject: tpl.subject || legacy.subject,
-            html: legacy.html,
-            plainText: legacy.plainText,
-            source: 'fallback_combined_upgrade',
-          };
-        }
+        const imageBody = buildSequenceEmail('onboarding', context);
+        return {
+          enabled: true,
+          subject: tpl.subject || imageBody.subject,
+          html: imageBody.html,
+          plainText: imageBody.plainText,
+          source: 'welcome_page_image',
+        };
       }
 
       const rendered = await renderMessagingTemplate({

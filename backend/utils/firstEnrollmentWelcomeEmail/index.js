@@ -2,8 +2,8 @@
  * First-enrollment welcome email for Little Champions Academy.
  *
  * Sends once when a student receives program_enrollment_status = 'new':
- * one combined email with Welcome, Class Schedule, Things to Prepare,
- * Important Reminders, and Stay Connected (optional AR PDF attachment).
+ * one email whose HTML body is the designed welcome page image (from LCA EMAIL.pdf).
+ * Optional AR PDF remains a real attachment when resolved.
  *
  * Recipients: student email + primary guardian email (deduped).
  */
@@ -27,7 +27,6 @@ import {
   loadEnrollmentClassContext,
   loadEnrollmentClassContextForStudent,
 } from './classContext.js';
-import { getWelcomeEmailBackgroundUrl } from '../templateRenderService.js';
 
 const NEW_ENROLLMENT_STATUS = 'new';
 const LOG_ENTITY_SEQUENCE = 'first_enrollment_onboarding_sequence';
@@ -286,8 +285,8 @@ async function sendSequenceEmail({
   }
 
   let html = content.html;
-  // Brevo does not support CID inline images (they become downloadable attachments).
-  // Letterhead is referenced via public HTTPS <img src> only — do not attach the JPG.
+  // Brevo does not support CID inline images. Welcome page is a public HTTPS <img>
+  // (JPEG raster of LCA EMAIL.pdf). Attachments may include AR PDF only — never the welcome PDF.
   const mailAttachments = Array.isArray(attachments) ? [...attachments] : [];
 
   const summary = await sendSystemNotificationEmailToEach({

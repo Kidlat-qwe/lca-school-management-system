@@ -21,7 +21,7 @@ import {
   normalizeNotificationRecipients,
   sendSystemNotificationEmailToEach,
 } from '../utils/emailService.js';
-import { getWelcomeEmailBackgroundUrl } from '../utils/templateRenderService.js';
+import { getWelcomeEmailPageImageUrl } from '../utils/templateRenderService.js';
 
 function resolveTargetEmail(argv) {
   const explicit = argv.find((a) => a.startsWith('--email='));
@@ -51,8 +51,8 @@ async function sendPreviewCombined(recipients, context = {}) {
     return [{ emailId, subject: content.subject, summary: { sent: 0, attempted: 0, skipped: true } }];
   }
 
-  // Brevo: no CID — letterhead must be a public HTTPS <img>. Do not attach the JPG.
-  console.log(`Letterhead <img> URL: ${getWelcomeEmailBackgroundUrl()}`);
+  // Brevo: no CID — welcome page must be a public HTTPS <img> (raster of LCA EMAIL.pdf).
+  console.log(`Welcome page <img> URL: ${getWelcomeEmailPageImageUrl()}`);
 
   const summary = await sendSystemNotificationEmailToEach({
     recipients,

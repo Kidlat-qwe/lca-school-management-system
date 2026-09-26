@@ -99,25 +99,82 @@ export function getEmailBrandLogoUrl() {
   return `${origin}${DEFAULT_LOGO_PATH}`;
 }
 
-/** Absolute URL for the welcome-email letterhead <img> (cropped quar header). */
-export function getWelcomeEmailBackgroundUrl() {
-  const fromEnv = String(process.env.EMAIL_WELCOME_BACKGROUND_URL || '').trim();
-  if (fromEnv) return fromEnv;
-
-  // Brevo cannot CID-embed images — use a public HTTPS asset URL.
+/**
+ * Public HTTPS base for /public/email-assets/* (Brevo cannot CID-embed images).
+ */
+function getPublicEmailAssetsBaseUrl() {
   const apiBase =
     String(process.env.PUBLIC_API_BASE_URL || '').trim().replace(/\/$/, '') ||
     String(process.env.API_PUBLIC_URL || '').trim().replace(/\/$/, '') ||
     '';
 
   if (apiBase) {
-    const base = apiBase.endsWith('/api/sms') ? apiBase : `${apiBase}/api/sms`;
-    return `${base}/public/email-assets/welcome-letterhead.jpg`;
+    return apiBase.endsWith('/api/sms') ? apiBase : `${apiBase}/api/sms`;
   }
 
   // NODE_ENV=development → cms.lca-app.com
   // NODE_ENV=production  → cms.little-champion.com
-  return `${getCmsOriginForEnv()}/api/sms/public/email-assets/welcome-letterhead.jpg`;
+  return `${getCmsOriginForEnv()}/api/sms`;
+}
+
+/** Absolute URL for the welcome-email letterhead <img> (cropped quar header). */
+export function getWelcomeEmailBackgroundUrl() {
+  const fromEnv = String(process.env.EMAIL_WELCOME_BACKGROUND_URL || '').trim();
+  if (fromEnv) return fromEnv;
+  return `${getPublicEmailAssetsBaseUrl()}/public/email-assets/welcome-letterhead.jpg`;
+}
+
+/**
+ * Absolute URL for the full welcome-letter page image (raster of LCA EMAIL.pdf).
+ * Gmail cannot display PDF in the body — this JPEG is shown as &lt;img&gt;.
+ */
+export function getWelcomeEmailPageImageUrl() {
+  const fromEnv = String(process.env.EMAIL_WELCOME_PAGE_IMAGE_URL || '').trim();
+  if (fromEnv) return fromEnv;
+  return `${getPublicEmailAssetsBaseUrl()}/public/email-assets/welcome-email.jpg`;
+}
+
+/**
+ * Welcome onboarding HTML: full-page design image only (from LCA EMAIL.pdf).
+ * No long text body — the designed page carries the message.
+ */
+export function wrapWelcomePageEmailHtml({ imageSrc = null, includeFooter = false } = {}) {
+  const imgUrl = escapeHtml(imageSrc || getWelcomeEmailPageImageUrl());
+  const footer = includeFooter
+    ? `<div style="background-color:#f5f5f5;padding:16px;text-align:center;font-size:12px;color:#666;">
+         <p style="margin:0;">This is an automated email. Please do not reply to this message.</p>
+         <p style="margin:8px 0 0;">© ${new Date().getFullYear()} ${escapeHtml(DEFAULT_SCHOOL_NAME)} All rights reserved.</p>
+       </div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#333;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:16px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;border:0;background-color:#ffffff;">
+            <tr>
+              <td style="padding:0;line-height:0;font-size:0;">
+                <img
+                  src="${imgUrl}"
+                  alt="Welcome to Little Champions Academy!"
+                  width="600"
+                  style="display:block;width:100%;max-width:600px;height:auto;border:0;"
+                />
+              </td>
+            </tr>
+            ${footer ? `<tr><td style="padding:0;">${footer}</td></tr>` : ''}
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 }
 
 export function escapeHtml(value) {
@@ -350,9 +407,7 @@ export async function renderMessagingTemplate({
   const subject = renderTemplateString(tpl.subject, variables);
   const body = renderTemplateString(tpl.body, variables);
 
-  const letterheadBackground =
-    templateKey === 'template_first_enrollment_onboarding' ||
-    templateKey === 'template_first_enrollment_welcome';
+  const letterheadBackground = false;
 
   return {
     enabled: true,

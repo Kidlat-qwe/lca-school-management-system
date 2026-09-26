@@ -1,7 +1,14 @@
 /**
  * Plain-text + HTML bodies for first-enrollment welcome email (single combined send).
+ * Onboarding HTML is a full-page image raster of frontend/public/LCA EMAIL.pdf
+ * (Gmail cannot display PDF inline).
  */
-import { escapeHtml, plainTextToEmailHtml, wrapBrandedEmailHtml } from '../templateRenderService.js';
+import {
+  escapeHtml,
+  plainTextToEmailHtml,
+  wrapBrandedEmailHtml,
+  wrapWelcomePageEmailHtml,
+} from '../templateRenderService.js';
 import { groupChatFallbackText } from './branchGroupChat.js';
 
 export const DEFAULT_FACEBOOK_URL = 'https://www.facebook.com/littlechampionsacademy';
@@ -44,9 +51,30 @@ export function facebookPageUrl() {
 }
 
 /**
- * Single combined welcome email (welcome + schedule + prepare + reminders + stay connected).
+ * Minimal plain-text fallback for clients that strip HTML.
+ * The designed welcome letter is the full-page image in the HTML body.
  */
 export function buildOnboardingPlainText({
+  includeArAttachmentNote = false,
+} = {}) {
+  const lines = [
+    'Welcome to Little Champions Academy!',
+    '',
+    'Open this email in an HTML email client to view the welcome letter.',
+  ];
+
+  if (includeArAttachmentNote) {
+    lines.push(
+      '',
+      'Your acknowledgement receipt is attached to this email as a PDF for your records.'
+    );
+  }
+
+  return lines.join('\n');
+}
+
+/** @deprecated Long combined text body — retained for reference / legacy previews only. */
+export function buildLegacyCombinedOnboardingPlainText({
   academicYear,
   includeArAttachmentNote = false,
   classStartDateDisplay = 'To be announced',
@@ -286,15 +314,14 @@ export function buildFirstEnrollmentWelcomePlainText(options = {}) {
 
 /** @deprecated Use buildOnboardingHtml */
 export function buildFirstEnrollmentWelcomeHtml(options = {}) {
-  return plainTextToEmailHtml(buildOnboardingPlainText(options), {
-    letterheadBackground: true,
-  });
+  return buildOnboardingHtml(options);
 }
 
-export function buildOnboardingHtml(options = {}) {
-  return plainTextToEmailHtml(buildOnboardingPlainText(options), {
-    letterheadBackground: true,
-  });
+/**
+ * Welcome email HTML: full-page image of LCA EMAIL.pdf (not PDF attachment).
+ */
+export function buildOnboardingHtml(_options = {}) {
+  return wrapWelcomePageEmailHtml();
 }
 
 export function buildClassScheduleHtml(context = {}) {

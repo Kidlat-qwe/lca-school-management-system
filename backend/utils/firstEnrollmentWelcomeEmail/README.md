@@ -1,46 +1,39 @@
 # First enrollment welcome email
 
-Sends a **single combined email** when a student is **first officially enrolled** (`program_enrollment_status = 'new'`).
+Sends a **single email** when a student is **first officially enrolled** (`program_enrollment_status = 'new'`).
 
-## Contents (one message)
+## Contents
 
-| Section | Content |
-|---------|---------|
-| Welcome | Official enrollment congratulations (Academic Year from env). Optional AR PDF attachment. |
-| Class Schedule | First day = first session of the enrolled phase; weekly schedule from CMS. |
-| Things to Prepare | Static checklist (clothes, hygiene kit, snack, water bottle). |
-| Important Reminders | Static bullet reminders. |
-| Stay Connected | Facebook page link + branch Messenger group chat link. |
+| Part | Content |
+|------|---------|
+| HTML body | Full-page **image** of the designed welcome letter (`LCA EMAIL.pdf` rasterized to JPEG) |
+| Plain text | Short fallback for clients that strip HTML |
+| Attachment | Optional **AR PDF** only (acknowledgement receipt) — never `LCA EMAIL.pdf` |
 
-## Letterhead background
+Gmail and most clients **cannot display a PDF inside the message body**. Attaching the PDF would only show a downloadable file. The welcome design is therefore shipped as a JPEG `<img>`.
 
-Welcome HTML shows a **cropped quar letterhead** as a full-width `<img>` (not CSS background, not an attachment).
-
-**Why CID failed:** Brevo transactional API does **not** support CID inline images — they become downloadable attachments and Gmail shows a broken image in the body.
+## Welcome page image
 
 | Mechanism | Purpose |
 |-----------|---------|
-| `<img src="https://…/public/email-assets/welcome-letterhead.jpg">` | Visible in Gmail |
-| `GET /api/sms/public/email-assets/welcome-letterhead.jpg` | Public file served by the API (no auth) |
-| White content area below | Same readable text layout as before |
-| AR PDF | Remains a normal attachment when present |
-
-Optional override: `EMAIL_WELCOME_BACKGROUND_URL` (absolute HTTPS image URL).
+| `<img src="https://…/public/email-assets/welcome-email.jpg">` | Visible designed letter in Gmail |
+| `GET /api/sms/public/email-assets/welcome-email.jpg` | Public file from `assets/lca-welcome-email-page.jpg` |
+| Source design | `frontend/public/LCA EMAIL.pdf` (regenerate JPEG when the PDF changes) |
 
 After deploying the matching backend, confirm the image opens in a browser:
 
-| `NODE_ENV` | Letterhead URL |
-|------------|----------------|
-| `development` | `https://cms.lca-app.com/api/sms/public/email-assets/welcome-letterhead.jpg` |
-| `production` | `https://cms.little-champion.com/api/sms/public/email-assets/welcome-letterhead.jpg` |
+| `NODE_ENV` | Welcome page URL |
+|------------|------------------|
+| `development` | `https://cms.lca-app.com/api/sms/public/email-assets/welcome-email.jpg` |
+| `production` | `https://cms.little-champion.com/api/sms/public/email-assets/welcome-email.jpg` |
 
 Env overrides (optional):
 
 | Variable | Purpose |
 |----------|---------|
-| `EMAIL_WELCOME_BACKGROUND_URL` | Full absolute image URL |
+| `EMAIL_WELCOME_PAGE_IMAGE_URL` | Full absolute image URL |
 | `EMAIL_WELCOME_ASSET_ORIGIN` | Force origin (overrides NODE_ENV host pick) |
-| `PUBLIC_API_BASE_URL` | If set, letterhead URL is built from this API base |
+| `PUBLIC_API_BASE_URL` | If set, asset URLs are built from this API base |
 
 ## Behavior
 
@@ -52,15 +45,16 @@ Env overrides (optional):
 - **Earliest enrollment:** only the first `new` class enrollment for the student triggers the email.
 - Hard-delete wipe script clears both log types so re-enroll tests can send again.
 - Uses existing Brevo/SMTP stack via `emailService.js` / `emailTransport.js`.
+- Settings → Templates subject/enabled are respected; **HTML body always uses the page image** (Settings text bodies are not sent as the visual letter).
 
 ## Module layout
 
 | File | Purpose |
 |------|---------|
 | `index.js` | Queue/send orchestration, AR attachment, idempotency |
-| `emailBodies.js` | Fallback plain-text + HTML builders (used when Settings template missing/stale) |
-| `defaultTemplates.js` | Default Settings → Templates JSON (combined body) |
-| `templateConfig.js` | Loads Settings template; upgrades stale welcome-only bodies to combined fallback |
+| `emailBodies.js` | Plain-text fallback + HTML builders (`wrapWelcomePageEmailHtml`) |
+| `defaultTemplates.js` | Default Settings → Templates JSON (short body note) |
+| `templateConfig.js` | Loads Settings subject/enabled; forces image HTML for onboarding |
 | `classContext.js` | Load enrolled-phase first session date + weekly schedule from CMS |
 | `branchGroupChat.js` | Branch-specific Messenger group chat invite URLs |
 
@@ -70,11 +64,9 @@ Editable under **Settings → Templates → First enrollment onboarding** (Super
 
 | Template key | Purpose |
 |--------------|---------|
-| `template_first_enrollment_onboarding` | Combined welcome email (all sections) |
+| `template_first_enrollment_onboarding` | Subject + enabled flag (body text is not used for the visual letter) |
 
 Legacy keys (`class_schedule`, `things_to_prepare`, `important_reminders`, `stay_connected`) remain in the settings registry for DB compatibility but are **not sent** and are hidden from the Templates UI.
-
-If a branch still has an old welcome-only body saved under `template_first_enrollment_onboarding`, send-time logic uses the **combined code fallback** until Settings is updated to the new combined body.
 
 ## API
 
@@ -82,20 +74,19 @@ If a branch still has an old welcome-only body saved under `template_first_enrol
 |--------|---------|
 | `queueFirstEnrollmentWelcomeEmail({ studentId, enrollmentStatus, classstudentId, invoiceId, ackReceiptId })` | Fire-and-forget (preferred from enrollment writers) |
 | `maybeSendFirstEnrollmentWelcomeEmail(...)` | Awaitable send (tests / after-COMMIT hooks) |
-| `buildSequenceEmail(emailId, context)` | Build subject + HTML (`onboarding` = combined) |
-| `buildOnboardingPlainText()` / `buildOnboardingHtml()` | Combined body |
+| `buildSequenceEmail(emailId, context)` | Build subject + HTML (`onboarding` = page image) |
+| `buildOnboardingPlainText()` / `buildOnboardingHtml()` | Plain fallback + image HTML |
 | `loadEnrollmentClassContext(classstudentId)` | Class start date + schedule text |
 
 ## Env (optional)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `FIRST_ENROLLMENT_WELCOME_ACADEMIC_YEAR` | `2026–2027` | Year text in welcome section |
+| `FIRST_ENROLLMENT_WELCOME_ACADEMIC_YEAR` | `2026–2027` | Kept for legacy helpers / Settings variables |
 | `FIRST_ENROLLMENT_WELCOME_EMAIL_DELAY_MS` | `3000` | Delay before send (DB commit) |
-| `FIRST_ENROLLMENT_FACEBOOK_URL` | `https://www.facebook.com/littlechampionsacademy` | Facebook link |
-| `EMAIL_WELCOME_BACKGROUND_URL` | `{frontend}/lca-welcome-email-bg.jpg` | Absolute URL for letterhead background (from `quar.png`) |
+| `FIRST_ENROLLMENT_FACEBOOK_URL` | `https://www.facebook.com/littlechampionsacademy` | Facebook link (legacy) |
+| `EMAIL_WELCOME_PAGE_IMAGE_URL` | `{cms}/api/sms/public/email-assets/welcome-email.jpg` | Absolute URL for welcome page image |
 | `FIRST_ENROLLMENT_BRANCH_GROUP_CHAT_URLS` | _(built-in defaults)_ | Optional JSON override by branch |
-| `FIRST_ENROLLMENT_SEQUENCE_STEP_DELAY_MS` | _(unused)_ | Deprecated — was delay between the old 5 emails |
 
 ## Hook points
 
@@ -113,10 +104,10 @@ node backend/scripts/sendTestFirstEnrollmentWelcomeEmail.js --email=someone@exam
 node backend/scripts/sendTestFirstEnrollmentWelcomeEmail.js --email=someone@example.com --force-sequence
 ```
 
-Clears idempotency logs for the student, then sends the combined welcome email.
+Clears idempotency logs for the student, then sends the welcome email (page image + optional AR).
 
 To reset logs only:
 
 ```bash
-node backend/scripts/clearFirstEnrollmentOnboardingLogs.js --email=someone@example.com
+node backend/scripts/clearFirstEnrollmentOnboardingLogs.js --student-id=123
 ```
