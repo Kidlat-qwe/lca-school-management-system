@@ -3,6 +3,8 @@
  * outgoing emails and in-app notifications.
  */
 import { getClient, query as poolQuery } from '../config/database.js';
+import { existsSync } from 'fs';
+import { resolve as pathResolve } from 'path';
 import { formatLongDateDisplay } from './dateUtils.js';
 import { getEffectiveSettings, getSettingDefinition } from './settingsService.js';
 
@@ -11,14 +13,38 @@ const MANILA_TZ = 'Asia/Manila';
 /** Space-encoded filename — works on cms.little-champion.com; hyphen-only path returns SPA HTML there. */
 const DEFAULT_LOGO_PATH = '/LCA%20Icon.png';
 const DEFAULT_EMAIL_LOGO_ORIGIN = 'https://cms.little-champion.com';
+/** CMS SPA origins by environment (letterhead <img> for welcome email). */
+const CMS_ORIGIN_DEVELOPMENT = 'https://cms.lca-app.com';
+const CMS_ORIGIN_PRODUCTION = 'https://cms.little-champion.com';
+/** Compressed letterhead derived from frontend/public/quar.png (welcome email background). */
+const WELCOME_EMAIL_BG_PATH = '/lca-welcome-email-bg.jpg';
 
 /**
- * Absolute URL for school logo in emails and public HTML (FIUU /go pages).
- * Prefer EMAIL_LOGO_URL; else build from FIUU_FRONTEND_RETURN_URL / CORS so Dev uses cms.lca-app.com.
+ * CMS origin for public email assets.
+ * development → https://cms.lca-app.com
+ * production  → https://cms.little-champion.com
  */
-export function getEmailBrandLogoUrl() {
-  const fromEnv = String(process.env.EMAIL_LOGO_URL || '').trim();
+export function getCmsOriginForEnv() {
+  const fromEnv = String(process.env.EMAIL_WELCOME_ASSET_ORIGIN || '').trim().replace(/\/$/, '');
   if (fromEnv) return fromEnv;
+  return process.env.NODE_ENV === 'production'
+    ? CMS_ORIGIN_PRODUCTION
+    : CMS_ORIGIN_DEVELOPMENT;
+}
+
+/**
+ * Public frontend origin for email images (logo, letterhead background).
+ * Prefer EMAIL_LOGO_URL origin; else FIUU / PUBLIC / CORS frontend URL; else CMS by NODE_ENV.
+ */
+export function getEmailPublicOrigin() {
+  const logoOverride = String(process.env.EMAIL_LOGO_URL || '').trim();
+  if (logoOverride) {
+    try {
+      return new URL(logoOverride).origin;
+    } catch {
+      /* fall through */
+    }
+  }
 
   const frontendHint =
     String(process.env.FIUU_FRONTEND_RETURN_URL || '').trim() ||
@@ -29,13 +55,41 @@ export function getEmailBrandLogoUrl() {
       .find(Boolean) ||
     '';
 
-  let origin = DEFAULT_EMAIL_LOGO_ORIGIN;
   if (frontendHint) {
     try {
-      origin = new URL(frontendHint).origin;
+      return new URL(frontendHint).origin;
     } catch {
       /* keep default */
     }
+  }
+
+  return getCmsOriginForEnv();
+}
+
+/**
+ * Absolute URL for a file under the frontend `public/` folder (e.g. `/quar.png`).
+ */
+export function getEmailPublicAssetUrl(assetPath) {
+  const path = String(assetPath || '').startsWith('/')
+    ? String(assetPath)
+    : `/${String(assetPath || '').replace(/^\/+/, '')}`;
+  return `${getEmailPublicOrigin()}${path}`;
+}
+
+/**
+ * Absolute URL for school logo in emails and public HTML (FIUU /go pages).
+ * Prefer EMAIL_LOGO_URL; else build from FIUU_FRONTEND_RETURN_URL / CORS so Dev uses cms.lca-app.com.
+ */
+export function getEmailBrandLogoUrl() {
+  const fromEnv = String(process.env.EMAIL_LOGO_URL || '').trim();
+  if (fromEnv) return fromEnv;
+
+  const origin = getEmailPublicOrigin();
+  let host = '';
+  try {
+    host = new URL(origin).hostname || '';
+  } catch {
+    host = '';
   }
 
   // Prefer space-named asset on Dev too (smaller than LCA-Icon.png in public/).
@@ -43,6 +97,27 @@ export function getEmailBrandLogoUrl() {
     return `${origin}/LCA%20Icon.png`;
   }
   return `${origin}${DEFAULT_LOGO_PATH}`;
+}
+
+/** Absolute URL for the welcome-email letterhead <img> (cropped quar header). */
+export function getWelcomeEmailBackgroundUrl() {
+  const fromEnv = String(process.env.EMAIL_WELCOME_BACKGROUND_URL || '').trim();
+  if (fromEnv) return fromEnv;
+
+  // Brevo cannot CID-embed images — use a public HTTPS asset URL.
+  const apiBase =
+    String(process.env.PUBLIC_API_BASE_URL || '').trim().replace(/\/$/, '') ||
+    String(process.env.API_PUBLIC_URL || '').trim().replace(/\/$/, '') ||
+    '';
+
+  if (apiBase) {
+    const base = apiBase.endsWith('/api/sms') ? apiBase : `${apiBase}/api/sms`;
+    return `${base}/public/email-assets/welcome-letterhead.jpg`;
+  }
+
+  // NODE_ENV=development → cms.lca-app.com
+  // NODE_ENV=production  → cms.little-champion.com
+  return `${getCmsOriginForEnv()}/api/sms/public/email-assets/welcome-letterhead.jpg`;
 }
 
 export function escapeHtml(value) {
@@ -105,13 +180,66 @@ export function computeDaysOverdue(dueDate, referenceDate = new Date()) {
   return diff > 0 ? diff : 0;
 }
 
-export function wrapBrandedEmailHtml(innerHtml, { includeFooter = true } = {}) {
+/**
+ * @param {string} innerHtml
+ * @param {{ includeFooter?: boolean, letterheadBackground?: boolean, letterheadImageSrc?: string|null }} [options]
+ *   letterheadBackground — branded letterhead for welcome enrollee email.
+ *   Uses a real <img> (Gmail-safe). CSS background-image is stripped by Gmail,
+ *   which previously showed only the dark fallback color.
+ */
+export function wrapBrandedEmailHtml(
+  innerHtml,
+  { includeFooter = true, letterheadBackground = false, letterheadImageSrc = null } = {}
+) {
   const footer = includeFooter
     ? `<div style="background-color:#f5f5f5;padding:20px;text-align:center;border-radius:0 0 5px 5px;font-size:12px;color:#666;">
          <p style="margin:0;">This is an automated email. Please do not reply to this message.</p>
          <p style="margin:8px 0 0;">© ${new Date().getFullYear()} ${escapeHtml(DEFAULT_SCHOOL_NAME)} All rights reserved.</p>
        </div>`
     : '';
+
+  if (letterheadBackground) {
+    const bgUrl = escapeHtml(letterheadImageSrc || getWelcomeEmailBackgroundUrl());
+    // Gmail does not reliably show CSS/table background-image. Use a full-width <img>
+    // for the quar letterhead, then a white content card (same text layout as before).
+    return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;line-height:1.6;color:#333;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:20px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;background-color:#ffffff;">
+            <tr>
+              <td bgcolor="#F7C844" style="padding:0;line-height:0;font-size:0;background-color:#F7C844;">
+                <img
+                  src="${bgUrl}"
+                  alt="Little Champions Academy Inc. — Play. Learn. Succeed."
+                  width="600"
+                  style="display:block;width:100%;max-width:600px;height:auto;border:0;"
+                />
+              </td>
+            </tr>
+            <tr>
+              <td bgcolor="#ffffff" style="padding:28px 24px;background-color:#ffffff;">
+                ${innerHtml}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0;">
+                ${footer}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+  }
 
   const logoUrl = escapeHtml(getEmailBrandLogoUrl());
 
@@ -149,7 +277,11 @@ export function wrapBrandedEmailHtml(innerHtml, { includeFooter = true } = {}) {
 </html>`;
 }
 
-export function plainTextToEmailHtml(plainText) {
+/**
+ * @param {string} plainText
+ * @param {{ letterheadBackground?: boolean, includeFooter?: boolean }} [options]
+ */
+export function plainTextToEmailHtml(plainText, options = {}) {
   const chunks = String(plainText || '').split(/\n\n+/);
   const inner = chunks
     .map(
@@ -157,7 +289,7 @@ export function plainTextToEmailHtml(plainText) {
         `<p style="margin:0 0 16px;color:#111827;line-height:1.6;">${escapeHtml(chunk).replace(/\n/g, '<br/>')}</p>`
     )
     .join('');
-  return wrapBrandedEmailHtml(inner);
+  return wrapBrandedEmailHtml(inner, options);
 }
 
 function normalizeTemplateShape(raw) {
@@ -218,18 +350,60 @@ export async function renderMessagingTemplate({
   const subject = renderTemplateString(tpl.subject, variables);
   const body = renderTemplateString(tpl.body, variables);
 
+  const letterheadBackground =
+    templateKey === 'template_first_enrollment_onboarding' ||
+    templateKey === 'template_first_enrollment_welcome';
+
   return {
     enabled: true,
     title,
     subject,
     body,
-    bodyHtml: plainTextToEmailHtml(body),
+    bodyHtml: plainTextToEmailHtml(body, { letterheadBackground }),
     scope: tpl.scope,
   };
 }
 
 export async function logTemplateRenderWarning(context, error) {
   console.warn(`[templateRenderService] ${context}:`, error?.message || error);
+}
+
+/** Inline CID for welcome letterhead <img> (embedded in email, not a downloadable PDF). */
+export const WELCOME_LETTERHEAD_CID = 'lca_welcome_bg';
+
+/**
+ * Resolve local path to compressed quar letterhead for CID embedding.
+ */
+export function getWelcomeLetterheadFilePath() {
+  const candidates = [
+    pathResolve(process.cwd(), 'assets/lca-welcome-email-bg.jpg'),
+    pathResolve(process.cwd(), '../frontend/public/lca-welcome-email-bg.jpg'),
+    pathResolve(process.cwd(), 'frontend/public/lca-welcome-email-bg.jpg'),
+  ];
+  return candidates.find((p) => existsSync(p)) || null;
+}
+
+/**
+ * Nodemailer / Brevo inline image attachment for the welcome letterhead.
+ * contentDisposition inline — shown in the body, not as a separate downloadable file like the AR PDF.
+ */
+export function buildWelcomeLetterheadInlineAttachment() {
+  const filePath = getWelcomeLetterheadFilePath();
+  if (!filePath) return null;
+  return {
+    filename: 'lca-welcome-email-bg.jpg',
+    path: filePath,
+    contentType: 'image/jpeg',
+    cid: WELCOME_LETTERHEAD_CID,
+    contentDisposition: 'inline',
+  };
+}
+
+/** Rewrite public letterhead URL → cid: so Gmail/Brevo show the embedded image. */
+export function applyWelcomeLetterheadCid(html) {
+  const publicUrl = getWelcomeEmailBackgroundUrl();
+  if (!html || !publicUrl) return html;
+  return String(html).split(publicUrl).join(`cid:${WELCOME_LETTERHEAD_CID}`);
 }
 
 export { poolQuery };

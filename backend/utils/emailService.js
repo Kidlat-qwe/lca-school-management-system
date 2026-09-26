@@ -675,6 +675,7 @@ export const sendSystemNotificationEmail = async ({
           path: att.path,
           contentType: att.contentType || 'application/pdf',
           cid: att.cid,
+          contentDisposition: att.contentDisposition,
         }))
     : [];
 

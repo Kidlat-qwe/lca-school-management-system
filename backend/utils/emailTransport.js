@@ -161,10 +161,17 @@ async function sendViaBrevo({ to, subject, html, attachments = [] }) {
 
   const brevoAttachments = (attachments || [])
     .filter((att) => att && (att.content || att.path))
-    .map((att) => ({
-      name: att.filename || 'attachment',
-      content: toBase64Content(att),
-    }));
+    .map((att) => {
+      const item = {
+        name: att.filename || 'attachment',
+        content: toBase64Content(att),
+      };
+      // Inline images (e.g. welcome letterhead) — Brevo uses contentId ↔ cid: in HTML
+      if (att.cid) {
+        item.contentId = String(att.cid).replace(/^cid:/i, '');
+      }
+      return item;
+    });
 
   if (brevoAttachments.length > 0) {
     body.attachment = brevoAttachments;

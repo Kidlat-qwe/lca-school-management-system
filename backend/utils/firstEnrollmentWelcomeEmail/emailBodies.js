@@ -286,11 +286,15 @@ export function buildFirstEnrollmentWelcomePlainText(options = {}) {
 
 /** @deprecated Use buildOnboardingHtml */
 export function buildFirstEnrollmentWelcomeHtml(options = {}) {
-  return plainTextToEmailHtml(buildOnboardingPlainText(options));
+  return plainTextToEmailHtml(buildOnboardingPlainText(options), {
+    letterheadBackground: true,
+  });
 }
 
 export function buildOnboardingHtml(options = {}) {
-  return plainTextToEmailHtml(buildOnboardingPlainText(options));
+  return plainTextToEmailHtml(buildOnboardingPlainText(options), {
+    letterheadBackground: true,
+  });
 }
 
 export function buildClassScheduleHtml(context = {}) {

@@ -195,6 +195,7 @@ export default function TeacherLessonPlans() {
   const [classSessionsLoading, setClassSessionsLoading] = useState(false);
   const [gradeSessions, setGradeSessions] = useState([]);
   const [gradeSessionsLoading, setGradeSessionsLoading] = useState(false);
+  const [mentionStudents, setMentionStudents] = useState([]);
   const [manilaToday, setManilaToday] = useState(getManilaTodayYmd);
   const formScrollRef = useRef(null);
   const reflectionSectionRef = useRef(null);
@@ -470,6 +471,59 @@ export default function TeacherLessonPlans() {
   const canSubmitForVerification = useMemo(
     () => canEdit && isLessonPlanSubmitReady(formData),
     [canEdit, formData]
+  );
+
+  /** Active enrolled students (with email) for @-mentions in rich text fields. */
+  const mentionItems = useMemo(() => {
+    const seen = new Set();
+    const items = [];
+    for (const row of mentionStudents) {
+      const email = String(row?.email || '').trim();
+      const userId = row?.user_id;
+      if (!email || !userId) continue;
+      if (row?.student_type === 'unenrolled' || row?.removed_at) continue;
+      if (row?.shouldCount === false && row?.student_type !== 'enrolled') continue;
+      const key = String(userId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        id: userId,
+        email,
+        label: String(row.full_name || row.nickname || email).trim(),
+      });
+    }
+    return items.sort((a, b) => a.label.localeCompare(b.label));
+  }, [mentionStudents]);
+
+  // Load class roster for @ student email mentions when Class is selected.
+  useEffect(() => {
+    if (!formOpen || !formData.class_id) {
+      setMentionStudents([]);
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest(`/students/class/${formData.class_id}`);
+        if (!cancelled) setMentionStudents(Array.isArray(res?.data) ? res.data : []);
+      } catch (err) {
+        console.error('Failed to load class students for mentions:', err);
+        if (!cancelled) setMentionStudents([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [formOpen, formData.class_id]);
+
+  const studentMentionProps = useMemo(
+    () => ({
+      mentionItems,
+      mentionHint: formData.class_id
+        ? 'Type @ to mention a student by email (from this class roster)'
+        : 'Select a class above, then type @ to mention a student by email',
+    }),
+    [mentionItems, formData.class_id]
   );
 
   useEffect(() => {
@@ -1511,6 +1565,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('early_learning_goals', html)}
                 placeholder="List early learning goals"
                 minHeight="140px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="early_learning_goals" />
@@ -1528,6 +1583,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('objective_1', html)}
                 placeholder="Write learning objectives"
                 minHeight="160px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="objective_1" />
@@ -1545,6 +1601,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('assessment_method', html)}
                 placeholder="Describe assessment method"
                 minHeight="120px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_method" />
@@ -1558,6 +1615,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('assessment_criteria', html)}
                 placeholder="Describe assessment criteria"
                 minHeight="120px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="assessment_criteria" />
@@ -1575,6 +1633,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('materials_needed', html)}
                 placeholder="List materials needed to prepare"
                 minHeight="120px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="materials_needed" />
@@ -1598,6 +1657,7 @@ export default function TeacherLessonPlans() {
                     onChange={(html) => handleInputChange(`${prefix}_activity`, html)}
                     placeholder={`Enter ${title.toLowerCase()} details`}
                     minHeight="120px"
+                    {...studentMentionProps}
                   />
                 </label>
                 <FieldRevisionNotes plan={selectedPlan} fieldKey={`${prefix}_activity`} />
@@ -1628,6 +1688,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('class1_considerations', html)}
                 placeholder="Class considerations"
                 minHeight="100px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_considerations" />
@@ -1640,6 +1701,7 @@ export default function TeacherLessonPlans() {
                 onChange={(html) => handleInputChange('class1_adjustments', html)}
                 placeholder="Class adjustments"
                 minHeight="100px"
+                {...studentMentionProps}
               />
             </label>
             <FieldRevisionNotes plan={selectedPlan} fieldKey="class1_adjustments" />
@@ -1676,6 +1738,7 @@ export default function TeacherLessonPlans() {
                       ? 'lesson-plan-reflection-blink'
                       : ''
                   }
+                  {...studentMentionProps}
                 />
               </label>
             ))}

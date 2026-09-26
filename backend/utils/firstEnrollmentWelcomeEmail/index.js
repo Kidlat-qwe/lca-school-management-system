@@ -27,6 +27,7 @@ import {
   loadEnrollmentClassContext,
   loadEnrollmentClassContextForStudent,
 } from './classContext.js';
+import { getWelcomeEmailBackgroundUrl } from '../templateRenderService.js';
 
 const NEW_ENROLLMENT_STATUS = 'new';
 const LOG_ENTITY_SEQUENCE = 'first_enrollment_onboarding_sequence';
@@ -284,11 +285,16 @@ async function sendSequenceEmail({
     };
   }
 
+  let html = content.html;
+  // Brevo does not support CID inline images (they become downloadable attachments).
+  // Letterhead is referenced via public HTTPS <img src> only — do not attach the JPG.
+  const mailAttachments = Array.isArray(attachments) ? [...attachments] : [];
+
   const summary = await sendSystemNotificationEmailToEach({
     recipients,
     subject: content.subject,
-    html: content.html,
-    attachments,
+    html,
+    attachments: mailAttachments,
   });
   return {
     id: emailId,

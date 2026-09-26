@@ -18,6 +18,25 @@ Email-style rich text field for lesson plan content (and reusable elsewhere).
 - Font family
 - Font size
 
+## Student @ mentions (optional)
+
+Pass `mentionItems` to enable typing `@` and picking a student by **email** (class roster).
+
+```jsx
+<RichTextEditor
+  value={formData.early_learning_goals}
+  onChange={(html) => handleInputChange('early_learning_goals', html)}
+  mentionItems={[
+    { id: 12, email: 'parent@example.com', label: 'Jane Doe' },
+  ]}
+  mentionHint="Type @ to mention a student by email"
+/>
+```
+
+- Inserts a non-editable chip: `@parent@example.com` with `data-email` / `data-user-id`
+- Keyboard: ↑/↓ to move, Enter/Tab to insert, Esc to close
+- Teacher Lesson Plans loads roster from `GET /students/class/:classId` when Class is selected
+
 ## Usage
 
 ```jsx
@@ -36,6 +55,6 @@ import RichTextEditor, {
 />
 ```
 
-Applied to all lesson-plan body fields from Early Learning Goals through Head Teacher Review
+Applied to all lesson-plan body fields from Early Learning Goals through Teacher Reflection
 (topic / date / class selectors stay plain). HTML is stored in existing TEXT columns.
 Legacy `objective_2` / `objective_3` merge on load via `mergeLessonPlanObjectivesHtml` and clear on save.

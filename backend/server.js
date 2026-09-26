@@ -44,6 +44,7 @@ import systemLogsRoutes from './routes/systemLogs.js';
 import inventoryWebhooksRoutes from './routes/inventoryWebhooks.js';
 import fiuuPaymentsRoutes, { fiuuWebhookRouter } from './routes/fiuuPayments.js';
 import lessonPlansRoutes from './routes/lessonPlans.js';
+import publicEmailAssetsRoutes from './routes/publicEmailAssets.js';
 
 // Import middleware
 import { activityLogger } from './middleware/activityLogger.js';
@@ -158,6 +159,9 @@ app.use('/api/webhooks/fiuu', fiuuWebhookRouter);
 
 // API routes
 const API_VERSION = '/api/sms';
+
+// Public brand assets for transactional emails (no auth). Brevo cannot CID-embed images.
+app.use(`${API_VERSION}/public`, publicEmailAssetsRoutes);
 
 // Also expose webhook under the API prefix (in case proxies only forward /api/sms/*).
 app.use(`${API_VERSION}/webhooks/inventory`, inventoryWebhooksRoutes);

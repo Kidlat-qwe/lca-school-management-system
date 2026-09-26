@@ -12,6 +12,36 @@ Sends a **single combined email** when a student is **first officially enrolled*
 | Important Reminders | Static bullet reminders. |
 | Stay Connected | Facebook page link + branch Messenger group chat link. |
 
+## Letterhead background
+
+Welcome HTML shows a **cropped quar letterhead** as a full-width `<img>` (not CSS background, not an attachment).
+
+**Why CID failed:** Brevo transactional API does **not** support CID inline images — they become downloadable attachments and Gmail shows a broken image in the body.
+
+| Mechanism | Purpose |
+|-----------|---------|
+| `<img src="https://…/public/email-assets/welcome-letterhead.jpg">` | Visible in Gmail |
+| `GET /api/sms/public/email-assets/welcome-letterhead.jpg` | Public file served by the API (no auth) |
+| White content area below | Same readable text layout as before |
+| AR PDF | Remains a normal attachment when present |
+
+Optional override: `EMAIL_WELCOME_BACKGROUND_URL` (absolute HTTPS image URL).
+
+After deploying the matching backend, confirm the image opens in a browser:
+
+| `NODE_ENV` | Letterhead URL |
+|------------|----------------|
+| `development` | `https://cms.lca-app.com/api/sms/public/email-assets/welcome-letterhead.jpg` |
+| `production` | `https://cms.little-champion.com/api/sms/public/email-assets/welcome-letterhead.jpg` |
+
+Env overrides (optional):
+
+| Variable | Purpose |
+|----------|---------|
+| `EMAIL_WELCOME_BACKGROUND_URL` | Full absolute image URL |
+| `EMAIL_WELCOME_ASSET_ORIGIN` | Force origin (overrides NODE_ENV host pick) |
+| `PUBLIC_API_BASE_URL` | If set, letterhead URL is built from this API base |
+
 ## Behavior
 
 - **Trigger:** enrollment status assigned as `new` (not pending/reserved/re_enrolled/upsell/rejoin).
@@ -63,6 +93,7 @@ If a branch still has an old welcome-only body saved under `template_first_enrol
 | `FIRST_ENROLLMENT_WELCOME_ACADEMIC_YEAR` | `2026–2027` | Year text in welcome section |
 | `FIRST_ENROLLMENT_WELCOME_EMAIL_DELAY_MS` | `3000` | Delay before send (DB commit) |
 | `FIRST_ENROLLMENT_FACEBOOK_URL` | `https://www.facebook.com/littlechampionsacademy` | Facebook link |
+| `EMAIL_WELCOME_BACKGROUND_URL` | `{frontend}/lca-welcome-email-bg.jpg` | Absolute URL for letterhead background (from `quar.png`) |
 | `FIRST_ENROLLMENT_BRANCH_GROUP_CHAT_URLS` | _(built-in defaults)_ | Optional JSON override by branch |
 | `FIRST_ENROLLMENT_SEQUENCE_STEP_DELAY_MS` | _(unused)_ | Deprecated — was delay between the old 5 emails |
 

@@ -21,6 +21,7 @@ import {
   normalizeNotificationRecipients,
   sendSystemNotificationEmailToEach,
 } from '../utils/emailService.js';
+import { getWelcomeEmailBackgroundUrl } from '../utils/templateRenderService.js';
 
 function resolveTargetEmail(argv) {
   const explicit = argv.find((a) => a.startsWith('--email='));
@@ -49,6 +50,10 @@ async function sendPreviewCombined(recipients, context = {}) {
     console.log(`Preview "${emailId}": skipped (${content.source || 'disabled'})`);
     return [{ emailId, subject: content.subject, summary: { sent: 0, attempted: 0, skipped: true } }];
   }
+
+  // Brevo: no CID — letterhead must be a public HTTPS <img>. Do not attach the JPG.
+  console.log(`Letterhead <img> URL: ${getWelcomeEmailBackgroundUrl()}`);
+
   const summary = await sendSystemNotificationEmailToEach({
     recipients,
     subject: content.subject,
