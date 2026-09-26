@@ -353,7 +353,7 @@ export async function maybeSendFirstEnrollmentWelcomeEmail({
     (await loadEnrollmentClassContextForStudent(sid));
 
   const arBundle = await buildWelcomeArAttachments(sid, { invoiceId, ackReceiptId });
-  const year = academicYearLabel();
+  const year = classContext?.academicYear || academicYearLabel();
   const groupChat = resolveBranchGroupChat({
     branchId: classContext?.branchId ?? null,
     branchName: classContext?.branchName,

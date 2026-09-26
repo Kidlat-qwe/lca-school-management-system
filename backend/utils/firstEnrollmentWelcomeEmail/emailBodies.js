@@ -5,9 +5,9 @@
  */
 import {
   escapeHtml,
+  getWelcomeEmailBackgroundUrl,
   plainTextToEmailHtml,
   wrapBrandedEmailHtml,
-  wrapWelcomePageEmailHtml,
 } from '../templateRenderService.js';
 import { groupChatFallbackText } from './branchGroupChat.js';
 
@@ -51,30 +51,10 @@ export function facebookPageUrl() {
 }
 
 /**
- * Minimal plain-text fallback for clients that strip HTML.
- * The designed welcome letter is the full-page image in the HTML body.
+ * Combined welcome letter. Academic year, first-day date, and class schedule
+ * come from the enrolled class when the send path supplies them.
  */
 export function buildOnboardingPlainText({
-  includeArAttachmentNote = false,
-} = {}) {
-  const lines = [
-    'Welcome to Little Champions Academy!',
-    '',
-    'Open this email in an HTML email client to view the welcome letter.',
-  ];
-
-  if (includeArAttachmentNote) {
-    lines.push(
-      '',
-      'Your acknowledgement receipt is attached to this email as a PDF for your records.'
-    );
-  }
-
-  return lines.join('\n');
-}
-
-/** @deprecated Long combined text body — retained for reference / legacy previews only. */
-export function buildLegacyCombinedOnboardingPlainText({
   academicYear,
   includeArAttachmentNote = false,
   classStartDateDisplay = 'To be announced',
@@ -317,11 +297,90 @@ export function buildFirstEnrollmentWelcomeHtml(options = {}) {
   return buildOnboardingHtml(options);
 }
 
+function nl2br(value) {
+  return escapeHtml(value).replace(/\n/g, '<br/>');
+}
+
 /**
- * Welcome email HTML: full-page image of LCA EMAIL.pdf (not PDF attachment).
+ * Welcome email HTML: letterhead image + letter text.
+ * Academic year, date, and class schedule are real text (not baked into the JPEG),
+ * so they follow the enrolled class.
  */
-export function buildOnboardingHtml(_options = {}) {
-  return wrapWelcomePageEmailHtml();
+export function buildOnboardingHtml({
+  academicYear,
+  includeArAttachmentNote = false,
+  classStartDateDisplay = 'To be announced',
+  classScheduleText = 'Please contact your branch for your class schedule.',
+  facebookUrl = facebookPageUrl(),
+  groupChatUrl = null,
+  groupChatLabel = 'Group Chat',
+} = {}) {
+  const year = escapeHtml(academicYear || academicYearLabel());
+  const dateLabel = escapeHtml(classStartDateDisplay || 'To be announced');
+  const scheduleHtml = nl2br(
+    classScheduleText || 'Please contact your branch for your class schedule.'
+  );
+  const fbUrl = escapeHtml(facebookUrl);
+  const groupChatHtml = groupChatUrl
+    ? `<a href="${escapeHtml(groupChatUrl)}" style="color:#1a56db;text-decoration:underline;">${escapeHtml(groupChatLabel)}</a> (${escapeHtml(groupChatUrl)})`
+    : escapeHtml(groupChatFallbackText());
+  const arNote = includeArAttachmentNote
+    ? `<p style="margin:16px 0 0;color:#111827;line-height:1.5;">Your acknowledgement receipt is attached to this email as a PDF for your records.</p>`
+    : '';
+  const bannerUrl = escapeHtml(getWelcomeEmailBackgroundUrl());
+
+  return `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  </head>
+  <body style="margin:0;padding:0;background-color:#f3f4f6;font-family:Arial,Helvetica,sans-serif;color:#111827;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f3f4f6;padding:16px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background-color:#ffffff;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="padding:0;line-height:0;font-size:0;background-color:#F7C844;">
+                <img src="${bannerUrl}" alt="Little Champions Academy Inc." width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0;" />
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:22px 28px 28px;font-size:14px;line-height:1.55;color:#111827;">
+                <p style="margin:0 0 10px;font-weight:bold;">Congratulations!</p>
+                <p style="margin:0 0 10px;">We are pleased to inform you that your child is officially enrolled at Little Champions Academy Inc. for Academic Year ${year}.</p>
+                <p style="margin:0 0 10px;">We are delighted to welcome you to the Little Champions family! We look forward to partnering with you in creating a meaningful and exciting learning journey filled with opportunities to play, learn, and succeed.</p>
+                <p style="margin:0 0 10px;">Thank you for choosing Little Champions Academy. We are excited to have you with us!</p>
+                <p style="margin:0;">Welcome to Little Champions Academy!</p>
+                ${arNote}
+                <p style="margin:18px 0 10px;border-top:1px solid #111827;"></p>
+                <p style="margin:0 0 8px;font-weight:bold;">FIRST DAY OF SCHOOL</p>
+                <p style="margin:0 0 4px;">Date: ${dateLabel}</p>
+                <p style="margin:0 0 10px;">Class Schedule: ${scheduleHtml}</p>
+                <p style="margin:0 0 10px;">Important: Please arrive at least 10 minutes before your scheduled class time to allow your child sufficient time to settle in and prepare for class.</p>
+                <p style="margin:0;">For dismissal, parents or authorized guardians are requested to arrive 10 minutes before the scheduled end of class to ensure a smooth and orderly pick-up.</p>
+                <p style="margin:18px 0 10px;border-top:1px solid #111827;"></p>
+                <p style="margin:0 0 8px;font-weight:bold;">THINGS TO PREPARE FOR CLASS</p>
+                <p style="margin:0 0 8px;">Please ensure that your child brings the following:</p>
+                <p style="margin:0;">1. Extra set of clothes<br/>2. Hygiene Kit (Wet wipes, alcohol, tissue, soap)<br/>3. Dry, healthy, and nutritious snack<br/>4. A refillable and sealed water bottle labeled with your child’s complete name</p>
+                <p style="margin:18px 0 10px;border-top:1px solid #111827;"></p>
+                <p style="margin:0 0 8px;font-weight:bold;">IMPORTANT REMINDERS</p>
+                <p style="margin:0;">• Please ensure that your child arrives at least 10 minutes before the scheduled class time.<br/>• Please prepare all necessary school items before leaving home to avoid delays.<br/>• Kindly label all personal belongings with your child’s complete name.<br/>• Please ensure that your child is well-rested and prepared to participate in class.<br/>• Please regularly check the official class group chat for announcements, reminders, and other important information.<br/>• Kindly complete the required onboarding requirements before your child’s first day of school.</p>
+                <p style="margin:18px 0 10px;border-top:1px solid #111827;"></p>
+                <p style="margin:0 0 8px;font-weight:bold;">STAY CONNECTED</p>
+                <p style="margin:0 0 8px;">For the latest updates, you can also follow and message our official Facebook page and group chat:</p>
+                <p style="margin:0 0 8px;">Facebook page link: <a href="${fbUrl}" style="color:#1a56db;text-decoration:underline;">Little Champions Academy Inc.</a></p>
+                <p style="margin:0 0 10px;">Group Chat: ${groupChatHtml}</p>
+                <p style="margin:0 0 10px;">Once again, welcome to Little Champions Academy, Inc. We look forward to partnering with you throughout the academic year and supporting your child’s continued learning and development.</p>
+                <p style="margin:0;">Sincerely,<br/>Little Champions Academy, Inc.<br/>Play. Learn. Succeed.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
 }
 
 export function buildClassScheduleHtml(context = {}) {

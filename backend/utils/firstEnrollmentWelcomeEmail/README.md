@@ -6,11 +6,21 @@ Sends a **single email** when a student is **first officially enrolled** (`progr
 
 | Part | Content |
 |------|---------|
-| HTML body | Full-page **image** of the designed welcome letter (`LCA EMAIL.pdf` rasterized to JPEG) |
-| Plain text | Short fallback for clients that strip HTML |
-| Attachment | Optional **AR PDF** only (acknowledgement receipt) — never `LCA EMAIL.pdf` |
+| Header | Yellow letterhead image |
+| Body | Welcome letter text. **Academic Year**, **Date**, and **Class Schedule** come from the enrolled class |
+| Attachment | Optional **AR PDF** only |
 
-Gmail and most clients **cannot display a PDF inside the message body**. Attaching the PDF would only show a downloadable file. The welcome design is therefore shipped as a JPEG `<img>`.
+Gmail cannot display a PDF in the message body. The yellow letterhead is an image; the letter text is HTML so Academic Year, first-day date, and class schedule can change per enrollment.
+
+## Dynamic class fields
+
+| Field | Source |
+|-------|--------|
+| Academic Year | Enrolled class first session date. Manila school year is June–May (June 2026 → `2026–2027`). Falls back to `FIRST_ENROLLMENT_WELCOME_ACADEMIC_YEAR` when no class date exists. |
+| Date | First session of the enrolled phase (`classsessionstbl`), else class `start_date` |
+| Class Schedule | `roomschedtbl` for that class (days and times) |
+
+A preview sent to an address that is **not** a student has no class, so Date and Class Schedule stay “To be announced”.
 
 ## Welcome page image
 
@@ -24,8 +34,10 @@ After deploying the matching backend, confirm the image opens in a browser:
 
 | `NODE_ENV` | Welcome page URL |
 |------------|------------------|
-| `development` | `https://cms.lca-app.com/api/sms/public/email-assets/welcome-email.jpg` |
+| `development` | `https://api-cms.lca-app.com/api/sms/public/email-assets/welcome-email.jpg` |
 | `production` | `https://cms.little-champion.com/api/sms/public/email-assets/welcome-email.jpg` |
+
+On Coolify, **do not** use `cms.lca-app.com` for this path — that host is the SPA and returns HTML (broken image in Gmail). Use the API host `api-cms.lca-app.com`.
 
 Env overrides (optional):
 

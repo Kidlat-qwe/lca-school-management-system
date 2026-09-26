@@ -13,23 +13,40 @@ const MANILA_TZ = 'Asia/Manila';
 /** Space-encoded filename — works on cms.little-champion.com; hyphen-only path returns SPA HTML there. */
 const DEFAULT_LOGO_PATH = '/LCA%20Icon.png';
 const DEFAULT_EMAIL_LOGO_ORIGIN = 'https://cms.little-champion.com';
-/** CMS SPA origins by environment (letterhead <img> for welcome email). */
+/** CMS SPA origins (frontend static assets / logos). */
 const CMS_ORIGIN_DEVELOPMENT = 'https://cms.lca-app.com';
 const CMS_ORIGIN_PRODUCTION = 'https://cms.little-champion.com';
+/**
+ * Backend API origins for public email-asset routes.
+ * Coolify: SPA is cms.lca-app.com; API is api-cms.lca-app.com (do not use SPA host for /api/sms).
+ * Linode prod: API is proxied on cms.little-champion.com/api/sms.
+ */
+const CMS_API_ORIGIN_DEVELOPMENT = 'https://api-cms.lca-app.com';
+const CMS_API_ORIGIN_PRODUCTION = 'https://cms.little-champion.com';
 /** Compressed letterhead derived from frontend/public/quar.png (welcome email background). */
 const WELCOME_EMAIL_BG_PATH = '/lca-welcome-email-bg.jpg';
 
 /**
- * CMS origin for public email assets.
+ * CMS SPA origin (logos / public frontend files).
  * development → https://cms.lca-app.com
  * production  → https://cms.little-champion.com
  */
 export function getCmsOriginForEnv() {
-  const fromEnv = String(process.env.EMAIL_WELCOME_ASSET_ORIGIN || '').trim().replace(/\/$/, '');
-  if (fromEnv) return fromEnv;
   return process.env.NODE_ENV === 'production'
     ? CMS_ORIGIN_PRODUCTION
     : CMS_ORIGIN_DEVELOPMENT;
+}
+
+/**
+ * Backend API origin for /api/sms/public/email-assets/*.
+ * Override with EMAIL_WELCOME_ASSET_ORIGIN when needed.
+ */
+export function getCmsApiOriginForEnv() {
+  const fromEnv = String(process.env.EMAIL_WELCOME_ASSET_ORIGIN || '').trim().replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  return process.env.NODE_ENV === 'production'
+    ? CMS_API_ORIGIN_PRODUCTION
+    : CMS_API_ORIGIN_DEVELOPMENT;
 }
 
 /**
@@ -112,16 +129,16 @@ function getPublicEmailAssetsBaseUrl() {
     return apiBase.endsWith('/api/sms') ? apiBase : `${apiBase}/api/sms`;
   }
 
-  // NODE_ENV=development → cms.lca-app.com
-  // NODE_ENV=production  → cms.little-champion.com
-  return `${getCmsOriginForEnv()}/api/sms`;
+  // development → api-cms.lca-app.com (Coolify API)
+  // production  → cms.little-champion.com (nginx proxies /api/sms)
+  return `${getCmsApiOriginForEnv()}/api/sms`;
 }
 
 /** Absolute URL for the welcome-email letterhead <img> (cropped quar header). */
 export function getWelcomeEmailBackgroundUrl() {
   const fromEnv = String(process.env.EMAIL_WELCOME_BACKGROUND_URL || '').trim();
   if (fromEnv) return fromEnv;
-  return `${getPublicEmailAssetsBaseUrl()}/public/email-assets/welcome-letterhead.jpg`;
+  return `${getPublicEmailAssetsBaseUrl()}/public/email-assets/welcome-letterhead.jpg?v=2`;
 }
 
 /**

@@ -18,5 +18,7 @@ Gmail cannot display a PDF in the message body. The welcome letter design
 
 Mounted at `/api/sms` → full URL examples:
 
-- Development: `https://cms.lca-app.com/api/sms/public/email-assets/welcome-email.jpg`
-- Production: `https://cms.little-champion.com/api/sms/public/email-assets/welcome-email.jpg`
+- Development (Coolify API): `https://api-cms.lca-app.com/api/sms/public/email-assets/welcome-email.jpg`
+- Production (Linode): `https://cms.little-champion.com/api/sms/public/email-assets/welcome-email.jpg`
+
+Do not use `cms.lca-app.com` for these URLs — that is the frontend SPA and returns `text/html`.

@@ -41,6 +41,20 @@ function resolvePhaseNumber(raw) {
   return Number.isInteger(phase) && phase >= 1 ? phase : 1;
 }
 
+/**
+ * Manila school year runs June → May.
+ * June 2026 → 2026–2027; January 2027 → 2026–2027.
+ */
+export function academicYearFromStartYmd(ymd) {
+  const match = String(ymd || '').match(/^(\d{4})-(\d{2})-/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!year || month < 1 || month > 12) return null;
+  if (month >= 6) return `${year}–${year + 1}`;
+  return `${year - 1}–${year}`;
+}
+
 export function formatClassScheduleText(schedules = []) {
   const sorted = sortSchedules(schedules.filter((r) => r?.day_of_week));
   if (!sorted.length) {
@@ -117,8 +131,10 @@ async function loadSchedulesForClass(client, classId, phaseNumber = 1) {
  *   branchName: string,
  *   branchNickname: string,
  *   enrolledPhaseNumber: number,
+ *   classStartYmd: string|null,
  *   classStartDateDisplay: string,
  *   classScheduleText: string,
+ *   academicYear: string|null,
  * }|null>}
  */
 export async function loadEnrollmentClassContext(classstudentId) {
@@ -162,8 +178,10 @@ export async function loadEnrollmentClassContext(classstudentId) {
       branchName: row.branch_name || '',
       branchNickname: row.branch_nickname || '',
       enrolledPhaseNumber,
+      classStartYmd: phaseStartYmd,
       classStartDateDisplay: formatDateDisplay(phaseStartYmd),
       classScheduleText: formatClassScheduleText(schedules),
+      academicYear: academicYearFromStartYmd(phaseStartYmd),
     };
   } finally {
     client.release();

@@ -124,13 +124,13 @@ export async function resolveSequenceEmailContent({
             source: 'settings_disabled',
           };
         }
-        const imageBody = buildSequenceEmail('onboarding', context);
+        const letter = buildSequenceEmail('onboarding', context);
         return {
           enabled: true,
-          subject: tpl.subject || imageBody.subject,
-          html: imageBody.html,
-          plainText: imageBody.plainText,
-          source: 'welcome_page_image',
+          subject: tpl.subject || letter.subject,
+          html: letter.html,
+          plainText: letter.plainText,
+          source: 'welcome_class_fields',
         };
       }
 
